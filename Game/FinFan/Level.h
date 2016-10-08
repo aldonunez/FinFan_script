@@ -14,6 +14,11 @@
 class MapSprite;
 class IMapSprite;
 
+#if defined( SCENE_SCRIPT )
+struct ByteCode;
+class Machine;
+#endif
+
 
 class Level : public IModule, public IPlayfield
 {
@@ -102,6 +107,7 @@ class Level : public IModule, public IPlayfield
     Table<char, DialogMessages> messages;
     CheckParams checkParams[ObjectTypes];
     uint8_t chests[Chests];
+    ObjectSpec objSpecs[Objects];
 
     int mapId;
     InOut inRoom;
@@ -121,6 +127,8 @@ class Level : public IModule, public IPlayfield
     Object objects[Objects];
     int nextObjIndex;
 
+    UpdateFunc curModeUpdate;
+
     UpdateFunc curUpdate;
     Direction movingDir;
     Direction facingDir;
@@ -131,6 +139,7 @@ class Level : public IModule, public IPlayfield
     int talkingObjIndex;
     Direction talkingObjOrigDir;
 
+    bool fightEnded;
     bool fightPending;
     int formationId;
 
@@ -144,6 +153,7 @@ class Level : public IModule, public IPlayfield
 
     bool flashMove;
     bool poisonMove;
+    ALLEGRO_COLOR fullScreenColor;
 
 public:
     Level();
@@ -214,4 +224,47 @@ private:
     bool CheckPendingAction();
 
     void ChangeTiles();
+    void UpdatePlay();
+
+    void SwapMap( int mapId, int startCol, int startRow, int inRoomState );
+    void SwapInit( int mapId, int startCol, int startRow, int inRoomState );
+    void SwapUninit();
+
+#if defined( SCENE_SCRIPT )
+    void UpdateScript();
+
+    void StartEventScript( int objIndex, const ByteCode* byteCode );
+
+    static int Pause_M( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int Pause_M_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context );
+    static int Turn_M( Machine* machine, int argc, int* args, int& resultCount, int& result );
+
+    static int StartTrack_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int Join_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int Join_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context );
+    static int ShowDialog_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int ShowDialog_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context );
+    static int Fight_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int Fight_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context );
+    static int PushSong_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int UpgradeClass_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int SwapMap_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int MakeAllObjects_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int PlayDefaultSong_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int IsObjectVisible_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int HasEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int HasWorldEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int HasItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int SetObjectVisible_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int SetEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int SetWorldEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int AddItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int RemoveItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int GetCheckParam_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int FadeOut_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int FadeIn_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int Fade_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context );
+    static int PlayFanfare_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+    static int PlayGotItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result );
+#endif
 };

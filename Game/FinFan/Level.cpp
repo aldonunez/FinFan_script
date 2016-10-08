@@ -17,6 +17,11 @@
 #include "Sound.h"
 #include <allegro5\allegro_primitives.h>
 
+#if defined( SCENE_SCRIPT )
+#include "Text.h"
+#include "..\..\Tools\Gemini\Machine.h"
+#endif
+
 
 enum
 {
@@ -45,6 +50,55 @@ enum
 
 Level* Level::instance;
 
+#if defined( SCENE_SCRIPT )
+
+class ScriptEnv : public IEnvironment
+{
+    const NativeFunc*   mFuncs;
+    int                 mFuncCount;
+
+public:
+    ScriptEnv()
+        :   mFuncs( nullptr ),
+            mFuncCount( 0 )
+    {
+    }
+
+    void Init( const NativeFunc* funcs, int length )
+    {
+        mFuncs = funcs;
+        mFuncCount = length;
+    }
+
+    bool FindByteCode( int id, ByteCode* byteCode ) override
+    {
+        return false;
+    }
+
+    bool FindNativeCode( int id, NativeCode* nativeCode ) override
+    {
+        assert( id >= 0 && id < mFuncCount );
+        if ( id < 0 || id >= mFuncCount )
+            return false;
+
+        nativeCode->Proc = mFuncs[id];
+        return true;
+    }
+};
+
+const int ObjScripts = 16 + 1;
+const int MainScriptIndex = 16;
+
+ScriptEnv scriptEnv;
+int scriptGlobals[4];
+int objStacks[ObjScripts][Machine::MIN_STACK];
+Machine objScripts[ObjScripts];
+int objTimers[ObjScripts];
+
+int RunDiscard( Machine& machine );
+
+#endif
+
 
 Level::Level()
     :   mapId( 0 ),
@@ -60,6 +114,7 @@ Level::Level()
         playerImage( nullptr ),
         playerSprite( nullptr ),
         nextObjIndex( 0 ),
+        curModeUpdate( &Level::UpdatePlay ),
         curUpdate( &Level::UpdateFootIdle ),
         movingDir( Dir_None ),
         facingDir( Dir_Down ),
@@ -68,6 +123,7 @@ Level::Level()
         talkingObjIndex( NoObject ),
         talkingObjOrigDir( Dir_None ),
         fightPending( false ),
+        fightEnded( false ),
         formationId( 0 ),
         teleportPending( false ),
         teleportType( 0 ),
@@ -76,7 +132,8 @@ Level::Level()
         shopId( 0 ),
         origShopDoor( 0 ),
         flashMove( false ),
-        poisonMove( false )
+        poisonMove( false ),
+        fullScreenColor( Color::Transparent() )
 {
     instance = this;
 
@@ -85,29 +142,90 @@ Level::Level()
 
     memset( objectSprites, 0, sizeof objectSprites );
     memset( objects, 0, sizeof objects );
+
+#if defined( SCENE_SCRIPT )
+    // Scripts
+
+    static NativeFunc funcs[] = 
+    {
+        &HasItem_E,
+        &AddItem_E,
+        &RemoveItem_E,
+        &ShowDialog_E,
+        &SetObjectVisible_E,
+        &IsObjectVisible_E,
+        &HasEventFlag_E,
+        &SetEventFlag_E,
+        &PlayFanfare_E,
+        &PlayGotItem_E,
+        &HasWorldEventFlag_E,
+        &SetWorldEventFlag_E,
+        &Fight_E,
+        &FadeOut_E,
+        &FadeIn_E,
+        &SwapMap_E,
+        &MakeAllObjects_E,
+        &PlayDefaultSong_E,
+        &UpgradeClass_E,
+        &StartTrack_E,
+        &Turn_M,
+        &Pause_M,
+        &Join_E,
+        &PushSong_E,
+    };
+
+    scriptEnv.Init( funcs, _countof( funcs ) );
+
+    for ( int i = 0; i < ObjScripts; i++ )
+    {
+        objScripts[i].Init( scriptGlobals, objStacks[i], _countof( objStacks[i] ), &scriptEnv, i );
+    }
+#endif
 }
 
-Level::~Level()
+void Level::SwapUninit()
 {
-    instance = nullptr;
-
     for ( int i = 0; i < _countof( tiles ); i++ )
     {
         al_destroy_bitmap( tiles[i] );
+        tiles[i] = nullptr;
     }
 
-    al_destroy_bitmap( objectsImage );
-    al_destroy_bitmap( playerImage );
-
     delete playerSprite;
+    playerSprite = nullptr;
 
     for ( int i = 0; i < _countof( objectSprites ); i++ )
     {
         delete objectSprites[i];
+        objectSprites[i] = nullptr;
+    }
+
+    for ( int i = 0; i < Objects; i++ )
+    {
+        Object& obj = objects[i];
+        obj.OrigType = 0;
+        obj.Type = 0;
     }
 }
 
-void Level::Init( int mapId, int startCol, int startRow, int inRoomState )
+Level::~Level()
+{
+    SwapUninit();
+
+    instance = nullptr;
+
+    al_destroy_bitmap( objectsImage );
+    al_destroy_bitmap( playerImage );
+
+}
+
+void Level::SwapMap( int mapId, int startCol, int startRow, int inRoomState )
+{
+    SwapUninit();
+    SwapInit( mapId, startCol, startRow, inRoomState );
+}
+
+void Level::SwapInit( int mapId, int startCol, int startRow, int inRoomState )
 {
     const int AllTileAttrCount = TileSets * TileTypes;
     const int AllObjSpecCount = MapCount * Objects;
@@ -155,20 +273,6 @@ void Level::Init( int mapId, int startCol, int startRow, int inRoomState )
     if ( tiles[In] == nullptr )
         return;
 
-    objectsImage = al_load_bitmap( "mapObjects.png" );
-    if ( objectsImage == nullptr )
-        return;
-
-    playerImage = al_load_bitmap( "mapPlayer.png" );
-    if ( playerImage == nullptr )
-        return;
-
-    if ( !LoadList( "exitTeleports.dat", exitTeleports, ExitTeleports ) )
-        return;
-
-    if ( !LoadList( "swapTeleports.dat", swapTeleports, SwapTeleports ) )
-        return;
-
     if ( !LoadList( "battleRates.dat", battleRates, MapCount ) )
         return;
 
@@ -176,15 +280,6 @@ void Level::Init( int mapId, int startCol, int startRow, int inRoomState )
         return;
 
     if ( !LoadList( "objects.dat", allObjectSpecs, AllObjSpecCount ) )
-        return;
-
-    if ( !LoadResource( "dialogue.tab", &messages ) )
-        return;
-
-    if ( !LoadList( "talkParams.dat", checkParams, ObjectTypes ) )
-        return;
-
-    if ( !LoadList( "treasure.dat", chests, Chests ) )
         return;
 
     // skip the first entry
@@ -200,6 +295,7 @@ void Level::Init( int mapId, int startCol, int startRow, int inRoomState )
     leftCol = (playerCol - MiddleCol + ColCount) % ColCount;
     topRow = (playerRow - MiddleRow + RowCount) % RowCount;
 
+    facingDir = Dir_Down;
     playerSprite = new MapSprite( playerImage );
     playerSprite->SetX( MiddleCol * TileWidth );
     playerSprite->SetY( MiddleRow * TileHeight );
@@ -209,7 +305,37 @@ void Level::Init( int mapId, int startCol, int startRow, int inRoomState )
     this->mapId = mapId;
     inRoom = (InOut) inRoomState;
 
-    MakeObjects( &allObjectSpecs[mapId * Objects], Objects );
+    memcpy( objSpecs, &allObjectSpecs[mapId * Objects], Objects * sizeof( ObjectSpec ) );
+}
+
+void Level::Init( int mapId, int startCol, int startRow, int inRoomState )
+{
+    objectsImage = al_load_bitmap( "mapObjects.png" );
+    if ( objectsImage == nullptr )
+        return;
+
+    playerImage = al_load_bitmap( "mapPlayer.png" );
+    if ( playerImage == nullptr )
+        return;
+
+    if ( !LoadList( "exitTeleports.dat", exitTeleports, ExitTeleports ) )
+        return;
+
+    if ( !LoadList( "swapTeleports.dat", swapTeleports, SwapTeleports ) )
+        return;
+
+    if ( !LoadResource( "dialogue.tab", &messages ) )
+        return;
+
+    if ( !LoadList( "talkParams.dat", checkParams, ObjectTypes ) )
+        return;
+
+    if ( !LoadList( "treasure.dat", chests, Chests ) )
+        return;
+
+    SwapInit( mapId, startCol, startRow, inRoomState );
+
+    MakeObjects( &objSpecs[0], Objects );
 
     Sound::PlayTrack( song, 0, true );
 
@@ -245,6 +371,9 @@ void Level::MakeObjects( const ObjectSpec* objSpecs, int count )
             break;
 
         auto& obj = objects[i];
+
+        if ( obj.OrigType != 0 )
+            continue;
 
         obj.OrigType = spec.Type;
         obj.Flags = spec.Flags;
@@ -287,7 +416,7 @@ void Level::MakeObjectSprite( int index )
     objectSprites[index] = sprite;
 }
 
-void Level::Update()
+void Level::UpdatePlay()
 {
     if ( SceneStack::IsFading() )
         return;
@@ -302,6 +431,52 @@ void Level::Update()
         UpdateObject();
         UpdateObjectSprites();
     }
+
+#if defined( SCENE_SCRIPT )
+    for ( int i = 0; i < Objects; i++ )
+    {
+        RunDiscard( objScripts[i] );
+    }
+
+    if ( Input::IsKeyPressing( ALLEGRO_KEY_SPACE ) )
+    {
+        // Start sample script.
+
+        if ( !objScripts[MainScriptIndex].IsRunning() )
+        {
+            for ( int i = 0; i < ObjScripts; i++ )
+            {
+                objScripts[i].Reset();
+            }
+
+            int type = ObjEvents::Scripts - 1;
+            ByteCode script = ObjEvents::GetObjectScript( type );
+            StartEventScript( type, &script );
+        }
+    }
+#endif
+}
+
+#if defined( SCENE_SCRIPT )
+
+void Level::UpdateScript()
+{
+    for ( int i = 0; i < Objects; i++ )
+    {
+        RunDiscard( objScripts[i] );
+    }
+
+    if ( ERR_YIELDED != RunDiscard( objScripts[MainScriptIndex] ) )
+    {
+        curModeUpdate = &Level::UpdatePlay;
+    }
+}
+
+#endif
+
+void Level::Update()
+{
+    (this->*curModeUpdate)();
 }
 
 void Level::ShiftMap( int shiftX, int shiftY )
@@ -347,6 +522,12 @@ void Level::ShiftMap( int shiftX, int shiftY )
 
 void Level::Draw()
 {
+    if ( fullScreenColor.a != 0 )
+    {
+        al_clear_to_color( fullScreenColor );
+        return;
+    }
+
     DrawMap();
     DrawPlayer();
     DrawObjects();
@@ -421,6 +602,16 @@ void Level::DrawObjects()
             int screenY = (sprite->GetY() - top + WorldHeight) % WorldHeight;
 
             sprite->DrawAt( screenX, screenY );
+
+#if defined( SCENE_SCRIPT )
+            // TEST:
+            char c;
+            if ( i < 0xA )
+                c = i + '0';
+            else
+                c = i + 'A';
+            Text::DrawChar( c, screenX, screenY, al_map_rgba( 255, 255, 255, 128 ) );
+#endif
         }
     }
 }
@@ -715,6 +906,7 @@ bool Level::CanPlayerTalk( int col, int row, int& objIndex )
 
 void Level::CheckObject( int type, CheckResult& result )
 {
+#if !defined( SCENE_SCRIPT )
     CheckRoutine routine = GetObjectRoutine( type );
 
     result.Message = 0;
@@ -729,6 +921,17 @@ void Level::CheckObject( int type, CheckResult& result )
     teleportPending = result.Teleport;
     teleportType = LTile::TT_Swap;
     teleportId = result.TeleportId;
+#else
+    CheckParams& params = checkParams[type];
+
+    for ( int i = 0; i < _countof( params ); i++ )
+    {
+        scriptGlobals[i] = params[i];
+    }
+
+    ByteCode script = ObjEvents::GetObjectScript( type );
+    StartEventScript( type, &script );
+#endif
 }
 
 void Level::OpenChest( int chestId, int col, int row, CheckResult& result )
@@ -854,13 +1057,21 @@ void Level::UpdateFootIdle()
             CheckTile( facingPos.X, facingPos.Y, result );
 
             talkingObjIndex = NoObject;
+
+#if defined( SCENE_SCRIPT )
+            const char* text = messages.GetItem( result.Message );
+            dialog.Reinit( text, result.ItemName );
+            curUpdate = &Level::UpdateDialog;
+#endif
         }
 
+#if !defined( SCENE_SCRIPT )
         const char* text = messages.GetItem( result.Message );
 
         dialog.Reinit( text, result.ItemName );
 
         curUpdate = &Level::UpdateDialog;
+#endif
 
         return;
     }
@@ -934,6 +1145,7 @@ bool Level::CheckPendingAction()
     if ( fightPending )
     {
         fightPending = false;
+        fightEnded = false;
         SceneStack::BeginFade( 15, Color::Transparent(), Color::Black(), 
             [this] { SceneStack::EnterBattle( formationId, backdrop ); } );
         Sound::PlayEffect( SEffect_Fight );
@@ -1025,6 +1237,7 @@ void Level::HandleFightEnded()
         SceneStack::SwitchScene( SceneId_Ending );
     else
     {
+        fightEnded = true;
         SceneStack::BeginFade( 15, Color::Black(), Color::Transparent(), [] {} );
         Sound::PlayTrack( song, 0, true );
     }
@@ -1236,3 +1449,374 @@ uint16_t Level::GetCurrentTileAttr()
 
     return instance->tileAttr[ref];
 }
+
+
+#if defined( SCENE_SCRIPT )
+
+int RunDiscard( Machine& machine )
+{
+    int ret = machine.Run();
+    if ( ret != ERR_YIELDED )
+        machine.Reset();
+    return ret;
+}
+
+void Level::StartEventScript( int type, const ByteCode* byteCode )
+{
+    if ( nullptr != objScripts[MainScriptIndex].Start( byteCode, 0 ) )
+    {
+        if ( ERR_YIELDED == RunDiscard( objScripts[MainScriptIndex] ) )
+        {
+            curModeUpdate = &Level::UpdateScript;
+        }
+    }
+}
+
+int Level::Pause_M_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+{
+    assert( argc >= 1 );
+    int value = args[0];
+    int index;
+
+    index = machine->GetScriptContext();
+
+    _RPT2( _CRT_WARN, "Pause_C %d, %d\n", index, value );
+    objTimers[index]--;
+    if ( objTimers[index] == 0 )
+    {
+        return 0;
+    }
+    else
+    {
+        return machine->Yield( Pause_M_C, context );
+    }
+}
+
+int Level::Pause_M( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int value = args[0];
+    int index;
+
+    index = machine->GetScriptContext();
+
+    _RPT2( _CRT_WARN, "Pause %d, %d\n", index, value );
+    if ( value <= 0 )
+    {
+        return 0;
+    }
+    else
+    {
+        objTimers[index] = value;
+        return machine->Yield( Pause_M_C, 0 );
+    }
+}
+
+int Level::Turn_M( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int value = args[0];
+    int index;
+
+    index = machine->GetScriptContext();
+
+    _RPT2( _CRT_WARN, "Turn %d, %d\n", index, value );
+    instance->objectSprites[index]->SetDirection( (Direction) value );
+    return 0;
+}
+
+int Level::StartTrack_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 2 );
+    int index = args[0];
+
+    objScripts[index].Reset();
+
+    ByteCode byteCode;
+    byteCode.Address = args[1];
+    byteCode.Module = machine->GetCallerFrame()->Module;
+
+    if ( nullptr == objScripts[index].Start( &byteCode, 0 ) )
+        return ERR_NATIVE_ERROR;
+
+    return RunDiscard( objScripts[index] );
+}
+
+int Level::Join_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+{
+    return Join_E( machine, argc, args, resultCount, result );
+}
+
+int Level::Join_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    bool noneRunning = true;
+    for ( int i = 0; i < Objects; i++ )
+    {
+        if ( objScripts[i].IsRunning() )
+        {
+            noneRunning = false;
+            break;
+        }
+    }
+    if ( noneRunning )
+        return 0;
+    return machine->Yield( Join_E_C, 0 );
+}
+
+int Level::ShowDialog_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+{
+    instance->dialog.Update();
+    if ( instance->dialog.IsClosed() )
+    {
+        instance->RefreshVisibleObjects();
+        if ( instance->talkingObjIndex != NoObject
+            && instance->objectSprites[instance->talkingObjIndex] != nullptr )
+        {
+            instance->objectSprites[instance->talkingObjIndex]->SetDirection( 
+                instance->talkingObjOrigDir );
+        }
+        return 0;
+    }
+    return machine->Yield( ShowDialog_E_C, 0 );
+}
+
+int Level::ShowDialog_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 2 );
+    int messageNumber = args[0];
+    // TODO: second parameter should be the item name
+    const char* itemName = "";
+
+    const char* text = instance->messages.GetItem( messageNumber );
+    instance->dialog.Reinit( text, itemName );
+    return machine->Yield( ShowDialog_E_C, 0 );
+}
+
+int Level::Fight_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+{
+    if ( instance->fightEnded )
+        return 0;
+    return machine->Yield( Fight_E_C, 0 );
+}
+
+int Level::Fight_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int formationId = args[0];
+
+    instance->fightEnded = false;
+    SceneStack::BeginFade( 15, Color::Transparent(), Color::Black(), 
+        [formationId] { SceneStack::EnterBattle( formationId, instance->backdrop ); } );
+    Sound::PlayEffect( SEffect_Fight );
+
+    return machine->Yield( Fight_E_C, 0 );
+}
+
+int Level::PushSong_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int songId = args[0];
+
+    Sound::PushTrack( songId, 0 );
+    return 0;
+}
+
+static void UpgradeClass()
+{
+    const PlayerClass Upgrades[6] = 
+    {
+        Class_Knight,
+        Class_Ninja,
+        Class_Master,
+        Class_RedWizard,
+        Class_WhiteWizard,
+        Class_BlackWizard
+    };
+
+    for ( int i = 0; i < Player::PartySize; i++ )
+    {
+        PlayerClass oldClass = (PlayerClass) Player::Party[i]._class;
+        if ( oldClass < _countof( Upgrades ) )
+            Player::Party[i]._class = Upgrades[oldClass];
+    }
+}
+
+int Level::UpgradeClass_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 0 );
+    UpgradeClass();
+    instance->RefreshVisibleObjects();
+    return 0;
+}
+
+int Level::SwapMap_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 4 );
+    int mapId = args[0];
+    int startCol = args[1];
+    int startRow = args[2];
+    int inRoomState = args[3];
+    instance->SwapMap( mapId, startCol, startRow, inRoomState );
+    SceneStack::SetCurrentLevelId( mapId );
+    SceneStack::SquashLevels();
+    return 0;
+}
+
+int Level::MakeAllObjects_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    instance->MakeObjects( &instance->objSpecs[0], Objects );
+    return 0;
+}
+
+int Level::PlayDefaultSong_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    Sound::PlayTrack( instance->song, 0, true );
+    return 0;
+}
+
+int Level::IsObjectVisible_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int index = args[0];
+    bool visible = Player::GetObjVisible( index );
+    resultCount = 1;
+    result = visible;
+    return 0;
+}
+
+int Level::HasEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int index = args[0];
+    bool value = Player::GetEvent( index );
+    resultCount = 1;
+    result = value;
+    return 0;
+}
+
+int Level::HasWorldEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int index = args[0];
+    bool value = false;
+    switch ( index )
+    {
+    case 0: value = Player::IsBridgeVisible(); break;
+    case 1: value = Player::IsCanalBlocked(); break;
+    case 2: value = Player::GetVehicles() & Vehicle_Canoe; break;
+    case 3: value = Player::GetVehicles() & Vehicle_Ship; break;
+    case 4: value = Player::GetVehicles() & Vehicle_Airship; break;
+    }
+    resultCount = 1;
+    result = value;
+    return 0;
+}
+
+int Level::HasItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int index = args[0];
+    int value = Player::Items[index];
+    resultCount = 1;
+    result = value != 0;
+    return 0;
+}
+
+int Level::SetObjectVisible_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 2 );
+    int index = args[0];
+    bool visible = args[1];
+    Player::SetObjVisible( index, visible );
+    return 0;
+}
+
+int Level::SetEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 2 );
+    int index = args[0];
+    bool value = args[1];
+    Player::SetEvent( index, value );
+    return 0;
+}
+
+static void SetVehicle( Vehicle vehicle, bool enabled )
+{
+    if ( enabled )
+        Player::SetVehicles( (Vehicle) (Player::GetVehicles() | vehicle) );
+    else
+        Player::SetVehicles( (Vehicle) (Player::GetVehicles() ^ vehicle) );
+}
+
+int Level::SetWorldEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 2 );
+    int index = args[0];
+    bool value = args[1];
+    switch ( index )
+    {
+    case 0: Player::SetBridgeVisible( value ); break;
+    case 1: Player::SetCanalBlocked( value ); break;
+    case 2: SetVehicle( Vehicle_Canoe, value ); break;
+    case 3: SetVehicle( Vehicle_Ship, value ); break;
+    case 4: SetVehicle( Vehicle_Airship, value ); break;
+    }
+    return 0;
+}
+
+int Level::AddItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 2 );
+    int index = args[0];
+    int amount = args[1];
+    Player::Items[index] += amount;
+    return 0;
+}
+
+int Level::RemoveItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 2 );
+    int index = args[0];
+    int amount = args[1];
+    Player::Items[index] -= amount;
+    return 0;
+}
+
+int Level::Fade_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+{
+    if ( SceneStack::IsFading() )
+        return machine->Yield( &Level::Fade_E_C, 0 );
+    return 0;
+}
+
+int Level::FadeOut_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int frames = args[0];
+    SceneStack::BeginFade( frames, Color::Transparent(), Color::Black(), 
+        [] { instance->fullScreenColor = Color::Black(); } );
+    return machine->Yield( &Level::Fade_E_C, 0 );
+}
+
+int Level::FadeIn_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    assert( argc == 1 );
+    int frames = args[0];
+    instance->fullScreenColor = Color::Transparent();
+    SceneStack::BeginFade( frames, Color::Black(), Color::Transparent(), [] {} );
+    return machine->Yield( &Level::Fade_E_C, 0 );
+}
+
+int Level::PlayFanfare_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    Sound::PushTrack( Sound_Fanfare, 0 );
+    return 0;
+}
+
+int Level::PlayGotItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+{
+    Sound::PushTrack( Sound_GotItem, 0 );
+    return 0;
+}
+
+#endif

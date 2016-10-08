@@ -16,6 +16,7 @@
 #include "SceneStack.h"
 #include "Sound.h"
 #include "Config.h"
+#include "ObjEvents.h"
 
 
 const double FrameTime = 1 / 60.0;
@@ -331,6 +332,11 @@ static bool InitAllegro()
         return false;
     if ( !Sound::Init() )
         return false;
+
+#if defined( SCENE_SCRIPT )
+    if ( !ObjEvents::Init() )
+        return false;
+#endif
 
     return true;
 }

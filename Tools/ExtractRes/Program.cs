@@ -11,6 +11,7 @@ using System.Text;
 using System.IO;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Diagnostics;
 
 namespace ExtractRes
 {
@@ -133,6 +134,7 @@ namespace ExtractRes
             extractorMap.Add( "backdrops", ExtractBackdrops );
             extractorMap.Add( "battlesprites", ExtractBattleSprites );
             extractorMap.Add( "mapobjects", ExtractMapObjectsBundle );
+            extractorMap.Add( "scripts", ExtractScripts );
             extractorMap.Add( "overworldtiles", ExtractOverworldTilesBundle );
             extractorMap.Add( "leveltiles", ExtractLevelTilesBundle );
             extractorMap.Add( "font", ExtractFont );
@@ -654,6 +656,266 @@ namespace ExtractRes
                 byte[] flagsBuf = reader.ReadBytes( 256 );
 
                 File.WriteAllBytes( options.MakeOutPath( @"initFlags.dat" ), flagsBuf );
+            }
+        }
+
+        static string[] scriptNames = new string[]
+        {
+            "None",
+            "KingConeria",
+            "Garland",
+            "Princess1",
+            "Bikke",
+            "ElfDoc",
+            "ElfPrince",
+            "Astos",
+            "Nerrick",
+            "Smith",
+            "Matoya",
+            "Unne",
+            "Vampire",
+            "Sarda",
+            "Bahamut",
+            "TalkIfVisible",
+            "SubEng",
+            "CubeBot",
+            "Princess2",
+            "Fairy",
+            "Titan",
+            "CanoeSage",
+            "Talk",
+            "Talk",
+            "Replace",
+            "Replace",
+            "TalkFight",
+            "TalkFight",
+            "TalkFight",
+            "TalkFight",
+            "TalkFight",
+            "None",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "TalkIfItem",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "Invis",
+            "IfBridge",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "TalkIfItem",
+            "TalkIfVisible",
+            "TalkIfItem",
+            "TalkIfEvent",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "GoBridge",
+            "TalkIfVisible",
+            "_4Orb",
+            "Talk",
+            "Talk",
+            "TalkIfVisible",
+            "TalkIfVisible",
+            "Talk",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "Talk",
+            "Talk",
+            "Talk",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "Talk",
+            "TalkIfEvent",
+            "TalkIfItem",
+            "Talk",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfItem",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "Talk",
+            "IfCanoe",
+            "TalkIfItem",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "Talk",
+            "Talk",
+            "IfCanal",
+            "Talk",
+            "Talk",
+            "TalkIfItem",
+            "TalkIfItem",
+            "Talk",
+            "IfCanal",
+            "IfKeyTnt",
+            "Talk",
+            "IfCanal",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "TalkIfVisible",
+            "Talk",
+            "IfEarthVamp",
+            "TalkIfItem",
+            "TalkIfVisible",
+            "IfEarthVamp",
+            "Talk",
+            "Talk",
+            "TalkIfItem",
+            "IfAirship",
+            "Talk",
+            "TalkIfEvent",
+            "TalkIfItem",
+            "Talk",
+            "Talk",
+            "Talk",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "_4Orb",
+            "TalkIfItem",
+            "IfEarthFire",
+            "TalkIfItem",
+            "Talk",
+            "Talk",
+            "CoOGuy",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "TalkIfItem",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "TalkIfItem",
+            "TalkIfEvent",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "CubeBotBad",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "TalkIfItem",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "TalkIfEvent",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Chime",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "TalkIfEvent",
+            "BlackOrb",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "Talk",
+            "SampleMovement",
+        };
+
+        private static void ExtractScripts( Options options )
+        {
+            string compilerPath = options.MakeOutPath( "GeminiC.exe" );
+            string thisPath = Path.GetDirectoryName( Process.GetCurrentProcess().MainModule.FileName );
+            string scriptFile = Path.Combine( thisPath, @"Data\ObjEvents.gem" );
+            string outBin = options.MakeOutPath( "objEvents.prg" );
+            string outIndex = options.MakeOutPath( "objEvents.prgidx" );
+            string args = string.Format( "\"{0}\" \"{1}\" \"{2}\"", scriptFile, outBin, outIndex );
+            using ( var process = Process.Start( compilerPath, args ) )
+            {
+                process.WaitForExit();
+                if ( process.ExitCode != 0 )
+                    throw new Exception( "The script compiler failed with code " + process.ExitCode );
+
+                var nameToAddr = new Dictionary<string, int>();
+
+                using ( var reader = new BinaryReader( File.OpenRead( outIndex ) ) )
+                {
+                    while ( reader.BaseStream.Position < reader.BaseStream.Length )
+                    {
+                        int address = reader.ReadInt32();
+                        var chars = reader.ReadChars( 32 );
+                        string name = new string( chars ).TrimEnd( '\0' );
+
+                        nameToAddr.Add( name, address );
+                    }
+                }
+
+                string indexFile = options.MakeOutPath( "objEvents.dat" );
+                using ( var writer = new BinaryWriter( TruncateFile( indexFile ) ) )
+                {
+                    foreach ( var name in scriptNames )
+                    {
+                        writer.Write( (ushort) nameToAddr[name] );
+                    }
+                }
             }
         }
 
@@ -2514,6 +2776,11 @@ namespace ExtractRes
         {
             var asm = System.Reflection.Assembly.GetExecutingAssembly();
             return asm.GetManifestResourceStream( name );
+        }
+
+        private static FileStream TruncateFile( string path )
+        {
+            return File.Open( path, FileMode.Create, FileAccess.Write );
         }
     }
 }

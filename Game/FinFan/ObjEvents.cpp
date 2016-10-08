@@ -10,7 +10,10 @@
 #include "Player.h"
 #include "Ids.h"
 #include "Sound.h"
+#include "Utility.h"
 
+
+#if !defined( SCENE_SCRIPT )
 
 extern CheckRoutine checkRoutines[ObjectTypes];
 
@@ -793,3 +796,55 @@ static CheckRoutine checkRoutines[ObjectTypes] =
 /* D6 */    Talk_norm,
 /* D7 */    Talk_norm,
 };
+
+#else
+
+namespace ObjEvents
+{
+    unsigned short  scriptFuncAddrs[Scripts];
+    unsigned char   scriptCode[0x10000];
+    Module          scriptMod;
+
+    bool LoadBlob( const char* filename, unsigned char* buffer, size_t& size )
+    {
+        FILE* file = nullptr;
+
+        errno_t err = fopen_s( &file, filename, "rb" );
+        if ( err != 0 )
+            return false;
+
+        size = fread( buffer, 1, size, file );
+        fclose( file );
+
+        return true;
+    }
+
+    bool Init()
+    {
+        if ( !LoadList( "objEvents.dat", scriptFuncAddrs, Scripts ) )
+            return false;
+
+        size_t codeSize = sizeof scriptCode;
+
+        if ( !LoadBlob( "objEvents.prg", scriptCode, codeSize ) )
+            return false;
+
+        scriptMod.CodeBase = scriptCode;
+
+        return true;
+    }
+
+    ByteCode GetObjectScript( int type )
+    {
+        if ( type >= Scripts )
+            return ByteCode();
+
+        ByteCode byteCode;
+        byteCode.Address = scriptFuncAddrs[type];
+        byteCode.Module = &scriptMod;
+
+        return byteCode;
+    }
+}
+
+#endif

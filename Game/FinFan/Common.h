@@ -20,3 +20,5 @@
 // This project
 #include "Global.h"
 #include "Input.h"
+
+#undef Yield

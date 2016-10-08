@@ -38,6 +38,8 @@ public:
     static void PopAllLevels();
     static void SwitchToField( int startCol, int startRow );
     static void SwitchScene( SceneId id );
+    static void SetCurrentLevelId( int levelId );
+    static void SquashLevels();
 
     static void PerformSceneChange();
 

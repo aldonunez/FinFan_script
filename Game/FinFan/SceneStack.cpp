@@ -188,6 +188,17 @@ void SceneStack::SwitchScene( SceneId id )
     pendingScene.Level = id;
 }
 
+void SceneStack::SetCurrentLevelId( int levelId )
+{
+    curLevelId = levelId;
+}
+
+void SceneStack::SquashLevels()
+{
+    if ( stackLength > 1 )
+        stackLength = 1;
+}
+
 static void PushLevel()
 {
     int inRoom = 0;
