@@ -1,6 +1,8 @@
-# FinFan #
+# FinFan (script) #
 
 This project is a remake of the game Final Fantasy.
+
+The object scripts that I originally wrote in C++ are replaced with scripts written in a Lisp-like language that I wrote.
 
 ### Summary ###
 
@@ -11,6 +13,14 @@ The game is written in C++ and links with the Allegro library. The tools are wri
 Despite Allegro being a cross-platform library, all of the code is built with Visual Studio tools. Feel free to port all of this to other operating systems. Please let me know if you do.
 
 The ExtractNsf project uses the Game Music Emu library.
+
+### Gemini script ###
+
+I originally wrote the functions that handle object interaction events in C++ in the file Game\FinFan\ObjEvents.cpp. These functions were based on the disassembly.
+
+After reading about the Lisp-like scripting systems used by Naughty Dog, I was inspired to implement something similar in this project.
+
+I wrote a compiler and bytecode interpreter for Gemini, a language I wrote that works like Lisp. Then I replaced the C++ functions with Gemini ones that can be found at Tools\ExtractRes\Data\ObjEvents.gem.
 
 ### How do I get set up? ###
 
