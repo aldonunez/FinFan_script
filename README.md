@@ -22,6 +22,10 @@ After reading about the Lisp-like scripting systems used by Naughty Dog, I was i
 
 I wrote a compiler and bytecode interpreter for Gemini, a language I wrote that works like Lisp. Then I replaced the C++ functions with Gemini ones that can be found at Tools\ExtractRes\Data\ObjEvents.gem.
 
+Compared to Naughty Dog's tools, the Gemini language aren't as complete. In particular, the integration of the script into the content generation system is missing; and there's limited runtime patching.
+
+But, I did implement a feature that's useful for making complex scenarios: coroutines.
+
 ### How do I get set up? ###
 
 The subprojects build with Visual Studio 2010 and depend on the Allegro library (5.2) that you can get with Nuget. You’ll also need a copy of the original ROM and NSF for each game.
