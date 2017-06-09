@@ -36,7 +36,7 @@
   (cond 
     ((not (IsObjectVisible 18)) (ShowDialog %1 0))
     ((not (HasWorldEventFlag 0))
-      (SetWorldEventFlag %0 #t)
+      (SetWorldEventFlag 0 #t)
       (PlayFanfare)
       (ShowDialog %2 0))
     (#t (ShowDialog %3 0)) )
@@ -150,7 +150,7 @@
   (Fight 124)
  )
 (defun Sarda ()
-  (if (and (not (HasItem 10)) (IsObjectVisible 12))
+  (if (and (not (HasItem 10)) (not (IsObjectVisible 12)))
     (progn
       (AddItem 10 1)
       (PlayFanfare)

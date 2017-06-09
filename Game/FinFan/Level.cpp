@@ -1745,7 +1745,7 @@ static void SetVehicle( Vehicle vehicle, bool enabled )
     if ( enabled )
         Player::SetVehicles( (Vehicle) (Player::GetVehicles() | vehicle) );
     else
-        Player::SetVehicles( (Vehicle) (Player::GetVehicles() ^ vehicle) );
+        Player::SetVehicles( (Vehicle) (Player::GetVehicles() & ~vehicle) );
 }
 
 int Level::SetWorldEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
