@@ -571,7 +571,13 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
         mCodeBinPtr[1] = 0;
         mCodeBinPtr += 2;
     }
-    *leaveOffset = mCodeBinPtr - leaveOffset - 1;
+
+    ptrdiff_t ptrOffset = mCodeBinPtr - leaveOffset - 1;
+
+    if ( ptrOffset < SCHAR_MIN || ptrOffset > SCHAR_MAX )
+        ThrowError( CERR_UNSUPPORTED, list, "Branch offset doesn't fit in 8 bits." );
+
+    *leaveOffset = (U8) ptrOffset;
 
     // TODO: if both branches tail-return, then set status.tailRet.
     //       This doesn't apply, if there's only one branch.
@@ -1152,8 +1158,12 @@ void Compiler::Patch( PatchChain* chain )
 
     for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
     {
-        size_t diff = target - (link->Inst + 2);
-        link->Inst[1] = diff;
+        ptrdiff_t diff = target - (link->Inst + 2);
+
+        if ( diff < SCHAR_MIN || diff > SCHAR_MAX )
+            ThrowError( CERR_UNSUPPORTED, nullptr, "Branch offset doesn't fit in 8 bits." );
+
+        link->Inst[1] = (U8) diff;
     }
 }
 
