@@ -244,7 +244,7 @@ class Compiler
     typedef std::vector<DeferredLambda> LambdaVec;
 
     typedef void (Compiler::*CallGenerator)( Slist* list, const GenConfig& config, GenStatus& status );
-    typedef std::hash_map<std::string, CallGenerator> GeneratorMap;
+    typedef std::unordered_map<std::string, CallGenerator> GeneratorMap;
 
 
     const char*     mCodeTextPtr;

@@ -10,10 +10,11 @@
 #include <stdio.h>
 #include <tchar.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 #include <map>
-#include <hash_map>
+#include <unordered_map>
 
 typedef unsigned char U8;
 typedef unsigned short U16;

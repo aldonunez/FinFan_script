@@ -15,7 +15,8 @@
 #include <tchar.h>
 #include <assert.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 #include <map>
-#include <hash_map>
+#include <unordered_map>
