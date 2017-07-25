@@ -55,7 +55,7 @@ Level* Level::instance;
 class ScriptEnv : public IEnvironment
 {
     const NativeFunc*   mFuncs;
-    int                 mFuncCount;
+    U32                 mFuncCount;
 
 public:
     ScriptEnv()
@@ -64,18 +64,18 @@ public:
     {
     }
 
-    void Init( const NativeFunc* funcs, int length )
+    void Init( const NativeFunc* funcs, U32 length )
     {
         mFuncs = funcs;
         mFuncCount = length;
     }
 
-    bool FindByteCode( int id, ByteCode* byteCode ) override
+    bool FindByteCode( U32 id, ByteCode* byteCode ) override
     {
         return false;
     }
 
-    bool FindNativeCode( int id, NativeCode* nativeCode ) override
+    bool FindNativeCode( U32 id, NativeCode* nativeCode ) override
     {
         assert( id >= 0 && id < mFuncCount );
         if ( id < 0 || id >= mFuncCount )
@@ -90,8 +90,8 @@ const int ObjScripts = 16 + 1;
 const int MainScriptIndex = 16;
 
 ScriptEnv scriptEnv;
-int scriptGlobals[4];
-int objStacks[ObjScripts][Machine::MIN_STACK];
+CELL scriptGlobals[4];
+CELL objStacks[ObjScripts][Machine::MIN_STACK];
 Machine objScripts[ObjScripts];
 int objTimers[ObjScripts];
 
@@ -1472,7 +1472,7 @@ void Level::StartEventScript( int type, const ByteCode* byteCode )
     }
 }
 
-int Level::Pause_M_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+int Level::Pause_M_C( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc >= 1 );
     int value = args[0];
@@ -1492,7 +1492,7 @@ int Level::Pause_M_C( Machine* machine, int argc, int* args, int& resultCount, i
     }
 }
 
-int Level::Pause_M( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::Pause_M( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int value = args[0];
@@ -1512,7 +1512,7 @@ int Level::Pause_M( Machine* machine, int argc, int* args, int& resultCount, int
     }
 }
 
-int Level::Turn_M( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::Turn_M( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int value = args[0];
@@ -1525,7 +1525,7 @@ int Level::Turn_M( Machine* machine, int argc, int* args, int& resultCount, int&
     return 0;
 }
 
-int Level::StartTrack_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::StartTrack_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     int index = args[0];
@@ -1542,12 +1542,12 @@ int Level::StartTrack_E( Machine* machine, int argc, int* args, int& resultCount
     return RunDiscard( objScripts[index] );
 }
 
-int Level::Join_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+int Level::Join_E_C( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
-    return Join_E( machine, argc, args, resultCount, result );
+    return Join_E( machine, argc, args, context );
 }
 
-int Level::Join_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::Join_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     bool noneRunning = true;
     for ( int i = 0; i < Objects; i++ )
@@ -1563,7 +1563,7 @@ int Level::Join_E( Machine* machine, int argc, int* args, int& resultCount, int&
     return machine->Yield( Join_E_C, 0 );
 }
 
-int Level::ShowDialog_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+int Level::ShowDialog_E_C( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     instance->dialog.Update();
     if ( instance->dialog.IsClosed() )
@@ -1580,7 +1580,7 @@ int Level::ShowDialog_E_C( Machine* machine, int argc, int* args, int& resultCou
     return machine->Yield( ShowDialog_E_C, 0 );
 }
 
-int Level::ShowDialog_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::ShowDialog_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     int messageNumber = args[0];
@@ -1592,14 +1592,14 @@ int Level::ShowDialog_E( Machine* machine, int argc, int* args, int& resultCount
     return machine->Yield( ShowDialog_E_C, 0 );
 }
 
-int Level::Fight_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+int Level::Fight_E_C( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     if ( instance->fightEnded )
         return 0;
     return machine->Yield( Fight_E_C, 0 );
 }
 
-int Level::Fight_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::Fight_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int formationId = args[0];
@@ -1612,7 +1612,7 @@ int Level::Fight_E( Machine* machine, int argc, int* args, int& resultCount, int
     return machine->Yield( Fight_E_C, 0 );
 }
 
-int Level::PushSong_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::PushSong_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int songId = args[0];
@@ -1641,7 +1641,7 @@ static void UpgradeClass()
     }
 }
 
-int Level::UpgradeClass_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::UpgradeClass_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 0 );
     UpgradeClass();
@@ -1649,7 +1649,7 @@ int Level::UpgradeClass_E( Machine* machine, int argc, int* args, int& resultCou
     return 0;
 }
 
-int Level::SwapMap_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::SwapMap_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 4 );
     int mapId = args[0];
@@ -1662,39 +1662,35 @@ int Level::SwapMap_E( Machine* machine, int argc, int* args, int& resultCount, i
     return 0;
 }
 
-int Level::MakeAllObjects_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::MakeAllObjects_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     instance->MakeObjects( &instance->objSpecs[0], Objects );
     return 0;
 }
 
-int Level::PlayDefaultSong_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::PlayDefaultSong_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     Sound::PlayTrack( instance->song, 0, true );
     return 0;
 }
 
-int Level::IsObjectVisible_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::IsObjectVisible_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int index = args[0];
     bool visible = Player::GetObjVisible( index );
-    resultCount = 1;
-    result = visible;
-    return 0;
+    return machine->PushCell( visible );
 }
 
-int Level::HasEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::HasEventFlag_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int index = args[0];
     bool value = Player::GetEvent( index );
-    resultCount = 1;
-    result = value;
-    return 0;
+    return machine->PushCell( value );
 }
 
-int Level::HasWorldEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::HasWorldEventFlag_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int index = args[0];
@@ -1707,22 +1703,18 @@ int Level::HasWorldEventFlag_E( Machine* machine, int argc, int* args, int& resu
     case 3: value = Player::GetVehicles() & Vehicle_Ship; break;
     case 4: value = Player::GetVehicles() & Vehicle_Airship; break;
     }
-    resultCount = 1;
-    result = value;
-    return 0;
+    return machine->PushCell( value );
 }
 
-int Level::HasItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::HasItem_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int index = args[0];
     int value = Player::Items[index];
-    resultCount = 1;
-    result = value != 0;
-    return 0;
+    return machine->PushCell( value != 0 );
 }
 
-int Level::SetObjectVisible_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::SetObjectVisible_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     int index = args[0];
@@ -1731,7 +1723,7 @@ int Level::SetObjectVisible_E( Machine* machine, int argc, int* args, int& resul
     return 0;
 }
 
-int Level::SetEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::SetEventFlag_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     int index = args[0];
@@ -1748,7 +1740,7 @@ static void SetVehicle( Vehicle vehicle, bool enabled )
         Player::SetVehicles( (Vehicle) (Player::GetVehicles() & ~vehicle) );
 }
 
-int Level::SetWorldEventFlag_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::SetWorldEventFlag_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     int index = args[0];
@@ -1764,7 +1756,7 @@ int Level::SetWorldEventFlag_E( Machine* machine, int argc, int* args, int& resu
     return 0;
 }
 
-int Level::AddItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::AddItem_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     int index = args[0];
@@ -1773,7 +1765,7 @@ int Level::AddItem_E( Machine* machine, int argc, int* args, int& resultCount, i
     return 0;
 }
 
-int Level::RemoveItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::RemoveItem_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     int index = args[0];
@@ -1782,14 +1774,14 @@ int Level::RemoveItem_E( Machine* machine, int argc, int* args, int& resultCount
     return 0;
 }
 
-int Level::Fade_E_C( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+int Level::Fade_E_C( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     if ( SceneStack::IsFading() )
         return machine->Yield( &Level::Fade_E_C, 0 );
     return 0;
 }
 
-int Level::FadeOut_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::FadeOut_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int frames = args[0];
@@ -1798,7 +1790,7 @@ int Level::FadeOut_E( Machine* machine, int argc, int* args, int& resultCount, i
     return machine->Yield( &Level::Fade_E_C, 0 );
 }
 
-int Level::FadeIn_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::FadeIn_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 1 );
     int frames = args[0];
@@ -1807,13 +1799,13 @@ int Level::FadeIn_E( Machine* machine, int argc, int* args, int& resultCount, in
     return machine->Yield( &Level::Fade_E_C, 0 );
 }
 
-int Level::PlayFanfare_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::PlayFanfare_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     Sound::PushTrack( Sound_Fanfare, 0 );
     return 0;
 }
 
-int Level::PlayGotItem_E( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int Level::PlayGotItem_E( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     Sound::PushTrack( Sound_GotItem, 0 );
     return 0;

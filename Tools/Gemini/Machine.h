@@ -10,12 +10,21 @@ enum
     ERR_NOT_RUNING,
     ERR_BAD_ARG,
     ERR_BAD_OPCODE,
+    ERR_BAD_ADDRESS,
     ERR_STACK_OVERFLOW,
     ERR_BYTECODE_NOT_FOUND,
     ERR_NATIVECODE_NOT_FOUND,
     ERR_DIVIDE,
     ERR_NATIVE_ERROR,
 };
+
+enum
+{
+    ADDRESS_MAX = UINT16_MAX,
+};
+
+typedef I32 CELL;
+typedef uintptr_t UserContext;
 
 struct Module
 {
@@ -30,8 +39,7 @@ struct ByteCode
 
 class Machine;
 
-typedef int (*NativeFunc)( Machine* machine, int argc, int* args, int& resultCount, int& result );
-typedef int (*NativeContinuationFunc)( Machine* machine, int argc, int* args, int& resultCount, int& result, int context );
+typedef int (*NativeFunc)( Machine* machine, U8 argc, CELL* args, UserContext context );
 
 struct NativeCode
 {
@@ -50,50 +58,53 @@ struct StackFrame
 class IEnvironment
 {
 public:
-    virtual bool FindByteCode( int id, ByteCode* byteCode ) = 0;
-    virtual bool FindNativeCode( int id, NativeCode* nativeCode ) = 0;
+    virtual bool FindByteCode( U32 id, ByteCode* byteCode ) = 0;
+    virtual bool FindNativeCode( U32 id, NativeCode* nativeCode ) = 0;
 };
 
 class Machine
 {
-public:
-    enum
-    {
-        MIN_STACK   = 16,
-    };
-
 private:
     enum
     {
-        FRAME_WORDS = (sizeof( StackFrame ) + sizeof( int ) - 1) / sizeof( int ),
+        FRAME_WORDS = (sizeof( StackFrame ) + sizeof( CELL ) - 1) / sizeof( CELL ),
     };
 
-    int*            mStack;
-    int             mStackSize;
-    int*            mGlobals;
-    StackFrame*     mCurFrame;
-    int*            mSP;
-    IEnvironment*   mEnv;
-    int             mScriptCtx;
+public:
+    enum
+    {
+        MIN_STACK = FRAME_WORDS * 4,
+    };
 
-    NativeContinuationFunc mNativeContinuation;
-    int             mNativeContinuationContext;
-    int             mNativeContinuationArgc;
+private:
+    CELL*           mStack;
+    U16             mStackSize;
+    CELL*           mGlobals;
+    StackFrame*     mCurFrame;
+    CELL*           mSP;
+    IEnvironment*   mEnv;
+    UserContext     mScriptCtx;
+
+    NativeFunc      mNativeContinuation;
+    UserContext     mNativeContinuationContext;
+    U8              mNativeContinuationArgc;
 
 public:
     Machine();
-    void Init( int* globals, int* stack, int stackSize, IEnvironment* environment, int scriptCtx = 0 );
+    void Init( CELL* globals, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx = 0 );
     bool IsRunning();
-    int GetScriptContext();
+    UserContext GetScriptContext();
     const StackFrame* GetCallerFrame();
-    int* Start( const ByteCode* byteCode, int argCount );
+    CELL* Start( const ByteCode* byteCode, U8 argCount );
     void Reset();
     int Run();
-    int Yield( NativeContinuationFunc proc, int context );
+    int Yield( NativeFunc proc, UserContext context );
+    int PushCell( CELL value );
 
 private:
-    int* Push( int count );
-    StackFrame* PushFrame( const ByteCode* byteCode, int argCount );
-    StackFrame* PopFrame( int words );
-    int CallPrimitive( int func, int count );
+    CELL* Push( U8 count );
+    StackFrame* PushFrame( const ByteCode* byteCode, U8 argCount );
+    int PopFrame( U8 words );
+    int CallPrimitive( U8 func, U8 count );
+    int CallNative( NativeFunc proc, U8 argCount, UserContext context );
 };

@@ -16,17 +16,16 @@ int NativeAdd( Machine* machine, int argc, int* args, int& resultCount, int& res
     return ERR_NONE;
 }
 
-int NativeLatent2( Machine* machine, int argc, int* args, int& resultCount, int& result, int context )
+int NativeLatent2( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     if ( context == 1 )
         return machine->Yield( NativeLatent2, 2 );
+
     assert( argc == 2 );
-    result = args[0] + args[1];
-    resultCount = 1;
-    return ERR_NONE;
+    return machine->PushCell( args[0] + args[1] );
 }
 
-int NativeLatent1( Machine* machine, int argc, int* args, int& resultCount, int& result )
+int NativeLatent1( Machine* machine, U8 argc, CELL* args, UserContext context )
 {
     assert( argc == 2 );
     return machine->Yield( NativeLatent2, 1 );
@@ -35,18 +34,18 @@ int NativeLatent1( Machine* machine, int argc, int* args, int& resultCount, int&
 class Env : public IEnvironment
 {
     ByteCode*   mByteCodes;
-    int         mByteCodeCount;
+    U32         mByteCodeCount;
     NativeCode* mNativeCodes;
-    int         mNativeCodeCount;
+    U32         mNativeCodeCount;
 
 public:
     Env();
 
-    void SetByteCodes( ByteCode* byteCodes, int count );
-    void SetNativeCodes( NativeCode* natives, int count );
+    void SetByteCodes( ByteCode* byteCodes, U32 count );
+    void SetNativeCodes( NativeCode* natives, U32 count );
 
-    bool FindByteCode( int id, ByteCode* byteCode );
-    bool FindNativeCode( int id, NativeCode* nativeCode );
+    bool FindByteCode( U32 id, ByteCode* byteCode );
+    bool FindNativeCode( U32 id, NativeCode* nativeCode );
 };
 
 Env::Env()
@@ -57,19 +56,19 @@ Env::Env()
 {
 }
 
-void Env::SetByteCodes( ByteCode* byteCodes, int count )
+void Env::SetByteCodes( ByteCode* byteCodes, U32 count )
 {
     mByteCodes = byteCodes;
     mByteCodeCount = count;
 }
 
-void Env::SetNativeCodes( NativeCode* nativeCodes, int count )
+void Env::SetNativeCodes( NativeCode* nativeCodes, U32 count )
 {
     mNativeCodes = nativeCodes;
     mNativeCodeCount = count;
 }
 
-bool Env::FindByteCode( int id, ByteCode* byteCode )
+bool Env::FindByteCode( U32 id, ByteCode* byteCode )
 {
     if ( id >= mByteCodeCount )
         return false;
@@ -78,7 +77,7 @@ bool Env::FindByteCode( int id, ByteCode* byteCode )
     return true;
 }
 
-bool Env::FindNativeCode( int id, NativeCode* nativeCode )
+bool Env::FindNativeCode( U32 id, NativeCode* nativeCode )
 {
     if ( id >= mNativeCodeCount )
         return false;
@@ -117,8 +116,8 @@ public:
     void SetCurrentModule( Module* mod );
     bool AddNative( const std::string& name, NativeFunc func );
 
-    bool FindByteCode( int id, ByteCode* byteCode );
-    bool FindNativeCode( int id, NativeCode* nativeCode );
+    bool FindByteCode( U32 id, ByteCode* byteCode );
+    bool FindNativeCode( U32 id, NativeCode* nativeCode );
 
     bool AddGlobal( const std::string& name, int offset ) override;
     bool FindGlobal( const std::string& name, int& offset ) override;
@@ -186,7 +185,7 @@ bool CompilerEnv::AddNative( const std::string& name, NativeFunc proc )
     return true;
 }
 
-bool CompilerEnv::FindByteCode( int id, ByteCode* byteCode )
+bool CompilerEnv::FindByteCode( U32 id, ByteCode* byteCode )
 {
     auto it = mIdMap.find( id );
     if ( it == mIdMap.end() )
@@ -199,7 +198,7 @@ bool CompilerEnv::FindByteCode( int id, ByteCode* byteCode )
     return true;
 }
 
-bool CompilerEnv::FindNativeCode( int id, NativeCode* nativeCode )
+bool CompilerEnv::FindNativeCode( U32 id, NativeCode* nativeCode )
 {
     auto it = mIdMap.find( id );
     if ( it == mIdMap.end() )
@@ -355,8 +354,8 @@ int _tmain(int argc, _TCHAR* argv[])
             printf( "%s\n", disasm );
         }
 
-        int data[100];
-        int stack[Machine::MIN_STACK];
+        CELL data[100];
+        CELL stack[Machine::MIN_STACK];
         Machine machine;
         machine.Init( data, stack, _countof( stack ), &env );
         ExternalFunc external = { 0 };
@@ -365,7 +364,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
         b = env.FindExternal( "a", &external );
         b = env.FindByteCode( external.Id, &byteCode );
-        int* args = machine.Start( &byteCode, 1 );
+        CELL* args = machine.Start( &byteCode, 1 );
         args[0] = 65;
 
         int err = 0;
@@ -401,8 +400,8 @@ int _tmain(int argc, _TCHAR* argv[])
         env.SetCurrentModule( &mod2 );
         compiler2.Compile();
 
-        int data[100];
-        int stack[Machine::MIN_STACK];
+        CELL data[100];
+        CELL stack[Machine::MIN_STACK];
         Machine machine;
         machine.Init( data, stack, _countof( stack ), &env );
 
@@ -432,8 +431,8 @@ int _tmain(int argc, _TCHAR* argv[])
         CompilerEnv env;
         Compiler compiler( progStr1, sizeof progStr1 - 1, bin, sizeof bin, &env, nullptr );
         compiler.Compile();
-        int data[100];
-        int stack[Machine::MIN_STACK];
+        CELL data[100];
+        CELL stack[Machine::MIN_STACK];
         Machine machine;
         machine.Init( data, stack, _countof( stack ), nullptr );
 
@@ -590,10 +589,10 @@ int _tmain(int argc, _TCHAR* argv[])
         OP_RET,
         1
     };
-    int data[10];
+    CELL data[10];
     Env env;
 
-    int stack[Machine::MIN_STACK];
+    CELL stack[Machine::MIN_STACK];
     Machine machine;
     machine.Init( data, stack, _countof( stack ), &env );
 

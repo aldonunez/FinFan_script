@@ -38,7 +38,7 @@ Machine::Machine()
 {
 }
 
-void Machine::Init( int* globals, int* stack, int stackSize, IEnvironment* environment, int scriptCtx )
+void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx )
 {
     mGlobals = globals;
     mStack = stack;
@@ -53,7 +53,7 @@ bool Machine::IsRunning()
     return mCurFrame != nullptr;
 }
 
-int Machine::GetScriptContext()
+UserContext Machine::GetScriptContext()
 {
     return mScriptCtx;
 }
@@ -63,16 +63,17 @@ const StackFrame* Machine::GetCallerFrame()
     return mCurFrame;
 }
 
-int* Machine::Push( int count )
+CELL* Machine::Push( U8 count )
 {
     mSP -= count;
     return mSP + 1;
 }
 
-int* Machine::Start( const ByteCode* byteCode, int argCount )
+CELL* Machine::Start( const ByteCode* byteCode, U8 argCount )
 {
-    int* args = Push( argCount );
-    PushFrame( byteCode, argCount );
+    CELL* args = Push( argCount );
+    if ( PushFrame( byteCode, argCount ) == nullptr )
+        return nullptr;
     return args;
 }
 
@@ -82,48 +83,63 @@ void Machine::Reset()
     mCurFrame = nullptr;
 }
 
+int Machine::CallNative( NativeFunc proc, U8 argCount, UserContext context )
+{
+    CELL* args = mSP + 1;
+    CELL* oldSP = mSP;
+
+    int ret = proc( this, argCount, args, context );
+
+    if ( ret == ERR_NONE )
+    {
+        CELL* newSP = mSP;
+        ptrdiff_t resultCount = oldSP - newSP;
+
+        mSP += argCount;
+
+        if ( resultCount == 0 )
+        {
+            *mSP = 0;
+            mSP--;
+        }
+        else
+        {
+            for ( int i = 1; i <= resultCount; i++ )
+            {
+                mSP[i] = newSP[i];
+            }
+        }
+
+        mNativeContinuationArgc = 0;
+    }
+    else if ( ret == ERR_YIELDED )
+    {
+        mNativeContinuationArgc = argCount;
+    }
+
+    return ret;
+}
+
 int Machine::Run()
 {
     if ( mCurFrame == nullptr )
         return ERR_NOT_RUNING;
 
-    const U8* codePtr = mCurFrame->CodePtr;
-
     if ( mNativeContinuation != nullptr )
     {
-        NativeContinuationFunc continuation = mNativeContinuation;
-        int context = mNativeContinuationContext;
-        int count = mNativeContinuationArgc;
+        NativeFunc continuation = mNativeContinuation;
+        UserContext context = mNativeContinuationContext;
+        U8 count = mNativeContinuationArgc;
 
         mNativeContinuation = nullptr;
         mNativeContinuationContext = 0;
 
-        int* args = mSP + 1;
-        int resultCount = 0;
-        int result = 0;
-
-        int ret = continuation( this, count, args, resultCount, result, context );
-
-        if ( ret == ERR_NONE )
-        {
-            mSP += count;
-            if ( resultCount == 0 )
-                result = 0;
-            *mSP = result;
-            mSP--;
-
-            mNativeContinuationArgc = 0;
-        }
-        else if ( ret == ERR_YIELDED )
-        {
-            mCurFrame->CodePtr = codePtr;
-            return ERR_YIELDED;
-        }
-        else
-        {
+        int ret = CallNative( continuation, count, context );
+        if ( ret != ERR_NONE )
             return ret;
-        }
     }
+
+    const U8* codePtr = mCurFrame->CodePtr;
 
     for ( ; ; )
     {
@@ -141,7 +157,7 @@ int Machine::Run()
 
         case OP_PUSH:
             {
-                int count = *(U8*) codePtr;
+                U8 count = *(U8*) codePtr;
                 codePtr++;
                 mSP -= count;
             }
@@ -157,8 +173,8 @@ int Machine::Run()
             {
                 int index = *(U8*) codePtr;
                 codePtr++;
-                int* args = (int*) (mCurFrame + 1);
-                int word = args[index];
+                CELL* args = (CELL*) mCurFrame + FRAME_WORDS;
+                CELL word = args[index];
                 *mSP = word;
                 mSP--;
             }
@@ -168,9 +184,9 @@ int Machine::Run()
             {
                 int index = *(U8*) codePtr;
                 codePtr++;
-                int* args = (int*) (mCurFrame + 1);
+                CELL* args = (CELL*) mCurFrame + FRAME_WORDS;
                 mSP++;
-                int word = *mSP;
+                CELL word = *mSP;
                 args[index] = word;
             }
             break;
@@ -180,8 +196,8 @@ int Machine::Run()
                 int index = *(U8*) codePtr;
                 codePtr++;
                 index = -index;
-                int* localsTop = ((int*) mCurFrame) - 1;
-                int word = localsTop[index];
+                CELL* localsTop = ((CELL*) mCurFrame) - 1;
+                CELL word = localsTop[index];
                 *mSP = word;
                 mSP--;
             }
@@ -192,18 +208,18 @@ int Machine::Run()
                 int index = *(U8*) codePtr;
                 codePtr++;
                 index = -index;
-                int* localsTop = ((int*) mCurFrame) - 1;
+                CELL* localsTop = ((CELL*) mCurFrame) - 1;
                 mSP++;
-                int word = *mSP;
+                CELL word = *mSP;
                 localsTop[index] = word;
             }
             break;
 
         case OP_LDGLO:
             {
-                int addr = *(U16*) codePtr;
+                U16 addr = *(U16*) codePtr;
                 codePtr += 2;
-                int word = mGlobals[addr];
+                CELL word = mGlobals[addr];
                 *mSP = word;
                 mSP--;
             }
@@ -211,17 +227,17 @@ int Machine::Run()
 
         case OP_STGLO:
             {
-                int addr = *(U16*) codePtr;
+                U16 addr = *(U16*) codePtr;
                 codePtr += 2;
                 mSP++;
-                int word = *mSP;
+                CELL word = *mSP;
                 mGlobals[addr] = word;
             }
             break;
 
         case OP_LDC:
             {
-                int word = *(int*) codePtr;
+                CELL word = *(CELL*) codePtr;
                 codePtr += 4;
                 *mSP = word;
                 mSP--;
@@ -230,7 +246,7 @@ int Machine::Run()
 
         case OP_LDC_S:
             {
-                int word = *(I8*) codePtr;
+                CELL word = *(I8*) codePtr;
                 codePtr += 1;
                 *mSP = word;
                 mSP--;
@@ -239,7 +255,7 @@ int Machine::Run()
 
         case OP_B:
             {
-                int offset = *(I8*) codePtr;
+                I8 offset = *(I8*) codePtr;
                 codePtr++;
                 codePtr += offset;
             }
@@ -247,10 +263,10 @@ int Machine::Run()
 
         case OP_BFALSE:
             {
-                int offset = *(I8*) codePtr;
+                I8 offset = *(I8*) codePtr;
                 codePtr++;
                 mSP++;
-                int condition = *mSP;
+                CELL condition = *mSP;
                 if ( !condition )
                     codePtr += offset;
             }
@@ -258,10 +274,10 @@ int Machine::Run()
 
         case OP_BTRUE:
             {
-                int offset = *(I8*) codePtr;
+                I8 offset = *(I8*) codePtr;
                 codePtr++;
                 mSP++;
-                int condition = *mSP;
+                CELL condition = *mSP;
                 if ( condition )
                     codePtr += offset;
             }
@@ -269,9 +285,12 @@ int Machine::Run()
 
         case OP_RET:
             {
-                int words = *codePtr;
+                U8 words = *codePtr;
                 codePtr++;
-                if ( PopFrame( words ) == nullptr )
+                int err = PopFrame( words );
+                if ( err != ERR_NONE )
+                    return err;
+                if ( mCurFrame == nullptr )
                     goto Done;
                 codePtr = mCurFrame->CodePtr;
             }
@@ -279,9 +298,9 @@ int Machine::Run()
 
         case OP_CALLP:
             {
-                int count = *(U8*) codePtr;
+                U8 count = *(U8*) codePtr;
                 codePtr++;
-                int func = *(U8*) codePtr;
+                U8 func = *(U8*) codePtr;
                 codePtr++;
                 int err = CallPrimitive( func, count );
                 if ( err != ERR_NONE )
@@ -291,9 +310,9 @@ int Machine::Run()
 
         case OP_CALL:
             {
-                int count = *(U8*) codePtr;
+                U8 count = *(U8*) codePtr;
                 codePtr++;
-                int addr = *(U16*) codePtr;
+                U16 addr = *(U16*) codePtr;
                 codePtr += 2;
 
                 mCurFrame->CodePtr = codePtr;
@@ -311,16 +330,18 @@ int Machine::Run()
 
         case OP_CALLI:
             {
-                int count = *(U8*) codePtr;
+                U8 count = *(U8*) codePtr;
                 codePtr++;
 
                 mSP++;
-                int addr = *mSP;
+                U32 addr = *mSP;
+                if ( addr > ADDRESS_MAX )
+                    return ERR_BAD_ADDRESS;
 
                 mCurFrame->CodePtr = codePtr;
 
                 ByteCode byteCode;
-                byteCode.Address = addr;
+                byteCode.Address = (U16) addr;
                 byteCode.Module = mCurFrame->Module;
 
                 if ( PushFrame( &byteCode, count ) == nullptr )
@@ -332,9 +353,9 @@ int Machine::Run()
 
         case OP_CALLN:
             {
-                int count = *(U8*) codePtr;
+                U8 count = *(U8*) codePtr;
                 codePtr++;
-                int id = *(U32*) codePtr;
+                U32 id = *(U32*) codePtr;
                 codePtr += 4;
 
                 mCurFrame->CodePtr = codePtr;
@@ -353,9 +374,9 @@ int Machine::Run()
 
         case OP_CALLNATIVE:
             {
-                int count = *(U8*) codePtr;
+                U8 count = *(U8*) codePtr;
                 codePtr++;
-                int id = *(U32*) codePtr;
+                U32 id = *(U32*) codePtr;
                 codePtr += 4;
 
                 mCurFrame->CodePtr = codePtr;
@@ -365,30 +386,9 @@ int Machine::Run()
                 if ( !mEnv->FindNativeCode( id, &nativeCode ) )
                     return ERR_NATIVECODE_NOT_FOUND;
 
-                int* args = mSP + 1;
-                int resultCount = 0;
-                int result = 0;
-
-                int ret = nativeCode.Proc( this, count, args, resultCount, result );
-
-                if ( ret == ERR_NONE )
-                {
-                    mSP += count;
-                    if ( resultCount == 0 )
-                        result = 0;
-                    *mSP = result;
-                    mSP--;
-                }
-                else if ( ret == ERR_YIELDED )
-                {
-                    mCurFrame->CodePtr = codePtr;
-                    mNativeContinuationArgc = count;
-                    return ERR_YIELDED;
-                }
-                else
-                {
+                int ret = CallNative( nativeCode.Proc, count, 0 );
+                if ( ret != ERR_NONE )
                     return ret;
-                }
             }
             break;
 
@@ -401,7 +401,7 @@ Done:
     return ERR_NONE;
 }
 
-StackFrame* Machine::PushFrame( const ByteCode* byteCode, int argCount )
+StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 argCount )
 {
     if ( (mSP - FRAME_WORDS) < mStack )
         return nullptr;
@@ -419,40 +419,60 @@ StackFrame* Machine::PushFrame( const ByteCode* byteCode, int argCount )
     return frame;
 }
 
-StackFrame* Machine::PopFrame( int words )
+int Machine::PopFrame( U8 words )
 {
-    assert( words >= 0 && words <= 1 );
+    CELL* oldSP = mSP;
+    CELL* newSP = ((CELL*) mCurFrame) + FRAME_WORDS - 1 + mCurFrame->ArgCount;
 
-    int* oldSP = mSP;
-    mSP = ((int*) mCurFrame) + FRAME_WORDS - 1 + mCurFrame->ArgCount;
+    if ( newSP >= &mStack[mStackSize] )
+        return ERR_STACK_OVERFLOW;
+
+    mSP = newSP;
     mCurFrame = mCurFrame->Prev;
 
-    if ( words == 1 )
+    if ( (mSP - words) < mStack )
+        return ERR_STACK_OVERFLOW;
+
+    mSP -= words;
+
+    for ( int i = 1; i <= words; i++ )
     {
-        *mSP = *(oldSP + 1);
-        mSP--;
+        mSP[i] = oldSP[i];
     }
 
-    return mCurFrame;
+    return ERR_NONE;
 }
 
-int Machine::Yield( NativeContinuationFunc proc, int context )
+int Machine::PushCell( CELL value )
+{
+    *mSP = value;
+    mSP--;
+    return ERR_NONE;
+}
+
+int Machine::Yield( NativeFunc proc, UserContext context )
 {
     if ( proc == nullptr )
         return ERR_BAD_ARG;
+
     mNativeContinuation = proc;
     mNativeContinuationContext = context;
     return ERR_YIELDED;
 }
 
-int Machine::CallPrimitive( int func, int count )
+int Machine::CallPrimitive( U8 func, U8 count )
 {
+    if ( (func == PRIM_NEG || func == PRIM_NOT) && count != 1 )
+        return ERR_BAD_OPCODE;
+    else if ( count != 2 )
+        return ERR_BAD_OPCODE;
+
     switch ( func )
     {
     case PRIM_ADD:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a + b;
             mSP++;
         }
@@ -460,8 +480,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_SUB:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a - b;
             mSP++;
         }
@@ -469,8 +489,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_MULT:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a * b;
             mSP++;
         }
@@ -478,8 +498,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_DIV:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             if ( b == 0 )
                 return ERR_DIVIDE;
             *(mSP + 2) = a / b;
@@ -489,8 +509,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_MOD:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             if ( b == 0 )
                 return ERR_DIVIDE;
             *(mSP + 2) = a % b;
@@ -500,15 +520,15 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_NEG:
         {
-            int a = *(mSP + 1);
+            CELL a = *(mSP + 1);
             *(mSP + 1) = -a;
         }
         break;
 
     case PRIM_AND:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a && b;
             mSP++;
         }
@@ -516,8 +536,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_OR:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a || b;
             mSP++;
         }
@@ -525,15 +545,15 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_NOT:
         {
-            int a = *(mSP + 1);
+            CELL a = *(mSP + 1);
             *(mSP + 1) = !a;
         }
         break;
 
     case PRIM_EQ:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a == b;
             mSP++;
         }
@@ -541,8 +561,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_NE:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a != b;
             mSP++;
         }
@@ -550,8 +570,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_LT:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a < b;
             mSP++;
         }
@@ -559,8 +579,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_LE:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a <= b;
             mSP++;
         }
@@ -568,8 +588,8 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_GT:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a > b;
             mSP++;
         }
@@ -577,12 +597,15 @@ int Machine::CallPrimitive( int func, int count )
 
     case PRIM_GE:
         {
-            int a = *(mSP + 1);
-            int b = *(mSP + 2);
+            CELL a = *(mSP + 1);
+            CELL b = *(mSP + 2);
             *(mSP + 2) = a >= b;
             mSP++;
         }
         break;
+
+    default:
+        return ERR_BAD_OPCODE;
     }
 
     return ERR_NONE;
