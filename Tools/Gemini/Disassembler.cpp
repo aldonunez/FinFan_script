@@ -120,38 +120,50 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
 
     case OP_CALL:
         {
-            int count = *(U8*) mCodePtr++;
+            U8 callFlags = *mCodePtr++;
             int addr = *(U16*) mCodePtr;
             mCodePtr += 2;
-            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), "(%d) $%04X", count, addr );
+            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten),
+                "%s(%d) $%04X",
+                (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
+                CallFlags::GetCount( callFlags ), addr );
         }
         break;
 
     case OP_CALLI:
         {
-            int count = *(U8*) mCodePtr++;
-            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), "(%d)", count);
-        }
+            U8 callFlags = *mCodePtr++;
+            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten),
+                "%s(%d)",
+                (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
+                CallFlags::GetCount( callFlags ) );
+    }
         break;
 
     case OP_CALLP:
         {
-            int count = *(U8*) mCodePtr++;
+            U8 callFlags = *mCodePtr++;
             int primitive = *(U8*) mCodePtr++;
             if ( primitive >= PRIM_MAXPRIMITIVE )
                 return -1;
             const char* primitiveName = gPrimitives[primitive];
-            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), "(%d) %s", count, primitiveName );
+            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten),
+                "%s(%d) %s",
+                (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
+                CallFlags::GetCount( callFlags ), primitiveName );
         }
         break;
 
     case OP_CALLN:
     case OP_CALLNATIVE:
         {
-            int count = *(U8*) mCodePtr++;
+            U8 callFlags = *mCodePtr++;
             int id = *(U32*) mCodePtr;
             mCodePtr += 4;
-            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), "(%d) $%08X", count, id );
+            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten),
+                "%s(%d) $%08X",
+                (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
+                CallFlags::GetCount( callFlags ), id );
         }
         break;
 

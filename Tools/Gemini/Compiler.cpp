@@ -861,7 +861,7 @@ void Compiler::GenerateFuncall( Slist* list, const GenConfig& config, GenStatus&
     }
 
     mCodeBinPtr[0] = OP_CALLI;
-    mCodeBinPtr[1] = list->Elements.size() - 2;
+    mCodeBinPtr[1] = CallFlags::Build( list->Elements.size() - 2, config.discard );
     mCodeBinPtr += 2;
 }
 
@@ -921,6 +921,8 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         Generate( list->Elements[i].get() );
     }
 
+    U8 callFlags = CallFlags::Build( list->Elements.size() - 1, config.discard );
+
     SymTable::iterator it = mGlobalTable.find( op->String );
     if ( it != mGlobalTable.end() )
     {
@@ -941,7 +943,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         }
 
         mCodeBinPtr[0] = OP_CALL;
-        mCodeBinPtr[1] = list->Elements.size() - 1;
+        mCodeBinPtr[1] = callFlags;
         mCodeBinPtr += 2;
         *(U16*) mCodeBinPtr = addr;
         mCodeBinPtr += 2;
@@ -964,7 +966,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             }
 
             mCodeBinPtr[0] = opCode;
-            mCodeBinPtr[1] = list->Elements.size() - 1;
+            mCodeBinPtr[1] = callFlags;
             mCodeBinPtr += 2;
             *(U32*) mCodeBinPtr = external.Id;
             mCodeBinPtr += 4;
@@ -976,7 +978,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             mForwards++;
 
             mCodeBinPtr[0] = OP_CALL;
-            mCodeBinPtr[1] = list->Elements.size() - 1;
+            mCodeBinPtr[1] = callFlags;
             mCodeBinPtr += 2;
             *(U16*) mCodeBinPtr = 0;
             mCodeBinPtr += 2;
@@ -984,12 +986,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
     }
 
     if ( config.discard )
-    {
-        mCodeBinPtr[0] = OP_POP;
-        mCodeBinPtr++;
-
         status.discarded = true;
-    }
 }
 
 void Compiler::GenerateNot( Slist* list, const GenConfig& config, GenStatus& status )

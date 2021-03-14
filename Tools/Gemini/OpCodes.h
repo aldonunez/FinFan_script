@@ -45,3 +45,36 @@ enum
     PRIM_GE,
     PRIM_MAXPRIMITIVE,
 };
+
+
+class CallFlags
+{
+    enum
+    {
+        AutoPop     = 0x80,
+        CountMask   = 0x1F,
+    };
+
+public:
+    static U8 Build( int count, bool autoPop )
+    {
+        assert( (count & CountMask) == count );
+
+        U8 flags = count;
+
+        if ( autoPop )
+            flags |= AutoPop;
+
+        return flags;
+    }
+
+    static bool GetAutoPop( U8 flags )
+    {
+        return flags & AutoPop;
+    }
+
+    static U8 GetCount( U8 flags )
+    {
+        return flags & CountMask;
+    }
+};

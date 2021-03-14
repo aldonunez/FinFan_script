@@ -51,8 +51,7 @@ struct StackFrame
     StackFrame*     Prev;
     const U8*       CodePtr;
     const Module*   Module;
-    // TODO: try to get rid of this
-    U8              ArgCount;
+    U8              CallFlags;
 };
 
 class IEnvironment
@@ -87,7 +86,7 @@ private:
 
     NativeFunc      mNativeContinuation;
     UserContext     mNativeContinuationContext;
-    U8              mNativeContinuationArgc;
+    U8              mNativeContinuationFlags;
 
 public:
     Machine();

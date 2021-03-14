@@ -34,7 +34,7 @@ Machine::Machine()
         mScriptCtx( 0 ),
         mNativeContinuation( nullptr ),
         mNativeContinuationContext( 0 ),
-        mNativeContinuationArgc( 0 )
+        mNativeContinuationFlags( 0 )
 {
 }
 
@@ -71,8 +71,9 @@ CELL* Machine::Push( U8 count )
 
 CELL* Machine::Start( const ByteCode* byteCode, U8 argCount )
 {
+    U8 callFlags = CallFlags::Build( argCount, false );
     CELL* args = Push( argCount );
-    if ( PushFrame( byteCode, argCount ) == nullptr )
+    if ( PushFrame( byteCode, callFlags ) == nullptr )
         return nullptr;
     return args;
 }
@@ -83,8 +84,11 @@ void Machine::Reset()
     mCurFrame = nullptr;
 }
 
-int Machine::CallNative( NativeFunc proc, U8 argCount, UserContext context )
+int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
 {
+    bool  autoPop = CallFlags::GetAutoPop( callFlags );
+    U8    argCount = CallFlags::GetCount( callFlags );
+
     CELL* args = mSP + 1;
     CELL* oldSP = mSP;
 
@@ -110,11 +114,14 @@ int Machine::CallNative( NativeFunc proc, U8 argCount, UserContext context )
             }
         }
 
-        mNativeContinuationArgc = 0;
+        if ( autoPop )
+            mSP++;
+
+        mNativeContinuationFlags = 0;
     }
     else if ( ret == ERR_YIELDED )
     {
-        mNativeContinuationArgc = argCount;
+        mNativeContinuationFlags = callFlags;
     }
 
     return ret;
@@ -129,7 +136,7 @@ int Machine::Run()
     {
         NativeFunc continuation = mNativeContinuation;
         UserContext context = mNativeContinuationContext;
-        U8 count = mNativeContinuationArgc;
+        U8 count = CallFlags::GetCount( mNativeContinuationFlags );
 
         mNativeContinuation = nullptr;
         mNativeContinuationContext = 0;
@@ -310,7 +317,7 @@ int Machine::Run()
 
         case OP_CALL:
             {
-                U8 count = *(U8*) codePtr;
+                U8 callFlags = *(U8*) codePtr;
                 codePtr++;
                 U16 addr = *(U16*) codePtr;
                 codePtr += 2;
@@ -321,7 +328,7 @@ int Machine::Run()
                 byteCode.Address = addr;
                 byteCode.Module = mCurFrame->Module;
 
-                if ( PushFrame( &byteCode, count ) == nullptr )
+                if ( PushFrame( &byteCode, callFlags ) == nullptr )
                     return ERR_STACK_OVERFLOW;
 
                 codePtr = mCurFrame->CodePtr;
@@ -330,7 +337,7 @@ int Machine::Run()
 
         case OP_CALLI:
             {
-                U8 count = *(U8*) codePtr;
+                U8 callFlags = *(U8*) codePtr;
                 codePtr++;
 
                 mSP++;
@@ -344,7 +351,7 @@ int Machine::Run()
                 byteCode.Address = (U16) addr;
                 byteCode.Module = mCurFrame->Module;
 
-                if ( PushFrame( &byteCode, count ) == nullptr )
+                if ( PushFrame( &byteCode, callFlags ) == nullptr )
                     return ERR_STACK_OVERFLOW;
 
                 codePtr = mCurFrame->CodePtr;
@@ -353,7 +360,7 @@ int Machine::Run()
 
         case OP_CALLN:
             {
-                U8 count = *(U8*) codePtr;
+                U8 callFlags = *(U8*) codePtr;
                 codePtr++;
                 U32 id = *(U32*) codePtr;
                 codePtr += 4;
@@ -365,7 +372,7 @@ int Machine::Run()
                 if ( !mEnv->FindByteCode( id, &byteCode ) )
                     return ERR_BYTECODE_NOT_FOUND;
 
-                if ( PushFrame( &byteCode, count ) == nullptr )
+                if ( PushFrame( &byteCode, callFlags ) == nullptr )
                     return ERR_STACK_OVERFLOW;
 
                 codePtr = mCurFrame->CodePtr;
@@ -374,7 +381,7 @@ int Machine::Run()
 
         case OP_CALLNATIVE:
             {
-                U8 count = *(U8*) codePtr;
+                U8 callFlags = *(U8*) codePtr;
                 codePtr++;
                 U32 id = *(U32*) codePtr;
                 codePtr += 4;
@@ -386,7 +393,7 @@ int Machine::Run()
                 if ( !mEnv->FindNativeCode( id, &nativeCode ) )
                     return ERR_NATIVECODE_NOT_FOUND;
 
-                int ret = CallNative( nativeCode.Proc, count, 0 );
+                int ret = CallNative( nativeCode.Proc, callFlags, 0 );
                 if ( ret != ERR_NONE )
                     return ret;
             }
@@ -401,7 +408,7 @@ Done:
     return ERR_NONE;
 }
 
-StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 argCount )
+StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 callFlags )
 {
     if ( (mSP - FRAME_WORDS) < mStack )
         return nullptr;
@@ -411,7 +418,7 @@ StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 argCount )
 
     frame->CodePtr = byteCode->Module->CodeBase + byteCode->Address;
     frame->Module = byteCode->Module;
-    frame->ArgCount = argCount;
+    frame->CallFlags = callFlags;
     frame->Prev = mCurFrame;
 
     mCurFrame = frame;
@@ -421,8 +428,10 @@ StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 argCount )
 
 int Machine::PopFrame( U8 words )
 {
+    bool  autoPop = CallFlags::GetAutoPop( mCurFrame->CallFlags );
+    U8    argCount = CallFlags::GetCount( mCurFrame->CallFlags );
     CELL* oldSP = mSP;
-    CELL* newSP = ((CELL*) mCurFrame) + FRAME_WORDS - 1 + mCurFrame->ArgCount;
+    CELL* newSP = ((CELL*) mCurFrame) + FRAME_WORDS - 1 + argCount;
 
     if ( newSP >= &mStack[mStackSize] )
         return ERR_STACK_OVERFLOW;
@@ -439,6 +448,9 @@ int Machine::PopFrame( U8 words )
     {
         mSP[i] = oldSP[i];
     }
+
+    if ( autoPop )
+        mSP++;
 
     return ERR_NONE;
 }
