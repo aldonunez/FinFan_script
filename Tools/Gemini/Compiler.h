@@ -348,7 +348,7 @@ private:
     U8 InvertJump( U8 opCode );
 
     // Backpatching
-    void Patch( PatchChain* chain );
+    void Patch( PatchChain* chain, U8* targetPtr = nullptr );
     void PatchCalls( PatchChain* chain, U16 addr );
     void PushPatch( PatchChain* chain );
     void PopPatch( PatchChain* chain );

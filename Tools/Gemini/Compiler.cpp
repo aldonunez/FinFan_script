@@ -560,7 +560,8 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
     mCodeBinPtr += 2;
 
     ElideFalse( &newTrueChain, &newFalseChain );
-    Patch( &newFalseChain );
+
+    U8* falsePtr = mCodeBinPtr;
 
     // False
     if ( list->Elements.size() == 4 )
@@ -582,7 +583,18 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
     if ( ptrOffset < SCHAR_MIN || ptrOffset > SCHAR_MAX )
         ThrowError( CERR_UNSUPPORTED, list, "Branch offset doesn't fit in 8 bits." );
 
-    *leaveOffset = (U8) ptrOffset;
+    if ( ptrOffset != 0 )
+    {
+        *leaveOffset = (U8) ptrOffset;
+    }
+    else
+    {
+        // Remove the uncoditional branch out of the True clause.
+        mCodeBinPtr -= 2;
+        falsePtr = mCodeBinPtr;
+    }
+
+    Patch( &newFalseChain, falsePtr );
 
     if ( config.discard )
         status.discarded = true;
@@ -1187,9 +1199,9 @@ void Compiler::ElideFalse( PatchChain* trueChain, PatchChain* falseChain )
     }
 }
 
-void Compiler::Patch( PatchChain* chain )
+void Compiler::Patch( PatchChain* chain, U8* targetPtr )
 {
-    U8* target = mCodeBinPtr;
+    U8* target = (targetPtr != nullptr) ? targetPtr : mCodeBinPtr;
 
     for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
     {
