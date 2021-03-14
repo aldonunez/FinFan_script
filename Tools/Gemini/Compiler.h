@@ -200,9 +200,9 @@ class Compiler
             return config;
         }
 
-        static GenConfig Statement()
+        static GenConfig Statement( bool discard = false )
         {
-            GenConfig config = { nullptr, nullptr, false };
+            GenConfig config = { nullptr, nullptr, false, discard };
             return config;
         }
 

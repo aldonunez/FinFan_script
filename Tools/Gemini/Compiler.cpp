@@ -551,8 +551,10 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
     ElideTrue( &newTrueChain, &newFalseChain );
     Patch( &newTrueChain );
 
+    GenConfig statementConfig = GenConfig::Statement( config.discard );
+
     // True
-    Generate( list->Elements[2].get() );
+    Generate( list->Elements[2].get(), statementConfig );
     mCodeBinPtr[0] = OP_B;
     leaveOffset = &mCodeBinPtr[1];
     mCodeBinPtr += 2;
@@ -563,13 +565,16 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
     // False
     if ( list->Elements.size() == 4 )
     {
-        Generate( list->Elements[3].get() );
+        Generate( list->Elements[3].get(), statementConfig );
     }
     else
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = 0;
-        mCodeBinPtr += 2;
+        if ( !config.discard )
+        {
+            mCodeBinPtr[0] = OP_LDC_S;
+            mCodeBinPtr[1] = 0;
+            mCodeBinPtr += 2;
+        }
     }
 
     ptrdiff_t ptrOffset = mCodeBinPtr - leaveOffset - 1;
@@ -579,6 +584,9 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
 
     *leaveOffset = (U8) ptrOffset;
 
+    if ( config.discard )
+        status.discarded = true;
+
     // TODO: if both branches tail-return, then set status.tailRet.
     //       This doesn't apply, if there's only one branch.
 }
@@ -587,6 +595,8 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
 {
     PatchChain  leaveChain;
     bool        foundCatchAll = false;
+
+    GenConfig statementConfig = GenConfig::Statement( config.discard );
 
     // TODO: check all the clauses for tail-return. If they all do, then set status.tailRet.
 
@@ -620,14 +630,17 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
         {
             if ( clauseList->Elements.size() == 1 )
             {
-                mCodeBinPtr[0] = OP_LDC_S;
-                mCodeBinPtr[1] = 1;
-                mCodeBinPtr += 2;
+                if ( !config.discard )
+                {
+                    mCodeBinPtr[0] = OP_LDC_S;
+                    mCodeBinPtr[1] = 1;
+                    mCodeBinPtr += 2;
+                }
             }
             else
             {
                 GenStatus clauseStatus = { Expr_Other };
-                GenerateImplicitProgn( clauseList, 1, GenConfig::Statement(), clauseStatus );
+                GenerateImplicitProgn( clauseList, 1, statementConfig, clauseStatus );
             }
             foundCatchAll = true;
             break;
@@ -637,14 +650,22 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
         {
             Generate( clauseList->Elements[0].get() );
 
-            mCodeBinPtr[0] = OP_DUP;
-            mCodeBinPtr++;
+            if ( config.discard )
+            {
+                mCodeBinPtr[0] = OP_DUP;
+                mCodeBinPtr++;
+            }
 
             PushPatch( &leaveChain );
 
             mCodeBinPtr[0] = OP_BTRUE;
-            mCodeBinPtr[2] = OP_POP;
-            mCodeBinPtr += 3;
+            mCodeBinPtr += 2;
+
+            if ( config.discard )
+            {
+                mCodeBinPtr[0] = OP_POP;
+                mCodeBinPtr++;
+            }
         }
         else
         {
@@ -657,7 +678,7 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
 
             // True
             GenStatus clauseStatus = { Expr_Other };
-            GenerateImplicitProgn( clauseList, 1, GenConfig::Statement(), clauseStatus );
+            GenerateImplicitProgn( clauseList, 1, statementConfig, clauseStatus );
 
             PushPatch( &leaveChain );
 
@@ -671,12 +692,18 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
 
     if ( !foundCatchAll )
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = 0;
-        mCodeBinPtr += 2;
+        if ( !config.discard )
+        {
+            mCodeBinPtr[0] = OP_LDC_S;
+            mCodeBinPtr[1] = 0;
+            mCodeBinPtr += 2;
+        }
     }
 
     Patch( &leaveChain );
+
+    if ( config.discard )
+        status.discarded = true;
 }
 
 void Compiler::GenerateProgn( Slist* list, const GenConfig& config, GenStatus& status )
@@ -942,6 +969,14 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             *(U16*) mCodeBinPtr = 0;
             mCodeBinPtr += 2;
         }
+    }
+
+    if ( config.discard )
+    {
+        mCodeBinPtr[0] = OP_POP;
+        mCodeBinPtr++;
+
+        status.discarded = true;
     }
 }
 
