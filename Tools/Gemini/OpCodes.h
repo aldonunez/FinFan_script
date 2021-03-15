@@ -20,6 +20,7 @@ enum
     OP_CALLP,
     OP_CALLN,
     OP_CALLNATIVE,
+    OP_CALLNATIVE_S,
     OP_B,
     OP_BFALSE,
     OP_BTRUE,

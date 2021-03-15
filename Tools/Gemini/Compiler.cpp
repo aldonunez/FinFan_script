@@ -955,9 +955,16 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         if ( mEnv->FindExternal( op->String, &external ) )
         {
             if ( external.Kind == External_Bytecode )
+            {
                 opCode = OP_CALLN;
+            }
             else if ( external.Kind == External_Native )
-                opCode = OP_CALLNATIVE;
+            {
+                if ( external.Id >= 0x100 )
+                    opCode = OP_CALLNATIVE;
+                else
+                    opCode = OP_CALLNATIVE_S;
+            }
             else
             {
                 assert( false );
@@ -967,8 +974,17 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             mCodeBinPtr[0] = opCode;
             mCodeBinPtr[1] = callFlags;
             mCodeBinPtr += 2;
-            *(U32*) mCodeBinPtr = external.Id;
-            mCodeBinPtr += 4;
+
+            if ( opCode == OP_CALLNATIVE_S )
+            {
+                *(U8*) mCodeBinPtr = (U8) external.Id;
+                mCodeBinPtr += 1;
+            }
+            else
+            {
+                *(U32*) mCodeBinPtr = external.Id;
+                mCodeBinPtr += 4;
+            }
         }
         else
         {

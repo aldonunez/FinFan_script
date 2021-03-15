@@ -22,6 +22,7 @@ static const char* gOpCodes[] =
     "CALLP",
     "CALLN",
     "CALLNATIVE",
+    "CALLNATIVE.S",
     "B",
     "BFALSE",
     "BTRUE",
@@ -162,6 +163,18 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
             mCodePtr += 4;
             charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten),
                 "%s(%d) $%08X",
+                (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
+                CallFlags::GetCount( callFlags ), id );
+        }
+        break;
+
+    case OP_CALLNATIVE_S:
+        {
+            U8 callFlags = *mCodePtr++;
+            int id = *mCodePtr;
+            mCodePtr += 1;
+            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten),
+                "%s(%d) $%02X",
                 (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
                 CallFlags::GetCount( callFlags ), id );
         }

@@ -379,11 +379,22 @@ int Machine::Run()
             break;
 
         case OP_CALLNATIVE:
+        case OP_CALLNATIVE_S:
             {
                 U8 callFlags = *(U8*) codePtr;
                 codePtr++;
-                U32 id = *(U32*) codePtr;
-                codePtr += 4;
+                U32 id;
+
+                if ( op == OP_CALLNATIVE )
+                {
+                    id = *(U32*) codePtr;
+                    codePtr += 4;
+                }
+                else
+                {
+                    id = *codePtr;
+                    codePtr += 1;
+                }
 
                 mCurFrame->CodePtr = codePtr;
 
