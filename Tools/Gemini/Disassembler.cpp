@@ -80,6 +80,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
     {
     case OP_DUP:
     case OP_POP:
+    case OP_RET:
         break;
 
     case OP_PUSH:
@@ -87,7 +88,6 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
     case OP_STARG:
     case OP_LDLOC:
     case OP_STLOC:
-    case OP_RET:
         {
             int value = *(U8*) mCodePtr++;
             charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " %d", value );

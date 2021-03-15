@@ -103,7 +103,7 @@ public:
 private:
     CELL* Push( U8 count );
     StackFrame* PushFrame( const ByteCode* byteCode, U8 argCount );
-    int PopFrame( U8 words );
+    int PopFrame();
     int CallPrimitive( U8 func, U8 count );
     int CallNative( NativeFunc proc, U8 argCount, UserContext context );
 };

@@ -106,12 +106,13 @@ int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
             *mSP = 0;
             mSP--;
         }
+        else if ( resultCount == 1 )
+        {
+            mSP[1] = newSP[1];
+        }
         else
         {
-            for ( int i = 1; i <= resultCount; i++ )
-            {
-                mSP[i] = newSP[i];
-            }
+            return ERR_NATIVE_ERROR;
         }
 
         if ( autoPop )
@@ -292,9 +293,7 @@ int Machine::Run()
 
         case OP_RET:
             {
-                U8 words = *codePtr;
-                codePtr++;
-                int err = PopFrame( words );
+                int err = PopFrame();
                 if ( err != ERR_NONE )
                     return err;
                 if ( mCurFrame == nullptr )
@@ -426,7 +425,7 @@ StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 callFlags )
     return frame;
 }
 
-int Machine::PopFrame( U8 words )
+int Machine::PopFrame()
 {
     bool  autoPop = CallFlags::GetAutoPop( mCurFrame->CallFlags );
     U8    argCount = CallFlags::GetCount( mCurFrame->CallFlags );
@@ -439,15 +438,11 @@ int Machine::PopFrame( U8 words )
     mSP = newSP;
     mCurFrame = mCurFrame->Prev;
 
-    if ( (mSP - words) < mStack )
+    if ( (mSP - 1) < mStack )
         return ERR_STACK_OVERFLOW;
 
-    mSP -= words;
-
-    for ( int i = 1; i <= words; i++ )
-    {
-        mSP[i] = oldSP[i];
-    }
+    mSP -= 1;
+    mSP[1] = oldSP[1];
 
     if ( autoPop )
         mSP++;

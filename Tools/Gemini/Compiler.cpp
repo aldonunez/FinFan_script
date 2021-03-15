@@ -529,8 +529,7 @@ void Compiler::GenerateReturn( Slist* list, const GenConfig& config, GenStatus& 
     }
 
     mCodeBinPtr[0] = OP_RET;
-    mCodeBinPtr[1] = 1;
-    mCodeBinPtr += 2;
+    mCodeBinPtr += 1;
 
     status.discarded = true;
     status.tailRet = true;
@@ -1319,8 +1318,7 @@ void Compiler::GenerateProc( Slist* list, int startIndex )
     if ( !status.tailRet )
     {
         mCodeBinPtr[0] = OP_RET;
-        mCodeBinPtr[1] = 1;
-        mCodeBinPtr += 2;
+        mCodeBinPtr += 1;
     }
 
     if ( hasLocals )
