@@ -334,10 +334,8 @@ void Compiler::Generate( Element* elem, const GenConfig& config, GenStatus& stat
         {
             if ( !config.discard )
             {
-                mCodeBinPtr[0] = OP_CALLP;
-                mCodeBinPtr[1] = 1;
-                mCodeBinPtr[2] = PRIM_NOT;
-                mCodeBinPtr += 3;
+                mCodeBinPtr[0] = OP_NOT;
+                mCodeBinPtr += 1;
             }
         }
     }
@@ -476,7 +474,7 @@ void Compiler::GenerateArithmetic( Slist* list, const GenConfig& config, GenStat
     if ( op->String == "+" )
         primitive = PRIM_ADD;
     else if ( op->String == "*" )
-        primitive = PRIM_MULT;
+        primitive = PRIM_MUL;
     else if ( op->String == "/" )
         primitive = PRIM_DIV;
     else if ( op->String == "%" )
@@ -498,7 +496,7 @@ void Compiler::GenerateNegate( Slist* list, const GenConfig& config, GenStatus& 
     }
     else if ( list->Elements.size() == 2 )
     {
-        GenerateUnaryPrimitive( list->Elements[1].get(), PRIM_NEG, config, status );
+        GenerateUnaryPrimitive( list->Elements[1].get(), config, status );
     }
     else if ( list->Elements.size() == 1 )
     {
@@ -1231,7 +1229,7 @@ void Compiler::PatchCalls( PatchChain* chain, U16 addr )
     }
 }
 
-void Compiler::GenerateUnaryPrimitive( Element* elem, int primitive, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -1240,10 +1238,12 @@ void Compiler::GenerateUnaryPrimitive( Element* elem, int primitive, const GenCo
     else
     {
         Generate( elem );
-        mCodeBinPtr[0] = OP_CALLP;
-        mCodeBinPtr[1] = 1;
-        mCodeBinPtr[2] = PRIM_NEG;
-        mCodeBinPtr += 3;
+
+        mCodeBinPtr[0] = OP_LDC_S;
+        mCodeBinPtr[1] = 0;
+        mCodeBinPtr[2] = OP_CALLP;
+        mCodeBinPtr[3] = PRIM_SUB;
+        mCodeBinPtr += 4;
     }
 }
 
@@ -1261,9 +1261,8 @@ void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenCon
         Generate( list->Elements[1].get() );
 
         mCodeBinPtr[0] = OP_CALLP;
-        mCodeBinPtr[1] = 2;
-        mCodeBinPtr[2] = primitive;
-        mCodeBinPtr += 3;
+        mCodeBinPtr[1] = primitive;
+        mCodeBinPtr += 2;
     }
 }
 

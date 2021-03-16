@@ -329,7 +329,7 @@ private:
     void GenerateLet( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateCall( Slist* list, const GenConfig& config, GenStatus& status );
 
-    void GenerateUnaryPrimitive( Element* elem, int primitive, const GenConfig& config, GenStatus& status );
+    void GenerateUnaryPrimitive( Element* elem, const GenConfig& config, GenStatus& status );
     void GenerateBinaryPrimitive( Slist* list, int primitive, const GenConfig& config, GenStatus& status );
 
     void GenerateLambdas();

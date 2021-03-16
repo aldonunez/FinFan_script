@@ -178,6 +178,12 @@ int Machine::Run()
             }
             break;
 
+        case OP_NOT:
+            {
+                mSP[1] = !mSP[1];
+            }
+            break;
+
         case OP_LDARG:
             {
                 int index = *(U8*) codePtr;
@@ -302,11 +308,9 @@ int Machine::Run()
 
         case OP_CALLP:
             {
-                U8 count = *(U8*) codePtr;
-                codePtr++;
                 U8 func = *(U8*) codePtr;
                 codePtr++;
-                int err = CallPrimitive( func, count );
+                int err = CallPrimitive( func );
                 if ( err != ERR_NONE )
                     return err;
             }
@@ -473,153 +477,102 @@ int Machine::Yield( NativeFunc proc, UserContext context )
     return ERR_YIELDED;
 }
 
-int Machine::CallPrimitive( U8 func, U8 count )
+int Machine::CallPrimitive( U8 func )
 {
-    if ( (func == PRIM_NEG || func == PRIM_NOT) && count != 1 )
-        return ERR_BAD_OPCODE;
-    else if ( count != 2 )
-        return ERR_BAD_OPCODE;
+    CELL result;
+    CELL a = *(mSP + 1);
+    CELL b = *(mSP + 2);
 
     switch ( func )
     {
     case PRIM_ADD:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a + b;
-            mSP++;
+            result = a + b;
         }
         break;
 
     case PRIM_SUB:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a - b;
-            mSP++;
+            result = a - b;
         }
         break;
 
-    case PRIM_MULT:
+    case PRIM_MUL:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a * b;
-            mSP++;
+            result = a * b;
         }
         break;
 
     case PRIM_DIV:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
             if ( b == 0 )
                 return ERR_DIVIDE;
-            *(mSP + 2) = a / b;
-            mSP++;
+            result = a / b;
         }
         break;
 
     case PRIM_MOD:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
             if ( b == 0 )
                 return ERR_DIVIDE;
-            *(mSP + 2) = a % b;
-            mSP++;
-        }
-        break;
-
-    case PRIM_NEG:
-        {
-            CELL a = *(mSP + 1);
-            *(mSP + 1) = -a;
+            result = a % b;
         }
         break;
 
     case PRIM_AND:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a && b;
-            mSP++;
+            result = a && b;
         }
         break;
 
     case PRIM_OR:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a || b;
-            mSP++;
-        }
-        break;
-
-    case PRIM_NOT:
-        {
-            CELL a = *(mSP + 1);
-            *(mSP + 1) = !a;
+            result = a || b;
         }
         break;
 
     case PRIM_EQ:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a == b;
-            mSP++;
+            result = a == b;
         }
         break;
 
     case PRIM_NE:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a != b;
-            mSP++;
+            result = a != b;
         }
         break;
 
     case PRIM_LT:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a < b;
-            mSP++;
+            result = a < b;
         }
         break;
 
     case PRIM_LE:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a <= b;
-            mSP++;
+            result = a <= b;
         }
         break;
 
     case PRIM_GT:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a > b;
-            mSP++;
+            result = a > b;
         }
         break;
 
     case PRIM_GE:
         {
-            CELL a = *(mSP + 1);
-            CELL b = *(mSP + 2);
-            *(mSP + 2) = a >= b;
-            mSP++;
+            result = a >= b;
         }
         break;
 
     default:
         return ERR_BAD_OPCODE;
     }
+
+    *(mSP + 2) = result;
+    mSP++;
 
     return ERR_NONE;
 }

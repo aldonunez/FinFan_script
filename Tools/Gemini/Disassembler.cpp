@@ -8,6 +8,7 @@ static const char* gOpCodes[] =
     "DUP",
     "PUSH",
     "POP",
+    "NOT",
     "LDARG",
     "STARG",
     "LDLOC",
@@ -32,13 +33,11 @@ static const char* gPrimitives[] =
 {
     "ADD",
     "SUB",
-    "MULT",
+    "MUL",
     "DIV",
     "MOD",
-    "NEG",
     "AND",
     "OR",
-    "NOT",
     "EQ",
     "NE",
     "LT",
@@ -81,6 +80,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
     {
     case OP_DUP:
     case OP_POP:
+    case OP_NOT:
     case OP_RET:
         break;
 
@@ -143,15 +143,13 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
 
     case OP_CALLP:
         {
-            U8 callFlags = *mCodePtr++;
             int primitive = *(U8*) mCodePtr++;
             if ( primitive >= PRIM_MAXPRIMITIVE )
                 return -1;
             const char* primitiveName = gPrimitives[primitive];
             charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten),
-                "%s(%d) %s",
-                (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
-                CallFlags::GetCount( callFlags ), primitiveName );
+                " %s",
+                primitiveName );
         }
         break;
 
