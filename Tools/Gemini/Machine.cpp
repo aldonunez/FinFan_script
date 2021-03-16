@@ -24,6 +24,7 @@ b <int8>
 bfalse, btrue <int8>			
 */
 
+
 Machine::Machine()
     :   mCurFrame( nullptr ),
         mGlobals( nullptr ),
@@ -225,8 +226,7 @@ int Machine::Run()
 
         case OP_LDGLO:
             {
-                U16 addr = *(U16*) codePtr;
-                codePtr += 2;
+                U16 addr = ReadU16( codePtr );
                 CELL word = mGlobals[addr];
                 *mSP = word;
                 mSP--;
@@ -235,8 +235,7 @@ int Machine::Run()
 
         case OP_STGLO:
             {
-                U16 addr = *(U16*) codePtr;
-                codePtr += 2;
+                U16 addr = ReadU16( codePtr );
                 mSP++;
                 CELL word = *mSP;
                 mGlobals[addr] = word;
@@ -245,8 +244,7 @@ int Machine::Run()
 
         case OP_LDC:
             {
-                CELL word = *(CELL*) codePtr;
-                codePtr += 4;
+                CELL word = ReadI32( codePtr );
                 *mSP = word;
                 mSP--;
             }
@@ -318,8 +316,7 @@ int Machine::Run()
             {
                 U8 callFlags = *(U8*) codePtr;
                 codePtr++;
-                U16 addr = *(U16*) codePtr;
-                codePtr += 2;
+                U16 addr = ReadU16( codePtr );
 
                 mCurFrame->CodePtr = codePtr;
 
@@ -361,8 +358,7 @@ int Machine::Run()
             {
                 U8 callFlags = *(U8*) codePtr;
                 codePtr++;
-                U32 id = *(U32*) codePtr;
-                codePtr += 4;
+                U32 id = ReadU32( codePtr );
 
                 mCurFrame->CodePtr = codePtr;
 
@@ -387,8 +383,7 @@ int Machine::Run()
 
                 if ( op == OP_CALLNATIVE )
                 {
-                    id = *(U32*) codePtr;
-                    codePtr += 4;
+                    id = ReadU32( codePtr );
                 }
                 else
                 {

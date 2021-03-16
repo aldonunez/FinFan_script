@@ -170,7 +170,7 @@ class Compiler
     struct DeferredLambda
     {
         Slist*  Definition;
-        U32*    Patch;
+        U8*     Patch;
     };
 
     enum ExprKind

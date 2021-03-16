@@ -376,8 +376,7 @@ void Compiler::GenerateNumber( Number* number, const GenConfig& config, GenStatu
     {
         *mCodeBinPtr = OP_LDC;
         mCodeBinPtr++;
-        *(U32*) mCodeBinPtr = number->Value;
-        mCodeBinPtr += 4;
+        WriteI32( mCodeBinPtr, number->Value );
     }
 }
 
@@ -397,8 +396,7 @@ void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatu
         case Decl_Global:
             mCodeBinPtr[0] = OP_LDGLO;
             mCodeBinPtr++;
-            *(U16*) mCodeBinPtr = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
+            WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
             break;
 
         case Decl_Local:
@@ -747,8 +745,7 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
         case Decl_Global:
             mCodeBinPtr[0] = OP_STGLO;
             mCodeBinPtr++;
-            *(U16*) mCodeBinPtr = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
+            WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
             break;
 
         case Decl_Local:
@@ -843,7 +840,7 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
 
     DeferredLambda lambda = { 0 };
     lambda.Definition = list;
-    lambda.Patch = (U32*) mCodeBinPtr;
+    lambda.Patch = mCodeBinPtr;
     mLambdas.push_back( lambda );
 
     mCodeBinPtr += 4;
@@ -944,8 +941,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         mCodeBinPtr[0] = OP_CALL;
         mCodeBinPtr[1] = callFlags;
         mCodeBinPtr += 2;
-        *(U16*) mCodeBinPtr = addr;
-        mCodeBinPtr += 2;
+        WriteU16( mCodeBinPtr, addr );
     }
     else
     {
@@ -982,8 +978,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             }
             else
             {
-                *(U32*) mCodeBinPtr = external.Id;
-                mCodeBinPtr += 4;
+                WriteU32( mCodeBinPtr, external.Id );
             }
         }
         else
@@ -995,8 +990,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             mCodeBinPtr[0] = OP_CALL;
             mCodeBinPtr[1] = callFlags;
             mCodeBinPtr += 2;
-            *(U16*) mCodeBinPtr = 0;
-            mCodeBinPtr += 2;
+            WriteU16( mCodeBinPtr, 0 );
         }
     }
 
@@ -1191,6 +1185,8 @@ void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
     {
         falseChain->Next->Inst = trueChain->Next->Inst;
         trueChain->Next->Inst[0] = InvertJump( trueChain->Next->Inst[0] );
+
+        // Remove the branch instruction.
         PopPatch( trueChain );
         mCodeBinPtr -= 2;
     }
@@ -1206,6 +1202,7 @@ void Compiler::ElideFalse( PatchChain* trueChain, PatchChain* falseChain )
 
     if ( diff == 0 )
     {
+        // Remove the branch instruction.
         PopPatch( falseChain );
         mCodeBinPtr -= 2;
     }
@@ -1275,7 +1272,7 @@ void Compiler::GenerateLambdas()
     for ( auto it = mLambdas.begin(); it != mLambdas.end(); it++ )
     {
         int address = mCodeBinPtr - mCodeBin;
-        *it->Patch = address;
+        StoreU32( it->Patch, address );
         GenerateProc( it->Definition, 1 );
     }
 }
