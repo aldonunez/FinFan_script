@@ -67,15 +67,43 @@ void WritePacked( uint8_t*& p, S value )
 }
 
 
+#define StoreI16    StorePacked<int16_t>
 #define StoreU24    StorePacked<uint32_t, 3>
 #define StoreU32    StorePacked<uint32_t>
 
+#define ReadI16     ReadPacked<int16_t>
 #define ReadU16     ReadPacked<uint16_t>
 #define ReadU24     ReadPacked<uint32_t, 3>
 #define ReadI32     ReadPacked<int32_t>
 #define ReadU32     ReadPacked<uint32_t>
 
+#define WriteI16    WritePacked<int16_t>
 #define WriteU16    WritePacked<uint16_t>
 #define WriteU24    WritePacked<uint32_t, 3>
 #define WriteI32    WritePacked<int32_t>
 #define WriteU32    WritePacked<uint32_t>
+
+
+struct BranchInst
+{
+    using TOffset = int16_t;
+
+    static constexpr int Size = 1 + sizeof( TOffset );
+    static constexpr int OffsetMin = INT16_MIN;
+    static constexpr int OffsetMax = INT16_MAX;
+
+    static void StoreOffset( uint8_t* p, TOffset offset )
+    {
+        StoreI16( p, offset );
+    }
+
+    static TOffset ReadOffset( const uint8_t*& p )
+    {
+        return ReadI16( p );
+    }
+
+    static void WriteOffset( uint8_t*& p, TOffset offset )
+    {
+        WriteI16( p, offset );
+    }
+};

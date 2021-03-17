@@ -176,7 +176,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
     case OP_BFALSE:
     case OP_BTRUE:
         {
-            int offset = *(I8*) mCodePtr++;
+            int offset = BranchInst::ReadOffset( mCodePtr );
             int target = mCodePtr - mCodeBin + offset;
             charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " $%06X", target );
         }
