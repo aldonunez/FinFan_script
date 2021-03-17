@@ -320,7 +320,7 @@ int Machine::Run()
             {
                 U8 callFlags = *(U8*) codePtr;
                 codePtr++;
-                U16 addr = ReadU16( codePtr );
+                U32 addr = ReadU24( codePtr );
 
                 mCurFrame->CodePtr = codePtr;
 
@@ -348,7 +348,7 @@ int Machine::Run()
                 mCurFrame->CodePtr = codePtr;
 
                 ByteCode byteCode;
-                byteCode.Address = (U16) addr;
+                byteCode.Address = addr;
                 byteCode.Module = mCurFrame->Module;
 
                 if ( PushFrame( &byteCode, callFlags ) == nullptr )
@@ -516,18 +516,6 @@ int Machine::CallPrimitive( U8 func )
             if ( b == 0 )
                 return ERR_DIVIDE;
             result = a % b;
-        }
-        break;
-
-    case PRIM_AND:
-        {
-            result = a && b;
-        }
-        break;
-
-    case PRIM_OR:
-        {
-            result = a || b;
         }
         break;
 

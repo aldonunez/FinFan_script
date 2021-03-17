@@ -20,7 +20,7 @@ enum
 
 enum
 {
-    ADDRESS_MAX = UINT16_MAX,
+    ADDRESS_MAX = 0xFFFFFF,
 };
 
 typedef I32 CELL;
@@ -34,7 +34,7 @@ struct Module
 struct ByteCode
 {
     const Module*   Module;
-    U16             Address;
+    U32             Address;
 };
 
 class Machine;

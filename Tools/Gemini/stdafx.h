@@ -67,12 +67,15 @@ void WritePacked( uint8_t*& p, S value )
 }
 
 
+#define StoreU24    StorePacked<uint32_t, 3>
 #define StoreU32    StorePacked<uint32_t>
 
 #define ReadU16     ReadPacked<uint16_t>
+#define ReadU24     ReadPacked<uint32_t, 3>
 #define ReadI32     ReadPacked<int32_t>
 #define ReadU32     ReadPacked<uint32_t>
 
 #define WriteU16    WritePacked<uint16_t>
+#define WriteU24    WritePacked<uint32_t, 3>
 #define WriteI32    WritePacked<int32_t>
 #define WriteU32    WritePacked<uint32_t>

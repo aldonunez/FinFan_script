@@ -788,7 +788,7 @@ void Compiler::GenerateDefun( Slist* list, const GenConfig& config, GenStatus& s
     mInFunc = true;
 
     Symbol* funcSym = (Symbol*) list->Elements[1].get();
-    U16 addr = (mCodeBinPtr - mCodeBin);
+    U32 addr = (mCodeBinPtr - mCodeBin);
 
     SymTable::iterator it = mGlobalTable.find( funcSym->String );
     if ( it != mGlobalTable.end() )
@@ -841,7 +841,7 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     lambda.Patch = mCodeBinPtr;
     mLambdas.push_back( lambda );
 
-    mCodeBinPtr += 4;
+    WriteU32( mCodeBinPtr, 0 );
 }
 
 void Compiler::GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status )
@@ -921,7 +921,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
     if ( it != mGlobalTable.end() )
     {
         Function* func = (Function*) it->second.get();
-        U16 addr = 0;
+        U32 addr = 0;
 
         if ( it->second->Kind == Decl_Func )
         {
@@ -939,7 +939,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         mCodeBinPtr[0] = OP_CALL;
         mCodeBinPtr[1] = callFlags;
         mCodeBinPtr += 2;
-        WriteU16( mCodeBinPtr, addr );
+        WriteU24( mCodeBinPtr, addr );
     }
     else
     {
@@ -988,7 +988,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             mCodeBinPtr[0] = OP_CALL;
             mCodeBinPtr[1] = callFlags;
             mCodeBinPtr += 2;
-            WriteU16( mCodeBinPtr, 0 );
+            WriteU24( mCodeBinPtr, 0 );
         }
     }
 
@@ -1221,11 +1221,11 @@ void Compiler::Patch( PatchChain* chain, U8* targetPtr )
     }
 }
 
-void Compiler::PatchCalls( PatchChain* chain, U16 addr )
+void Compiler::PatchCalls( PatchChain* chain, U32 addr )
 {
     for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
     {
-        *(U16*) &link->Inst[2] = addr;
+        StoreU24( &link->Inst[2], addr );
     }
 }
 

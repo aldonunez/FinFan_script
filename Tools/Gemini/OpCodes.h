@@ -35,8 +35,6 @@ enum
     PRIM_MUL,
     PRIM_DIV,
     PRIM_MOD,
-    PRIM_AND,
-    PRIM_OR,
     PRIM_EQ,
     PRIM_NE,
     PRIM_LT,

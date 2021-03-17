@@ -349,7 +349,7 @@ private:
 
     // Backpatching
     void Patch( PatchChain* chain, U8* targetPtr = nullptr );
-    void PatchCalls( PatchChain* chain, U16 addr );
+    void PatchCalls( PatchChain* chain, U32 addr );
     void PushPatch( PatchChain* chain );
     void PopPatch( PatchChain* chain );
 
