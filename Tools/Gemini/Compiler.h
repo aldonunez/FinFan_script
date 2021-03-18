@@ -272,12 +272,13 @@ class Compiler
 
     ICompilerEnv*   mEnv;
     ICompilerLog*   mLog;
+    int             mModIndex;
 
     GeneratorMap    mGeneratorMap;
 
 public:
     Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env, 
-        ICompilerLog* log );
+        ICompilerLog* log, int modIndex = 0 );
 
     CompilerErr Compile();
     void GetStats( CompilerStats& stats );

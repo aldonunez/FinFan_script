@@ -6,7 +6,7 @@
 
 
 Compiler::Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env,
-    ICompilerLog* log )
+    ICompilerLog* log, int modIndex )
     :   mCodeTextPtr( codeText ),
         mCodeTextEnd( codeText + codeTextLen ),
         mCodeBin( codeBin ),
@@ -21,6 +21,7 @@ Compiler::Compiler( const char* codeText, int codeTextLen, U8* codeBin, int code
         mForwards( 0 ),
         mEnv( env ),
         mLog( log ),
+        mModIndex( modIndex ),
         mInFunc( false )
 {
     mGeneratorMap.insert( GeneratorMap::value_type( "+", &Compiler::GenerateArithmetic ) );
@@ -948,7 +949,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         {
             if ( external.Kind == External_Bytecode )
             {
-                opCode = OP_CALLN;
+                opCode = OP_CALLM;
             }
             else if ( external.Kind == External_Native )
             {
@@ -1271,7 +1272,8 @@ void Compiler::GenerateLambdas()
     for ( auto it = mLambdas.begin(); it != mLambdas.end(); it++ )
     {
         int address = mCodeBinPtr - mCodeBin;
-        StoreU32( it->Patch, address );
+        int addrWord = CodeAddr::Build( address, mModIndex );
+        StoreU32( it->Patch, addrWord );
         GenerateProc( it->Definition, 1 );
     }
 }

@@ -31,6 +31,7 @@ int NativeLatent1( Machine* machine, U8 argc, CELL* args, UserContext context )
     return machine->Yield( NativeLatent2, 1 );
 }
 
+
 class Env : public IEnvironment
 {
     ByteCode*   mByteCodes;
@@ -46,6 +47,11 @@ public:
 
     bool FindByteCode( U32 id, ByteCode* byteCode );
     bool FindNativeCode( U32 id, NativeCode* nativeCode );
+
+    virtual const Module* FindModule( U8 index ) override
+    {
+        return nullptr;
+    }
 };
 
 Env::Env()
@@ -121,6 +127,11 @@ public:
 
     bool AddGlobal( const std::string& name, int offset ) override;
     bool FindGlobal( const std::string& name, int& offset ) override;
+
+    virtual const Module* FindModule( U8 index ) override
+    {
+        return mCurMod;
+    }
 };
 
 CompilerEnv::CompilerEnv()
@@ -364,7 +375,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
         b = env.FindExternal( "a", &external );
         b = env.FindByteCode( external.Id, &byteCode );
-        CELL* args = machine.Start( &byteCode, 1 );
+        CELL* args = machine.Start( 0, byteCode.Address, 1 );
         args[0] = 65;
 
         int err = 0;
@@ -411,7 +422,7 @@ int _tmain(int argc, _TCHAR* argv[])
         b = env.FindExternal( "a", &external );
         b = env.FindByteCode( external.Id, &byteCode );
 
-        machine.Start( &byteCode, 0 );
+        machine.Start( 0, byteCode.Address, 0 );
         int err = 0;
         do
         {
@@ -449,7 +460,7 @@ int _tmain(int argc, _TCHAR* argv[])
 #endif
         byteCode.Module = &mod;
 
-        machine.Start( &byteCode, 0 );
+        machine.Start( 0, byteCode.Address, 0 );
         int err = machine.Run();
     }
     return 0;
@@ -616,7 +627,7 @@ int _tmain(int argc, _TCHAR* argv[])
 #endif
     env.SetNativeCodes( &native1, 1 );
 
-    machine.Start( &byteCode, 0 );
+    machine.Start( 0, byteCode.Address, 0 );
     int err = 0;
 
     do

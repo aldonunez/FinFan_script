@@ -834,16 +834,20 @@ namespace ObjEvents
         return true;
     }
 
-    ByteCode GetObjectScript( int type )
+    bool GetObjectScript( int type, ByteCode& byteCode )
     {
         if ( type >= Scripts )
-            return ByteCode();
+            return false;
 
-        ByteCode byteCode;
         byteCode.Address = scriptFuncAddrs[type];
-        byteCode.Module = &scriptMod;
+        byteCode.Module = nullptr;
 
-        return byteCode;
+        return true;
+    }
+
+    const Module& GetScriptModule()
+    {
+        return scriptMod;
     }
 }
 

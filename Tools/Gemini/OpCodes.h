@@ -19,7 +19,7 @@ enum
     OP_CALL,
     OP_CALLI,
     OP_CALLP,
-    OP_CALLN,
+    OP_CALLM,
     OP_CALLNATIVE,
     OP_CALLNATIVE_S,
     OP_B,
@@ -74,5 +74,49 @@ public:
     static U8 GetCount( U8 flags )
     {
         return flags & CountMask;
+    }
+};
+
+
+struct BranchInst
+{
+    using TOffset = int16_t;
+
+    static constexpr int Size = 1 + sizeof( TOffset );
+    static constexpr int OffsetMin = INT16_MIN;
+    static constexpr int OffsetMax = INT16_MAX;
+
+    static void StoreOffset( uint8_t* p, TOffset offset )
+    {
+        StoreI16( p, offset );
+    }
+
+    static TOffset ReadOffset( const uint8_t*& p )
+    {
+        return ReadI16( p );
+    }
+
+    static void WriteOffset( uint8_t*& p, TOffset offset )
+    {
+        WriteI16( p, offset );
+    }
+};
+
+
+struct CodeAddr
+{
+    static uint32_t Build( uint32_t address, uint8_t module )
+    {
+        return address | (module << 24);
+    }
+
+    static uint32_t GetAddress( uint32_t addrWord )
+    {
+        return addrWord & 0xFFFFFF;
+    }
+
+    static uint8_t GetModule( uint32_t addrWord )
+    {
+        return addrWord >> 24;
     }
 };

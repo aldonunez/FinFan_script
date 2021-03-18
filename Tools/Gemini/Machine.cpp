@@ -35,17 +35,33 @@ Machine::Machine()
         mScriptCtx( 0 ),
         mNativeContinuation( nullptr ),
         mNativeContinuationContext( 0 ),
-        mNativeContinuationFlags( 0 )
+        mNativeContinuationFlags( 0 ),
+        mMod(),
+        mModIndex(),
+        mPC()
 {
 }
 
 void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx )
 {
+    Init( globals, stack, stackSize, scriptCtx );
+    mEnv = environment;
+}
+
+void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx )
+{
+    Init( globals, stack, stackSize, scriptCtx );
+    mEnv = this;
+    mMod = module;
+    mModIndex = modIndex;
+}
+
+void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, UserContext scriptCtx )
+{
     mGlobals = globals;
     mStack = stack;
     mStackSize = stackSize;
     mSP = &stack[stackSize - 1];
-    mEnv = environment;
     mScriptCtx = scriptCtx;
 }
 
@@ -59,23 +75,29 @@ UserContext Machine::GetScriptContext()
     return mScriptCtx;
 }
 
-const StackFrame* Machine::GetCallerFrame()
-{
-    return mCurFrame;
-}
-
 CELL* Machine::Push( U8 count )
 {
     mSP -= count;
     return mSP + 1;
 }
 
-CELL* Machine::Start( const ByteCode* byteCode, U8 argCount )
+CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
 {
+    const Module* module = GetModule( modIndex );
+
+    if ( module == nullptr )
+        return nullptr;
+
     U8 callFlags = CallFlags::Build( argCount, false );
     CELL* args = Push( argCount );
-    if ( PushFrame( byteCode, callFlags ) == nullptr )
+
+    mPC         = address;
+    mMod        = module;
+    mModIndex   = modIndex;
+
+    if ( PushFrame( mMod->CodeBase, callFlags ) == nullptr )
         return nullptr;
+
     return args;
 }
 
@@ -148,7 +170,7 @@ int Machine::Run()
             return ret;
     }
 
-    const U8* codePtr = mCurFrame->CodePtr;
+    const U8* codePtr = mMod->CodeBase + mPC;
 
     for ( ; ; )
     {
@@ -299,7 +321,8 @@ int Machine::Run()
                     return err;
                 if ( mCurFrame == nullptr )
                     goto Done;
-                codePtr = mCurFrame->CodePtr;
+
+                codePtr = mMod->CodeBase + mPC;
             }
             break;
 
@@ -319,59 +342,46 @@ int Machine::Run()
                 codePtr++;
                 U32 addr = ReadU24( codePtr );
 
-                mCurFrame->CodePtr = codePtr;
-
-                ByteCode byteCode;
-                byteCode.Address = addr;
-                byteCode.Module = mCurFrame->Module;
-
-                if ( PushFrame( &byteCode, callFlags ) == nullptr )
+                if ( PushFrame( codePtr, callFlags ) == nullptr )
                     return ERR_STACK_OVERFLOW;
 
-                codePtr = mCurFrame->CodePtr;
+                codePtr = mMod->CodeBase + addr;
             }
             break;
 
         case OP_CALLI:
+        case OP_CALLM:
             {
                 U8 callFlags = *(U8*) codePtr;
                 codePtr++;
+                U32 addrWord;
 
+                if ( op == OP_CALLI )
+                {
                 mSP++;
-                U32 addr = *mSP;
-                if ( addr > ADDRESS_MAX )
-                    return ERR_BAD_ADDRESS;
+                    addrWord = *mSP;
+                }
+                else
+                {
+                    addrWord = ReadU32( codePtr );
+                }
 
-                mCurFrame->CodePtr = codePtr;
-
-                ByteCode byteCode;
-                byteCode.Address = addr;
-                byteCode.Module = mCurFrame->Module;
-
-                if ( PushFrame( &byteCode, callFlags ) == nullptr )
+                if ( PushFrame( codePtr, callFlags ) == nullptr )
                     return ERR_STACK_OVERFLOW;
 
-                codePtr = mCurFrame->CodePtr;
-            }
-            break;
+                U32 addr        = CodeAddr::GetAddress( addrWord );
+                U8  newModIndex = CodeAddr::GetModule( addrWord );
 
-        case OP_CALLN:
+                if ( newModIndex != mModIndex )
             {
-                U8 callFlags = *(U8*) codePtr;
-                codePtr++;
-                U32 id = ReadU32( codePtr );
-
-                mCurFrame->CodePtr = codePtr;
-
-                ByteCode byteCode;
-
-                if ( !mEnv->FindByteCode( id, &byteCode ) )
+                    mMod = GetModule( newModIndex );
+                    if ( mMod == nullptr )
                     return ERR_BYTECODE_NOT_FOUND;
 
-                if ( PushFrame( &byteCode, callFlags ) == nullptr )
-                    return ERR_STACK_OVERFLOW;
+                    mModIndex = newModIndex;
+                }
 
-                codePtr = mCurFrame->CodePtr;
+                codePtr = mMod->CodeBase + addr;
             }
             break;
 
@@ -392,7 +402,8 @@ int Machine::Run()
                     codePtr += 1;
                 }
 
-                mCurFrame->CodePtr = codePtr;
+                // If the native call yields, then we have to remember where we were.
+                mPC = codePtr - mMod->CodeBase;
 
                 NativeCode nativeCode;
 
@@ -414,7 +425,7 @@ Done:
     return ERR_NONE;
 }
 
-StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 callFlags )
+StackFrame* Machine::PushFrame( const U8* curCodePtr, U8 callFlags )
 {
     if ( (mSP - FRAME_WORDS) < mStack )
         return nullptr;
@@ -422,8 +433,9 @@ StackFrame* Machine::PushFrame( const ByteCode* byteCode, U8 callFlags )
     mSP -= FRAME_WORDS;
     auto* frame = (StackFrame*) (mSP + 1);
 
-    frame->CodePtr = byteCode->Module->CodeBase + byteCode->Address;
-    frame->Module = byteCode->Module;
+    U32 retAddr = curCodePtr - mMod->CodeBase;
+
+    frame->RetAddrWord = CodeAddr::Build( retAddr, mModIndex );
     frame->CallFlags = callFlags;
     frame->Prev = mCurFrame;
 
@@ -442,6 +454,18 @@ int Machine::PopFrame()
     if ( newSP >= &mStack[mStackSize] )
         return ERR_STACK_OVERFLOW;
 
+    U8 newModIndex = CodeAddr::GetModule( mCurFrame->RetAddrWord );
+
+    if ( newModIndex != mModIndex )
+    {
+        mMod = GetModule( newModIndex );
+        if ( mMod == nullptr )
+            return ERR_BYTECODE_NOT_FOUND;
+
+        mModIndex = newModIndex;
+    }
+
+    mPC = CodeAddr::GetAddress( mCurFrame->RetAddrWord );
     mSP = newSP;
     mCurFrame = mCurFrame->Prev;
 
@@ -560,4 +584,19 @@ int Machine::CallPrimitive( U8 func )
     mSP++;
 
     return ERR_NONE;
+}
+
+const Module* Machine::GetModule( U8 index )
+{
+    return mEnv->FindModule( index );
+}
+
+bool Machine::FindNativeCode( U32 id, NativeCode* nativeCode )
+{
+    return false;
+}
+
+const Module* Machine::FindModule( U8 index )
+{
+    return index == mModIndex ? mMod : nullptr;
 }

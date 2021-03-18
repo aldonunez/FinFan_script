@@ -39,7 +39,8 @@ namespace ObjEvents
     const int Scripts = ObjectTypes + 1;
 
     bool Init();
-    ByteCode GetObjectScript( int type );
+    bool GetObjectScript( int type, ByteCode& byteCode );
+    const Module& GetScriptModule();
 }
 
 #endif  // SCENE_SCRIPT

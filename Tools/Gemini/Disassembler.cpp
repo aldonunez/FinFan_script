@@ -21,7 +21,7 @@ static const char* gOpCodes[] =
     "CALL",
     "CALLI",
     "CALLP",
-    "CALLN",
+    "CALLM",
     "CALLNATIVE",
     "CALLNATIVE.S",
     "B",
@@ -148,7 +148,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
         }
         break;
 
-    case OP_CALLN:
+    case OP_CALLM:
     case OP_CALLNATIVE:
         {
             U8 callFlags = *mCodePtr++;
