@@ -4,6 +4,7 @@
 #include "stdafx.h"
 #include "Machine.h"
 #include "OpCodes.h"
+#include "LispyParser.h"
 #include "Compiler.h"
 #include "Disassembler.h"
 
@@ -31,6 +32,7 @@ int NativeLatent1( Machine* machine, U8 argc, CELL* args, UserContext context )
     return machine->Yield( NativeLatent2, 1 );
 }
 
+
 class Env : public IEnvironment
 {
     ByteCode*   mByteCodes;
@@ -46,6 +48,11 @@ public:
 
     bool FindByteCode( U32 id, ByteCode* byteCode );
     bool FindNativeCode( U32 id, NativeCode* nativeCode );
+
+    virtual const Module* FindModule( U8 index ) override
+    {
+        return nullptr;
+    }
 };
 
 Env::Env()
@@ -121,6 +128,11 @@ public:
 
     bool AddGlobal( const std::string& name, int offset ) override;
     bool FindGlobal( const std::string& name, int& offset ) override;
+
+    virtual const Module* FindModule( U8 index ) override
+    {
+        return mCurMod;
+    }
 };
 
 CompilerEnv::CompilerEnv()
@@ -234,10 +246,10 @@ bool CompilerEnv::FindGlobal( const std::string& name, int& offset )
 class CompilerLog : public ICompilerLog
 {
 public:
-    virtual void Add( LogCategory category, int line, int column, const char* message )
+    virtual void Add( LogCategory category, const char* fileName, int line, int column, const char* message )
     {
         printf( "<%d>  ", category );
-        printf( "%4d %3d  ", line, column );
+        printf( "%s %4d %3d  ", (fileName != nullptr ? fileName : ""), line, column );
         printf( "%s\n", message );
     }
 };
@@ -328,13 +340,20 @@ int _tmain(int argc, _TCHAR* argv[])
         U8 bin1[512];
         CompilerEnv env;
         CompilerLog log;
-        Compiler compiler1( progStr1, sizeof progStr1 - 1, bin1, sizeof bin1, &env, &log );
+
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr, &log );
+        Unique<Unit> progTree( lispyParser.Parse() );
+
+        Compiler compiler1( bin1, sizeof bin1, &env, &log );
         Module mod1;
         mod1.CodeBase = bin1;
         env.AddGlobal( "global1", 0 );
         env.AddGlobal( "global2", 1 );
         env.AddGlobal( "global3", 2 );
         env.SetCurrentModule( &mod1 );
+
+        compiler1.AddUnit( std::move( progTree ) );
+
         CompilerErr compilerErr = compiler1.Compile();
         CompilerStats stats = { 0 };
         compiler1.GetStats( stats );
@@ -354,17 +373,16 @@ int _tmain(int argc, _TCHAR* argv[])
             printf( "%s\n", disasm );
         }
 
-        CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, stack, _countof( stack ), &env );
+        machine.Init( stack, _countof( stack ), &env );
         ExternalFunc external = { 0 };
         ByteCode byteCode = { 0 };
         bool b = false;
 
         b = env.FindExternal( "a", &external );
         b = env.FindByteCode( external.Id, &byteCode );
-        CELL* args = machine.Start( &byteCode, 1 );
+        CELL* args = machine.Start( 0, byteCode.Address, 1 );
         args[0] = 65;
 
         int err = 0;
@@ -384,26 +402,35 @@ int _tmain(int argc, _TCHAR* argv[])
         U8 bin1[512];
         U8 bin2[512];
         CompilerEnv env;
-        Compiler compiler1( progStr1, sizeof progStr1 - 1, bin1, sizeof bin1, &env, nullptr );
-        Compiler compiler2( progStr2, sizeof progStr2 - 1, bin2, sizeof bin2, &env, nullptr );
+        Compiler compiler1( bin1, sizeof bin1, &env, nullptr );
+        Compiler compiler2( bin2, sizeof bin2, &env, nullptr );
 
         bool b = false;
         b = env.AddNative( "add", NativeLatent1 );
 
+        Unique<Unit> progTree;
+
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr, nullptr );
+        progTree = lispyParser.Parse();
+
         Module mod1;
         mod1.CodeBase = bin1;
         env.SetCurrentModule( &mod1 );
+        compiler1.AddUnit( std::move( progTree ) );
         compiler1.Compile();
+
+        lispyParser = LispyParser( progStr2, sizeof progStr2 - 1, nullptr, nullptr );
+        progTree = lispyParser.Parse();
 
         Module mod2;
         mod2.CodeBase = bin2;
         env.SetCurrentModule( &mod2 );
+        compiler1.AddUnit( std::move( progTree ) );
         compiler2.Compile();
 
-        CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, stack, _countof( stack ), &env );
+        machine.Init( stack, _countof( stack ), &env );
 
         ExternalFunc external = { 0 };
         ByteCode byteCode = { 0 };
@@ -411,7 +438,7 @@ int _tmain(int argc, _TCHAR* argv[])
         b = env.FindExternal( "a", &external );
         b = env.FindByteCode( external.Id, &byteCode );
 
-        machine.Start( &byteCode, 0 );
+        machine.Start( 0, byteCode.Address, 0 );
         int err = 0;
         do
         {
@@ -429,12 +456,16 @@ int _tmain(int argc, _TCHAR* argv[])
         const char progStr1[] = "(defun b (x y) (let ((c x) (d y)) (- c d))) (defun a () (b 5 (+ 1 1)))";
         U8 bin[1024];
         CompilerEnv env;
-        Compiler compiler( progStr1, sizeof progStr1 - 1, bin, sizeof bin, &env, nullptr );
+
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr, nullptr );
+        Unique<Unit> progTree( lispyParser.Parse() );
+
+        Compiler compiler( bin, sizeof bin, &env, nullptr );
+        compiler.AddUnit( std::move( progTree ) );
         compiler.Compile();
-        CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, stack, _countof( stack ), nullptr );
+        machine.Init( stack, _countof( stack ), nullptr );
 
         Module mod;
         mod.CodeBase = bin;
@@ -449,7 +480,7 @@ int _tmain(int argc, _TCHAR* argv[])
 #endif
         byteCode.Module = &mod;
 
-        machine.Start( &byteCode, 0 );
+        machine.Start( 0, byteCode.Address, 0 );
         int err = machine.Run();
     }
     return 0;
@@ -469,14 +500,16 @@ int _tmain(int argc, _TCHAR* argv[])
         0,
         0,
         0,
-        OP_CALLP,
+        OP_PRIM,
         2,
         1,
         OP_DUP,
-        OP_STGLO,
+        OP_STMOD,
+        0,
         3,
         0,
-        OP_LDGLO,
+        OP_LDMOD,
+        0,
         3,
         0,
         OP_STLOC,
@@ -573,7 +606,7 @@ int _tmain(int argc, _TCHAR* argv[])
         1,
         OP_LDARG,
         0,
-        OP_CALLP,
+        OP_PRIM,
         2,
         0,
         OP_STARG,
@@ -589,12 +622,12 @@ int _tmain(int argc, _TCHAR* argv[])
         OP_RET,
         1
     };
-    CELL data[10];
+
     Env env;
 
     CELL stack[Machine::MIN_STACK];
     Machine machine;
-    machine.Init( data, stack, _countof( stack ), &env );
+    machine.Init( stack, _countof( stack ), &env );
 
     Module mod;
     mod.CodeBase = program2;
@@ -616,7 +649,7 @@ int _tmain(int argc, _TCHAR* argv[])
 #endif
     env.SetNativeCodes( &native1, 1 );
 
-    machine.Start( &byteCode, 0 );
+    machine.Start( 0, byteCode.Address, 0 );
     int err = 0;
 
     do

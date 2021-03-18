@@ -1,6 +1,13 @@
 #pragma once
 
 #include "GeminiCommon.h"
+#include <string>
+#include <vector>
+#include <memory>
+#include <map>
+#include <optional>
+#include <unordered_map>
+#include "Syntax.h"
 
 
 enum CompilerErr
@@ -37,77 +44,71 @@ public:
 enum LogCategory
 {
     LOG_ERROR,
+    LOG_WARNING,
 };
 
 class ICompilerLog
 {
 public:
-    virtual void Add( LogCategory category, int line, int column, const char* message ) = 0;
+    virtual void Add( LogCategory category, const char* fileName, int line, int column, const char* message ) = 0;
+};
+
+struct CallStats
+{
+    int16_t     MaxCallDepth;
+    int16_t     MaxStackUsage;
+    bool        Recurses;
 };
 
 struct CompilerStats
 {
-    int     CodeBytesWritten;
+    int         CodeBytesWritten;
+    bool        CallsIndirectly;
+    CallStats   Lambda;
+    CallStats   Static;
 };
 
-class Compiler
+
+class LocalScope;
+
+class CompilerException : public std::exception
 {
-    class CompilerException : public std::exception
+    CompilerErr     mError;
+
+public:
+    CompilerException( CompilerErr error )
+        : mError( error )
     {
-        CompilerErr     mError;
+    }
 
-    public:
-        CompilerException( CompilerErr error )
-            :   mError( error )
-        {
-        }
-
-        CompilerErr GetError() const
-        {
-            return mError;
-        }
-    };
-
-    enum TokenCode
+    CompilerErr GetError() const
     {
-        Token_Bof,
-        Token_Eof,
-        Token_LParen,
-        Token_RParen,
-        Token_Number,
-        Token_Symbol,
-    };
+        return mError;
+    }
+};
 
-    enum ElementCode
-    {
-        Elem_Slist,
-        Elem_Number,
-        Elem_Symbol,
-    };
+class Reporter
+{
+    ICompilerLog* mLog;
 
-    struct Element
-    {
-        ElementCode Code;
-        int         Line;
-        int         Column;
-        virtual ~Element() { }
-    };
+public:
+    Reporter( ICompilerLog* log );
 
-    struct Slist : public Element
-    {
-        std::vector<std::unique_ptr<Element>> Elements;
-    };
+    ICompilerLog* GetLog();
 
-    struct Number : public Element
-    {
-        int Value;
-    };
+    void Log( LogCategory category, const char* fileName, int line, int col, const char* format, va_list args );
+    void LogWarning( const char* fileName, int line, int col, const char* format, ... );
 
-    struct Symbol : public Element
-    {
-        std::string String;
-    };
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... );
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, const char* fileName, int line, int col, const char* format, va_list args );
+    [[noreturn]] void ThrowInternalError();
+    [[noreturn]] void ThrowInternalError( const char* format, ... );
+};
 
+
+class Compiler : public IVisitor
+{
+public:
     struct InstPatch
     {
         InstPatch*  Next;
@@ -116,68 +117,57 @@ class Compiler
 
     struct PatchChain
     {
-        InstPatch*  Next;
+        InstPatch*  First;
+        U8*         PatchedPtr;
 
-        PatchChain()
-            :   Next( nullptr )
+        PatchChain() :
+            First( nullptr ),
+            PatchedPtr( nullptr )
         {
         }
 
         ~PatchChain()
         {
-            while ( Next != nullptr )
+            while ( First != nullptr )
             {
-                auto link = Next;
-                Next = Next->Next;
+                auto link = First;
+                First = First->Next;
                 delete link;
             }
         }
     };
 
-    enum DeclKind
-    {
-        Decl_Const,
-        Decl_Global,
-        Decl_Local,
-        Decl_Arg,
-        Decl_Func,
-        Decl_Forward,
-    };
+    using SymTable = std::map<std::string, std::shared_ptr<Declaration>>;
+    using PatchMap = std::map<std::string, PatchChain>;
 
-    struct Declaration
-    {
-        DeclKind  Kind;
-        virtual ~Declaration() { }
-    };
-
-    struct ConstDecl : public Declaration
-    {
-        int Value;
-    };
-
-    struct Storage : public Declaration
-    {
-        int Offset;
-    };
-
-    struct Function : public Declaration
-    {
-        std::string Name;
-        int         Address;
-        PatchChain  Patches;
-    };
-
+private:
     struct DeferredLambda
     {
-        Slist*  Definition;
-        U8*     Patch;
+        ProcDecl*   Definition;
+        U8*         Patch;
     };
 
-    enum ExprKind
+    enum class AddrRefKind
     {
-        Expr_Other,
-        Expr_Logical,
-        Expr_Comparison,
+        Lambda,
+        Inst,
+    };
+
+    struct AddrRef
+    {
+        AddrRefKind Kind;
+        union
+        {
+            size_t  LambdaIndex;
+            U8**    InstPtr;
+        };
+    };
+
+    enum class ExprKind
+    {
+        Other,
+        Logical,
+        Comparison,
     };
 
     struct GenStatus
@@ -193,6 +183,8 @@ class Compiler
         PatchChain* falseChain;
         bool invert;
         bool discard;
+        PatchChain* breakChain;
+        PatchChain* nextChain;
 
         static GenConfig Discard()
         {
@@ -229,9 +221,24 @@ class Compiler
             GenConfig config = { chain, falseChain, invert };
             return config;
         }
+
+        GenConfig WithLoop( PatchChain* breakChain, PatchChain* nextChain ) const
+        {
+            GenConfig config = *this;
+            config.breakChain = breakChain;
+            config.nextChain = nextChain;
+            return config;
+        }
+
+        GenConfig WithDiscard() const
+        {
+            GenConfig config = *this;
+            config.discard = true;
+            return config;
+        }
     };
 
-    typedef void (Compiler::*ConjClauseGenerator)( Element* elem, const GenConfig& config );
+    typedef void (Compiler::*ConjClauseGenerator)( Syntax* elem, const GenConfig& config );
 
     struct ConjSpec
     {
@@ -239,108 +246,123 @@ class Compiler
         ConjClauseGenerator NegativeGenerator;
     };
 
-    typedef std::map<std::string, std::unique_ptr<Declaration>> SymTable;
-    typedef std::vector<SymTable*> SymStack;
     typedef std::vector<DeferredLambda> LambdaVec;
+    typedef std::vector<AddrRef> AddrRefVec;
+    typedef std::vector<Unique<Unit>> UnitVec;
 
-    typedef void (Compiler::*CallGenerator)( Slist* list, const GenConfig& config, GenStatus& status );
-    typedef std::unordered_map<std::string, CallGenerator> GeneratorMap;
+    using GlobalVec = std::vector<I32>;
 
+    struct GenParams
+    {
+        const GenConfig& config;
+        GenStatus& status;
+    };
 
-    const char*     mCodeTextPtr;
-    const char*     mCodeTextEnd;
     U8*             mCodeBin;
     U8*             mCodeBinPtr;
     U8*             mCodeBinEnd;
-    int             mLine;
-    const char*     mLineStart;
+    GlobalVec       mGlobals;
 
-    TokenCode       mCurToken;
-    std::string     mCurString;
-    int             mCurNumber;
-    int             mTokLine;
-    int             mTokCol;
-
-    SymTable        mConstTable;
     SymTable        mGlobalTable;
-    SymStack        mSymStack;
+    PatchMap        mPatchMap;
     LambdaVec       mLambdas;
-    int             mCurLocalCount;
-    int             mMaxLocalCount;
-    int             mForwards;
-    bool            mInFunc;
+    AddrRefVec      mLocalAddrRefs;
+    bool            mInFunc = false;
+    Function*       mCurFunc = nullptr;
+    int16_t         mCurExprDepth = 0;
+    int16_t         mMaxExprDepth = 0;
 
-    ICompilerEnv*   mEnv;
-    ICompilerLog*   mLog;
+    ICompilerEnv*   mEnv = nullptr;
+    Reporter        mRep;
+    int             mModIndex = 0;
 
-    GeneratorMap    mGeneratorMap;
+    std::vector<GenParams> mGenStack;
+
+    bool            mCompiled = false;
+    bool            mCalculatedStats = false;
+    CompilerStats   mStats = {};
+    UnitVec         mUnits;
 
 public:
-    Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env, 
-        ICompilerLog* log );
+    Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex = 0 );
 
+    void AddUnit( Unique<Unit>&& unit );
     CompilerErr Compile();
+
     void GetStats( CompilerStats& stats );
+    I32* GetData();
+    size_t GetDataSize();
 
 private:
-    // Scanning
-
-    void SkipWhitespace();
-    TokenCode NextToken();
-    void ReadNumber();
-    void ReadSymbol();
-    int GetColumn();
-
-    // Parsing
-
-    Slist* Parse();
-    Slist* ParseSlist();
-    Number* ParseNumber();
-    Symbol* ParseSymbol();
+    void BindAttributes();
+    void FoldConstants();
+    void GenerateCode();
 
     // Code generation
 
+    const GenConfig& Config() const;
+    GenStatus& Status();
+
     // Level 1
-    void Generate( Element* elem );
-    void Generate( Element* elem, const GenConfig& config );
-    void Generate( Element* elem, const GenConfig& config, GenStatus& status );
-    void GenerateDiscard( Element* elem );
+    void Generate( Syntax* elem );
+    void Generate( Syntax* elem, const GenConfig& config );
+    void Generate( Syntax* elem, const GenConfig& config, GenStatus& status );
+    void GenerateDiscard( Syntax* elem );
+    void GenerateDiscard( Syntax* elem, const GenConfig& config );
 
     // Level 2 - S-expressions
-    void GenerateNumber( Number* number, const GenConfig& config, GenStatus& status );
-    void GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatus& status );
-    void GenerateSlist( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateNumber( NumberExpr* number, const GenConfig& config, GenStatus& status );
+    void GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status );
+    void GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status );
+    void GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status );
+    void GenerateArrayElementRef( IndexExpr* indexExpr );
+    void GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status );
+
+    void AddGlobalData( U32 offset, Syntax* valueElem );
+    void AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size );
+
+    void EmitLoadConstant( int32_t value );
 
     // Level 3 - functions and special operators
-    void GenerateArithmetic( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateNegate( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateComparison( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateNot( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateAnd( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateOr( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateReturn( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateIf( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateCond( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateProgn( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateSet( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateDefun( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateLambda( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateLet( Slist* list, const GenConfig& config, GenStatus& status );
-    void GenerateCall( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
+    void GenerateComparison( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
+    void GenerateAnd( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
+    void GenerateOr( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
+    void GenerateReturn( ReturnStatement* retStmt, const GenConfig& config, GenStatus& status );
+    void GenerateCond( CondExpr* condExpr, const GenConfig& config, GenStatus& status );
+    void GenerateSet( AssignmentExpr* assignment, const GenConfig& config, GenStatus& status );
+    void GenerateLambda( LambdaExpr* lambdaExpr, const GenConfig& config, GenStatus& status );
+    void GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, GenStatus& status );
+    void GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status );
+    void GenerateLet( LetStatement* letStmt, const GenConfig& config, GenStatus& status );
+    void GenerateLetBinding( DataDecl* binding );
+    void AddLocalDataArray( Storage* global, Syntax* valueElem, size_t size );
 
-    void GenerateUnaryPrimitive( Element* elem, const GenConfig& config, GenStatus& status );
-    void GenerateBinaryPrimitive( Slist* list, int primitive, const GenConfig& config, GenStatus& status );
+    void GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status );
+    void GenerateFor( ForStatement* forStmt, const GenConfig& config, GenStatus& status );
+    void GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& config, GenStatus& status );
+    void GenerateDo( WhileStatement* whileStmt, const GenConfig& config, GenStatus& status );
+    void GenerateBreak( BreakStatement* breakStmt, const GenConfig& config, GenStatus& status );
+    void GenerateNext( NextStatement* nextStmt, const GenConfig& config, GenStatus& status );
+    void GenerateCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status );
+    void GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status );
+
+    void GenerateUnaryPrimitive( Syntax* elem, const GenConfig& config, GenStatus& status );
+    void GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const GenConfig& config, GenStatus& status );
 
     void GenerateLambdas();
-    void GenerateProc( Slist* list, int startIndex );
-    void GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status );
+    void GenerateProc( ProcDecl* procDecl, Function* func );
+    void GenerateImplicitProgn( StatementList* stmtList, const GenConfig& config, GenStatus& status );
+    void GenerateStatements( StatementList* list, const GenConfig& config, GenStatus& status );
+    void GenerateNilIfNeeded( const GenConfig& config, GenStatus& status );
+
+    void GenerateSentinel();
 
     // And and Or
-    void GenerateConj( ConjSpec* spec, Slist* list, const GenConfig& config );
-    void GenerateAndClause( Element* elem, const GenConfig& config );
-    void GenerateOrClause( Element* elem, const GenConfig& config );
-    void Atomize( ConjSpec* spec, Slist* list, bool invert );
+    void GenerateConj( ConjSpec* spec, BinaryExpr* binary, const GenConfig& config );
+    void GenerateAndClause( Syntax* elem, const GenConfig& config );
+    void GenerateOrClause( Syntax* elem, const GenConfig& config );
+    void Atomize( ConjSpec* spec, BinaryExpr* binary, bool invert, bool discard );
 
     // And and Or plumbing
     void ElideTrue( PatchChain* trueChain, PatchChain* falseChain );
@@ -352,21 +374,47 @@ private:
     void PatchCalls( PatchChain* chain, U32 addr );
     void PushPatch( PatchChain* chain );
     void PopPatch( PatchChain* chain );
+    PatchChain* PushFuncPatch( const std::string& name );
 
-    // Symbol table
-    Declaration* FindSymbol( const std::string& symbol );
-    Storage* AddArg( SymTable& table, const std::string& name, int offset );
-    Storage* AddLocal( SymTable& table, const std::string& name, int offset );
-    Function* AddFunc( const std::string& name, int address );
-    Function* AddForward( const std::string& name );
-    ConstDecl* AddConst( const std::string& name, int value );
-    void MakeStdEnv();
+    I32 GetSyntaxValue( Syntax* node, const char* message = nullptr );
 
-    bool HasLocals( Element* elem );
+    // Stack usage
+    void IncreaseExprDepth();
+    void DecreaseExprDepth( int amount = 1 );
+    void CalculateStackDepth();
+    void CalculateStackDepth( Function* func );
 
-    __declspec(noreturn) void ThrowSyntaxError( const char* format, ... );
-    __declspec(noreturn) void ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... );
-    __declspec(noreturn) void ThrowInternalError();
-    __declspec(noreturn) void ThrowUnresolvedFuncsError();
-    void Log( LogCategory category, int line, int col, const char* format, va_list args );
+
+    // IVisitor
+    virtual void VisitAddrOfExpr( AddrOfExpr* addrOf ) override;
+    virtual void VisitArrayTypeRef( ArrayTypeRef* typeRef ) override;
+    virtual void VisitAssignmentExpr( AssignmentExpr* assignment ) override;
+    virtual void VisitBinaryExpr( BinaryExpr* binary ) override;
+    virtual void VisitBreakStatement( BreakStatement* breakStmt ) override;
+    virtual void VisitCallExpr( CallExpr* call ) override;
+    virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol ) override;
+    virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
+    virtual void VisitCondExpr( CondExpr* condExpr ) override;
+    virtual void VisitConstDecl( ConstDecl* constDecl ) override;
+    virtual void VisitForStatement( ForStatement* forStmt ) override;
+    virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
+    virtual void VisitInitList( InitList* initList ) override;
+    virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr ) override;
+    virtual void VisitLetStatement( LetStatement* letStmt ) override;
+    virtual void VisitLoopStatement( LoopStatement* loopStmt ) override;
+    virtual void VisitNameExpr( NameExpr* nameExpr ) override;
+    virtual void VisitNameTypeRef( NameTypeRef* nameTypeRef ) override;
+    virtual void VisitNativeDecl( NativeDecl* nativeDecl ) override;
+    virtual void VisitNextStatement( NextStatement* nextStmt ) override;
+    virtual void VisitNumberExpr( NumberExpr* numberExpr ) override;
+    virtual void VisitParamDecl( ParamDecl* paramDecl ) override;
+    virtual void VisitPointerTypeRef( PointerTypeRef* pointerTypeRef ) override;
+    virtual void VisitProcDecl( ProcDecl* procDecl ) override;
+    virtual void VisitProcTypeRef( ProcTypeRef* procTypeRef ) override;
+    virtual void VisitReturnStatement( ReturnStatement* retStmt ) override;
+    virtual void VisitStatementList( StatementList* stmtList ) override;
+    virtual void VisitUnaryExpr( UnaryExpr* unary ) override;
+    virtual void VisitUnit( Unit* unit ) override;
+    virtual void VisitVarDecl( VarDecl* varDecl ) override;
+    virtual void VisitWhileStatement( WhileStatement* whileStmt ) override;
 };

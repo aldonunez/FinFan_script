@@ -2,10 +2,70 @@
 //
 
 #include "stdafx.h"
+#include "..\Gemini\AlgolyParser.h"
+#include "..\Gemini\LispyParser.h"
 #include "..\Gemini\Compiler.h"
 #include "..\Gemini\Machine.h"
 #include "..\Gemini\Disassembler.h"
 #include <vector>
+
+
+constexpr char LispyExt[]   = ".geml";
+constexpr char AlgolyExt[]  = ".gema";
+
+constexpr char AlgolyNatives[] =
+    "native HasItem( itemId )\n"
+    "native AddItem( itemId, amount )\n"
+    "native RemoveItem( itemId, amount )\n"
+    "native ShowDialog( textId, reserved )\n"
+    "native SetObjectVisible( objId, visible )\n"
+    "native IsObjectVisible( objId )\n"
+    "native HasEventFlag( eventFlag )\n"
+    "native SetEventFlag( eventFlag, enabled )\n"
+    "native PlayFanfare\n"
+    "native PlayGotItem\n"
+    "native HasWorldEventFlag( eventFlag )\n"
+    "native SetWorldEventFlag( eventFlag, enabled )\n"
+    "native Fight( formationId )\n"
+    "native FadeOut( frames )\n"
+    "native FadeIn( frames )\n"
+    "native SwapMap( mapId, startCol, startRow, inRoomState )\n"
+    "native MakeAllObjects\n"
+    "native PlayDefaultSong\n"
+    "native UpgradeClass\n"
+    "native StartTrack( track, handler: &proc )\n"
+    "native Turn( dir )\n"
+    "native Pause( frames )\n"
+    "native Join\n"
+    "native PushSong( songId )\n"
+    ;
+
+constexpr char LispyNatives[] =
+    "(defnative HasItem (itemId) )\n"
+    "(defnative AddItem (itemId amount) )\n"
+    "(defnative RemoveItem (itemId amount) )\n"
+    "(defnative ShowDialog (textId reserved) )\n"
+    "(defnative SetObjectVisible (objId visible) )\n"
+    "(defnative IsObjectVisible (objId) )\n"
+    "(defnative HasEventFlag (eventFlag) )\n"
+    "(defnative SetEventFlag (eventFlag enabled) )\n"
+    "(defnative PlayFanfare () )\n"
+    "(defnative PlayGotItem () )\n"
+    "(defnative HasWorldEventFlag (eventFlag) )\n"
+    "(defnative SetWorldEventFlag (eventFlag enabled) )\n"
+    "(defnative Fight (formationId) )\n"
+    "(defnative FadeOut (frames) )\n"
+    "(defnative FadeIn (frames) )\n"
+    "(defnative SwapMap (mapId startCol startRow inRoomState) )\n"
+    "(defnative MakeAllObjects () )\n"
+    "(defnative PlayDefaultSong () )\n"
+    "(defnative UpgradeClass () )\n"
+    "(defnative StartTrack (track (handler : ->)) )\n"
+    "(defnative Turn (dir) )\n"
+    "(defnative Pause (frames) )\n"
+    "(defnative Join () )\n"
+    "(defnative PushSong (songId) )\n"
+    ;
 
 
 class CompilerEnv : public ICompilerEnv
@@ -144,10 +204,10 @@ CompilerEnv::FuncMap::const_iterator CompilerEnv::EndExternals() const
 class CompilerLog : public ICompilerLog
 {
 public:
-    virtual void Add( LogCategory category, int line, int column, const char* message )
+    virtual void Add( LogCategory category, const char* fileName, int line, int column, const char* message )
     {
         printf( "<%d>  ", category );
-        printf( "%4d %3d  ", line, column );
+        printf( "%s %4d %3d  ", (fileName != nullptr ? fileName : ""), line, column );
         printf( "%s\n", message );
     }
 };
@@ -155,6 +215,8 @@ public:
 
 int main( int argc, char* argv[] )
 {
+    const char* filePath = nullptr;
+
     FILE* file = nullptr;
     FILE* outFile = nullptr;
     FILE* indexFile = nullptr;
@@ -167,7 +229,8 @@ int main( int argc, char* argv[] )
         return 1;
     }
 
-    err = fopen_s( &file, argv[1], "rb" );
+    filePath = argv[1];
+    err = fopen_s( &file, filePath, "rb" );
     if ( err != 0 )
     {
         return 1;
@@ -192,7 +255,7 @@ int main( int argc, char* argv[] )
     long fileSize = ftell( file );
     fseek( file, 0, SEEK_SET );
 
-    std::vector<char> codeText( fileSize );
+    std::string codeText;
     int codeTextLen = fileSize;
     U8 codeBin[0x10000];
     int codeBinLen = sizeof codeBin;
@@ -203,38 +266,38 @@ int main( int argc, char* argv[] )
     CompilerEnv env;
     CompilerLog log;
 
-    // TODO: pass these to the compiler
-    env.AddExternal( "HasItem", External_Native, 0 );
-    env.AddExternal( "AddItem", External_Native, 0 );
-    env.AddExternal( "RemoveItem", External_Native, 0 );
-    env.AddExternal( "ShowDialog", External_Native, 0 );
-    env.AddExternal( "SetObjectVisible", External_Native, 0 );
-    env.AddExternal( "IsObjectVisible", External_Native, 0 );
-    env.AddExternal( "HasEventFlag", External_Native, 0 );
-    env.AddExternal( "SetEventFlag", External_Native, 0 );
-    env.AddExternal( "PlayFanfare", External_Native, 0 );
-    env.AddExternal( "PlayGotItem", External_Native, 0 );
-    env.AddExternal( "HasWorldEventFlag", External_Native, 0 );
-    env.AddExternal( "SetWorldEventFlag", External_Native, 0 );
-    env.AddExternal( "Fight", External_Native, 0 );
-    env.AddExternal( "FadeOut", External_Native, 0 );
-    env.AddExternal( "FadeIn", External_Native, 0 );
-    env.AddExternal( "SwapMap", External_Native, 0 );
-    env.AddExternal( "MakeAllObjects", External_Native, 0 );
-    env.AddExternal( "PlayDefaultSong", External_Native, 0 );
-    env.AddExternal( "UpgradeClass", External_Native, 0 );
-    env.AddExternal( "StartTrack", External_Native, 0 );
-    env.AddExternal( "Turn", External_Native, 0 );
-    env.AddExternal( "Pause", External_Native, 0 );
-    env.AddExternal( "Join", External_Native, 0 );
-    env.AddExternal( "PushSong", External_Native, 0 );
+    env.AddGlobal( "@0", 0 );
+    env.AddGlobal( "@1", 1 );
+    env.AddGlobal( "@2", 2 );
+    env.AddGlobal( "@3", 3 );
 
-    env.AddGlobal( "%0", 0 );
-    env.AddGlobal( "%1", 1 );
-    env.AddGlobal( "%2", 2 );
-    env.AddGlobal( "%3", 3 );
+    Unique<Unit> progTree;
+    size_t filePathLen = strlen( filePath );
 
-    Compiler compiler( &codeText.front(), codeTextLen, codeBin, codeBinLen, &env, &log );
+    if ( filePathLen > (sizeof LispyExt - 1)
+        && 0 == _stricmp( LispyExt, &filePath[filePathLen - (sizeof LispyExt - 1)] ) )
+    {
+        codeText.append( LispyNatives );
+
+        LispyParser parser( &codeText.front(), codeText.size(), nullptr, &log );
+        progTree = parser.Parse();
+    }
+    else if ( filePathLen > (sizeof AlgolyExt - 1)
+        && 0 == _stricmp( AlgolyExt, &filePath[filePathLen - (sizeof AlgolyExt - 1)] ) )
+    {
+        codeText.append( AlgolyNatives );
+
+        AlgolyParser parser( &codeText.front(), codeText.size(), nullptr, &log );
+        progTree = parser.Parse();
+    }
+    else
+    {
+        fprintf( stderr, "Unrecognized source file type\n" );
+        return 1;
+    }
+
+    Compiler compiler( codeBin, codeBinLen, &env, &log );
+    compiler.AddUnit( std::move( progTree ) );
     CompilerErr error = compiler.Compile();
 
     if ( error != 0 )
@@ -263,6 +326,20 @@ int main( int argc, char* argv[] )
     }
 
     printf( "%d bytes written.\n", stats.CodeBytesWritten );
+    printf( "Calls indirectly: %s\n", stats.CallsIndirectly ? "true" : "false" );
+    printf( "Type     Depth   Cells   Recurses\n" );
+
+    CallStats* callSets[] = { &stats.Static, &stats.Lambda };
+    const char* callSetTypes[] = { "Static", "Lambda" };
+    int i = 0;
+
+    for ( auto set : callSets )
+    {
+        printf( "%6s   %05d   %05d   %s\n",
+            callSetTypes[i], set->MaxCallDepth, set->MaxStackUsage, set->Recurses ? "true" : "false" );
+        i++;
+    }
+
     printf( "\n" );
 
     if ( disassemble )

@@ -14,21 +14,21 @@
     <ProjectGuid>{60D62479-D9A9-4D85-B47E-2468E8133066}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>Gemini</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.15063.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v141</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v141</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -84,23 +84,34 @@
     <None Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AlgolyParser.h" />
+    <ClInclude Include="BinderVisitor.h" />
     <ClInclude Include="Compiler.h" />
     <ClInclude Include="Disassembler.h" />
+    <ClInclude Include="FolderVisitor.h" />
     <ClInclude Include="GeminiCommon.h" />
+    <ClInclude Include="LispyParser.h" />
     <ClInclude Include="Machine.h" />
     <ClInclude Include="OpCodes.h" />
     <ClInclude Include="stdafx.h" />
+    <ClInclude Include="Syntax.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AlgolyParser.cpp" />
+    <ClCompile Include="BinderVisitor.cpp" />
     <ClCompile Include="Compiler.cpp" />
     <ClCompile Include="Disassembler.cpp" />
+    <ClCompile Include="FolderVisitor.cpp" />
     <ClCompile Include="Gemini.cpp" />
+    <ClCompile Include="LispyParser.cpp" />
     <ClCompile Include="Machine.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="Syntax.cpp" />
+    <ClCompile Include="Verify.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

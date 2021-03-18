@@ -52,6 +52,8 @@ Level* Level::instance;
 
 #if defined( SCENE_SCRIPT )
 
+Module scriptMod;
+
 class ScriptEnv : public IEnvironment
 {
     const NativeFunc*   mFuncs;
@@ -70,11 +72,6 @@ public:
         mFuncCount = length;
     }
 
-    bool FindByteCode( U32 id, ByteCode* byteCode ) override
-    {
-        return false;
-    }
-
     bool FindNativeCode( U32 id, NativeCode* nativeCode ) override
     {
         assert( id >= 0 && id < mFuncCount );
@@ -83,6 +80,11 @@ public:
 
         nativeCode->Proc = mFuncs[id];
         return true;
+    }
+
+    const Module* FindModule( U8 index ) override
+    {
+        return index == 0 ? &scriptMod : nullptr;
     }
 };
 
@@ -176,9 +178,14 @@ Level::Level()
 
     scriptEnv.Init( funcs, _countof( funcs ) );
 
+    scriptMod.CodeBase = ObjEvents::GetScriptModule().CodeBase;
+    scriptMod.CodeSize = ObjEvents::GetScriptModule().CodeSize;
+    scriptMod.DataBase = scriptGlobals;
+    scriptMod.DataSize = _countof( scriptGlobals );
+
     for ( int i = 0; i < ObjScripts; i++ )
     {
-        objScripts[i].Init( scriptGlobals, objStacks[i], _countof( objStacks[i] ), &scriptEnv, i );
+        objScripts[i].Init( objStacks[i], _countof( objStacks[i] ), &scriptEnv, i );
     }
 #endif
 }
@@ -450,8 +457,10 @@ void Level::UpdatePlay()
             }
 
             int type = ObjEvents::Scripts - 1;
-            ByteCode script = ObjEvents::GetObjectScript( type );
-            StartEventScript( type, &script );
+            ByteCode script;
+
+            if ( ObjEvents::GetObjectScript( type, script ) )
+                StartEventScript( type, &script );
         }
     }
 #endif
@@ -929,8 +938,10 @@ void Level::CheckObject( int type, CheckResult& result )
         scriptGlobals[i] = params[i];
     }
 
-    ByteCode script = ObjEvents::GetObjectScript( type );
-    StartEventScript( type, &script );
+    ByteCode script;
+
+    if ( ObjEvents::GetObjectScript( type, script ) )
+        StartEventScript( type, &script );
 #endif
 }
 
@@ -1463,7 +1474,7 @@ int RunDiscard( Machine& machine )
 
 void Level::StartEventScript( int type, const ByteCode* byteCode )
 {
-    if ( nullptr != objScripts[MainScriptIndex].Start( byteCode, 0 ) )
+    if ( nullptr != objScripts[MainScriptIndex].Start( 0, byteCode->Address, 0 ) )
     {
         if ( ERR_YIELDED == RunDiscard( objScripts[MainScriptIndex] ) )
         {
@@ -1532,14 +1543,10 @@ int Level::StartTrack_E( Machine* machine, U8 argc, CELL* args, UserContext cont
 
     objScripts[index].Reset();
 
-    ByteCode byteCode;
-    byteCode.Address = args[1];
-    byteCode.Module = machine->GetCallerFrame()->Module;
-
-    if ( nullptr == objScripts[index].Start( &byteCode, 0 ) )
+    if ( nullptr == objScripts[index].Start( 0, args[1], 0 ) )
         return ERR_NATIVE_ERROR;
 
-    return RunDiscard( objScripts[index] );
+    return 0;
 }
 
 int Level::Join_E_C( Machine* machine, U8 argc, CELL* args, UserContext context )

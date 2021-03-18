@@ -3,332 +3,154 @@
 #include "OpCodes.h"
 #include <ctype.h>
 #include <cstdarg>
+#include "BinderVisitor.h"
+#include "FolderVisitor.h"
 
 
-Compiler::Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env,
-    ICompilerLog* log )
-    :   mCodeTextPtr( codeText ),
-        mCodeTextEnd( codeText + codeTextLen ),
-        mCodeBin( codeBin ),
-        mCodeBinPtr( codeBin ),
-        mCodeBinEnd( codeBin + codeBinLen ),
-        mLine( 1 ),
-        mLineStart( codeText ),
-        mCurToken( Token_Bof ),
-        mCurNumber( 0 ),
-        mTokLine( 0 ),
-        mTokCol( 0 ),
-        mForwards( 0 ),
-        mEnv( env ),
-        mLog( log ),
-        mInFunc( false )
+Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex ) :
+    mCodeBin( codeBin ),
+    mCodeBinPtr( codeBin ),
+    mCodeBinEnd( codeBin + codeBinLen ),
+    mEnv( env ),
+    mRep( log ),
+    mModIndex( modIndex )
 {
-    mGeneratorMap.insert( GeneratorMap::value_type( "+", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "*", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "/", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "%", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "-", &Compiler::GenerateNegate ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "and", &Compiler::GenerateAnd ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "or", &Compiler::GenerateOr ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "not", &Compiler::GenerateNot ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "=", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "<>", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "<", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "<=", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( ">", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( ">=", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "return", &Compiler::GenerateReturn ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "if", &Compiler::GenerateIf ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "cond", &Compiler::GenerateCond ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "progn", &Compiler::GenerateProgn ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "set", &Compiler::GenerateSet ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "defun", &Compiler::GenerateDefun ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "lambda", &Compiler::GenerateLambda ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "funcall", &Compiler::GenerateFuncall ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "let", &Compiler::GenerateLet ) );
+}
+
+void Compiler::AddUnit( Unique<Unit>&& unit )
+{
+    mUnits.push_back( std::move( unit ) );
 }
 
 CompilerErr Compiler::Compile()
 {
-#if 0
-    while ( NextToken() != Token_Eof )
-    {
-        printf( "%3d %12d %s\n", mCurToken, mCurNumber, mCurString.c_str() );
-    }
-#else
     try
     {
-        std::unique_ptr<Slist> progTree( Parse() );
-
-        MakeStdEnv();
-
-        mSymStack.push_back( &mConstTable );
-        mSymStack.push_back( &mGlobalTable );
-
-        for ( auto it = progTree->Elements.begin(); it != progTree->Elements.end(); it++ )
-            Generate( it->get() );
+        BindAttributes();
+        FoldConstants();
+        GenerateCode();
 
         GenerateLambdas();
-
-        mSymStack.pop_back();
-        mSymStack.pop_back();
-
-        if ( mForwards != 0 )
-            ThrowUnresolvedFuncsError();
+        GenerateSentinel();
     }
     catch ( CompilerException& ex )
     {
         return ex.GetError();
     }
-#endif
+
+    mCompiled = true;
 
     return CERR_OK;
 }
 
 void Compiler::GetStats( CompilerStats& stats )
 {
-    stats.CodeBytesWritten = mCodeBinPtr - mCodeBin;
+    if ( mCompiled && !mCalculatedStats )
+    {
+        mStats.CodeBytesWritten = mCodeBinPtr - mCodeBin;
+
+        CalculateStackDepth();
+
+        mCalculatedStats = true;
+    }
+
+    stats = mStats;
 }
 
-Compiler::TokenCode Compiler::NextToken()
+I32* Compiler::GetData()
 {
-    SkipWhitespace();
-
-    mCurString.clear();
-    mCurNumber = 0;
-    mTokLine = mLine;
-    mTokCol = GetColumn();
-
-    if ( mCodeTextPtr >= mCodeTextEnd )
-    {
-        mCurToken = Token_Eof;
-    }
-    else if ( *mCodeTextPtr == '(' )
-    {
-        mCurToken = Token_LParen;
-        mCodeTextPtr++;
-    }
-    else if ( *mCodeTextPtr == ')' )
-    {
-        mCurToken = Token_RParen;
-        mCodeTextPtr++;
-    }
-    else if ( isdigit( *mCodeTextPtr ) )
-    {
-        mCurToken = Token_Number;
-        ReadNumber();
-    }
-    else if ( *mCodeTextPtr == '-' && isdigit( mCodeTextPtr[1] ) )
-    {
-        mCurToken = Token_Number;
-        ReadNumber();
-    }
-    else
-    {
-        mCurToken = Token_Symbol;
-        ReadSymbol();
-    }
-
-    return mCurToken;
+    return &mGlobals.front();
 }
 
-void Compiler::SkipWhitespace()
+size_t Compiler::GetDataSize()
 {
-    while ( true )
-    {
-        while ( mCodeTextPtr < mCodeTextEnd
-            && isspace( *mCodeTextPtr ) )
-        {
-            if ( *mCodeTextPtr == '\n' )
-            {
-                mLine++;
-                mLineStart = mCodeTextPtr + 1;
-            }
-
-            mCodeTextPtr++;
-        }
-
-        if ( mCodeTextPtr == mCodeTextEnd
-            || *mCodeTextPtr != ';' )
-        {
-            break;
-        }
-
-        while ( mCodeTextPtr < mCodeTextEnd
-            && *mCodeTextPtr != '\n' )
-        {
-            mCodeTextPtr++;
-        }
-    }
+    return mGlobals.size();
 }
 
-void Compiler::ReadNumber()
+void Compiler::BindAttributes()
 {
-    bool negate = false;
+    BinderVisitor binder( mGlobalTable, mEnv, mRep.GetLog() );
 
-    if ( *mCodeTextPtr == '-' )
-    {
-        negate = true;
-        mCodeTextPtr++;
-    }
+    for ( auto& unit : mUnits )
+        binder.Declare( unit.get() );
 
-    while ( isdigit( *mCodeTextPtr ) )
-    {
-        mCurString.append( 1, *mCodeTextPtr );
-        mCodeTextPtr++;
-    }
+    for ( auto& unit : mUnits )
+        binder.Bind( unit.get() );
 
-    if ( mCodeTextPtr < mCodeTextEnd
-        && !isspace( *mCodeTextPtr )
-        && (*mCodeTextPtr != '(')
-        && (*mCodeTextPtr != ')')
-        && (*mCodeTextPtr != ';') )
-        ThrowSyntaxError( "syntax error : bad number" );
-
-    mCurNumber = atoi( mCurString.c_str() );
-    if ( negate )
-        mCurNumber = -mCurNumber;
+    mGlobals.resize( binder.GetDataSize() );
 }
 
-void Compiler::ReadSymbol()
+void Compiler::FoldConstants()
 {
-    while ( (*mCodeTextPtr != '(') 
-        && (*mCodeTextPtr != ')')
-        && (*mCodeTextPtr != ';')
-        && !isspace( *mCodeTextPtr ) )
-    {
-        mCurString.append( 1, *mCodeTextPtr );
-        mCodeTextPtr++;
-    }
+    FolderVisitor folder( mRep.GetLog() );
+
+    for ( auto& unit : mUnits )
+        folder.Fold( unit.get() );
 }
 
-int Compiler::GetColumn()
+void Compiler::GenerateCode()
 {
-    return mCodeTextPtr - mLineStart + 1;
+    for ( auto& unit : mUnits )
+        unit->Accept( this );
 }
 
-Compiler::Slist* Compiler::Parse()
+void Compiler::VisitUnit( Unit* unit )
 {
-    std::unique_ptr<Slist> list( new Slist() );
-    list->Code = Elem_Slist;
+    for ( auto& varNode : unit->DataDeclarations )
+        Generate( varNode.get() );
 
-    while ( NextToken() != Token_Eof )
-    {
-        if ( mCurToken != Token_LParen )
-            ThrowSyntaxError( "syntax error : expected list" );
-
-        list->Elements.push_back( std::unique_ptr<Slist>( ParseSlist() ) );
-    }
-
-    return list.release();
+    for ( auto& funcNode : unit->FuncDeclarations )
+        funcNode->Accept( this );
 }
 
-Compiler::Slist* Compiler::ParseSlist()
+void Compiler::VisitArrayTypeRef( ArrayTypeRef* typeRef )
 {
-    std::unique_ptr<Slist> list( new Slist() );
-    list->Code = Elem_Slist;
-    list->Line = mTokLine;
-    list->Column = mTokCol;
-
-    for ( ; ; )
-    {
-        switch ( NextToken() )
-        {
-        case Token_LParen:
-            list->Elements.push_back( std::unique_ptr<Slist>( ParseSlist() ) );
-            break;
-
-        case Token_RParen:
-            goto Done;
-
-        case Token_Number:
-            list->Elements.push_back( std::unique_ptr<Number>( ParseNumber() ) );
-            break;
-
-        case Token_Symbol:
-            list->Elements.push_back( std::unique_ptr<Symbol>( ParseSymbol() ) );
-            break;
-
-        case Token_Eof:
-            ThrowSyntaxError( "syntax error : unexpected end-of-file" );
-            break;
-
-        default:
-            ThrowInternalError();
-        }
-    }
-Done:
-
-    return list.release();
 }
 
-Compiler::Number* Compiler::ParseNumber()
+void Compiler::VisitInitList( InitList* initList )
 {
-    Number* number = new Number();
-    number->Code = Elem_Number;
-    number->Value = mCurNumber;
-    number->Line = mTokLine;
-    number->Column = mTokCol;
-    return number;
 }
 
-Compiler::Symbol* Compiler::ParseSymbol()
+void Compiler::VisitParamDecl( ParamDecl* paramDecl )
 {
-    Symbol* symbol = new Symbol();
-    symbol->Code = Elem_Symbol;
-    symbol->String = mCurString;
-    symbol->Line = mTokLine;
-    symbol->Column = mTokCol;
-    return symbol;
 }
 
-void Compiler::Generate( Element* elem )
+void Compiler::Generate( Syntax* elem )
 {
-    GenStatus status = { Expr_Other };
+    GenStatus status = { ExprKind::Other };
     Generate( elem, GenConfig::Statement(), status );
 }
 
-void Compiler::Generate( Element* elem, const GenConfig& config )
+void Compiler::Generate( Syntax* elem, const GenConfig& config )
 {
-    GenStatus status = { Expr_Other };
+    GenStatus status = { ExprKind::Other };
     Generate( elem, config, status );
 }
 
-void Compiler::Generate( Element* elem, const GenConfig& config, GenStatus& status )
+void Compiler::Generate( Syntax* node, const GenConfig& config, GenStatus& status )
 {
-    if ( elem->Code == Elem_Number )
-    {
-        GenerateNumber( (Number*) elem, config, status );
-    }
-    else if ( elem->Code == Elem_Symbol )
-    {
-        GenerateSymbol( (Symbol*) elem, config, status );
-    }
-    else if ( elem->Code == Elem_Slist )
-    {
-        GenerateSlist( (Slist*) elem, config, status );
-    }
-    else
-    {
-        assert( false );
-        ThrowInternalError();
-    }
+    mGenStack.push_back( { config, status } );
 
-    if ( status.kind != Expr_Logical )
+    node->Accept( this );
+
+    mGenStack.pop_back();
+
+    if ( status.kind != ExprKind::Logical )
     {
         if ( config.trueChain != nullptr )
         {
             PushPatch( config.trueChain );
 
-            mCodeBinPtr[0] = (config.invert && status.kind != Expr_Comparison) ? OP_BFALSE : OP_BTRUE;
+            mCodeBinPtr[0] = (config.invert && status.kind != ExprKind::Comparison) ? OP_BFALSE : OP_BTRUE;
             mCodeBinPtr += BranchInst::Size;
+            DecreaseExprDepth();
 
             PushPatch( config.falseChain );
 
             mCodeBinPtr[0] = OP_B;
             mCodeBinPtr += BranchInst::Size;
         }
-        else if ( config.invert && status.kind != Expr_Comparison )
+        else if ( config.invert && status.kind != ExprKind::Comparison )
         {
             if ( !config.discard )
             {
@@ -339,22 +161,42 @@ void Compiler::Generate( Element* elem, const GenConfig& config, GenStatus& stat
     }
 }
 
-void Compiler::GenerateDiscard( Element* elem )
+void Compiler::GenerateDiscard( Syntax* elem )
 {
-    if ( elem->Code != Elem_Slist )
-        return;
+    GenConfig config{};
 
-    GenStatus status = { Expr_Other };
-    GenerateSlist( (Slist*) elem, GenConfig::Discard(), status );
+    GenerateDiscard( elem, config );
+}
+
+void Compiler::GenerateDiscard( Syntax* elem, const GenConfig& config )
+{
+    GenConfig configDiscard = config.WithDiscard();
+    GenStatus status = { ExprKind::Other };
+
+    mGenStack.push_back( { configDiscard, status } );
+
+    elem->Accept( this );
+
+    mGenStack.pop_back();
 
     if ( !status.discarded )
     {
+        assert( status.discarded );
+        mRep.LogWarning( elem->FileName, elem->Line, elem->Column, "Deprecated: POP was emitted." );
+
         *mCodeBinPtr = OP_POP;
         mCodeBinPtr++;
+
+        DecreaseExprDepth();
     }
 }
 
-void Compiler::GenerateNumber( Number* number, const GenConfig& config, GenStatus& status )
+void Compiler::VisitNumberExpr( NumberExpr* numberExpr )
+{
+    GenerateNumber( numberExpr, Config(), Status() );
+}
+
+void Compiler::GenerateNumber( NumberExpr* number, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -362,21 +204,33 @@ void Compiler::GenerateNumber( Number* number, const GenConfig& config, GenStatu
         return;
     }
 
-    if ( (number->Value >= SCHAR_MIN) && (number->Value <= SCHAR_MAX) )
+    EmitLoadConstant( number->Value );
+}
+
+void Compiler::EmitLoadConstant( int32_t value )
+{
+    if ( (value >= INT8_MIN) && (value <= INT8_MAX) )
     {
         mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = number->Value;
+        mCodeBinPtr[1] = (U8) value;
         mCodeBinPtr += 2;
     }
     else
     {
         *mCodeBinPtr = OP_LDC;
         mCodeBinPtr++;
-        WriteI32( mCodeBinPtr, number->Value );
+        WriteI32( mCodeBinPtr, value );
     }
+
+    IncreaseExprDepth();
 }
 
-void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatus& status )
+void Compiler::VisitNameExpr( NameExpr* nameExpr )
+{
+    GenerateSymbol( nameExpr, Config(), Status() );
+}
+
+void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -384,311 +238,232 @@ void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatu
         return;
     }
 
-    auto decl = FindSymbol( symbol->String );
-    if ( decl != nullptr )
+    auto decl = symbol->Decl.get();
+
+    switch ( decl->Kind )
     {
-        switch ( decl->Kind )
+    case DeclKind::Global:
+        mCodeBinPtr[0] = OP_LDMOD;
+        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr += 2;
+        WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
+        IncreaseExprDepth();
+        break;
+
+    case DeclKind::Local:
+        mCodeBinPtr[0] = OP_LDLOC;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        IncreaseExprDepth();
+        break;
+
+    case DeclKind::Arg:
+        mCodeBinPtr[0] = OP_LDARG;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        IncreaseExprDepth();
+        break;
+
+    case DeclKind::Func:
+    case DeclKind::Forward:
+        mRep.ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
+        break;
+
+    case DeclKind::Const:
         {
-        case Decl_Global:
-            mCodeBinPtr[0] = OP_LDGLO;
-            mCodeBinPtr++;
-            WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
-            break;
-
-        case Decl_Local:
-            mCodeBinPtr[0] = OP_LDLOC;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            break;
-
-        case Decl_Arg:
-            mCodeBinPtr[0] = OP_LDARG;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            break;
-
-        case Decl_Func:
-        case Decl_Forward:
-            ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
-            break;
-
-        case Decl_Const:
-            {
-                Number number;
-                number.Code = Elem_Number;
-                number.Column = symbol->Column;
-                number.Line = symbol->Line;
-                number.Value = ((ConstDecl*) decl)->Value;
-                GenerateNumber( &number, config, status );
-            }
-            break;
-
-        default:
-            assert( false );
-            ThrowInternalError();
+            Unique<NumberExpr> number( new NumberExpr() );
+            number->Line = symbol->Line;
+            number->Column = symbol->Column;
+            number->Value = ((Constant*) decl)->Value;
+            VisitNumberExpr( number.get() );
         }
-    }
-    else
-    {
-        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        break;
+
+    default:
+        assert( false );
+        mRep.ThrowInternalError();
     }
 }
 
-void Compiler::GenerateSlist( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() == 0 )
-        ThrowError( CERR_UNSUPPORTED, list, "empty lists are unsupported" );
+    auto& symbol = callOrSymbol->Symbol;
+    auto decl = symbol->Decl.get();
 
-    auto head = list->Elements[0].get();
-    if ( head->Code == Elem_Symbol )
+    if ( decl->Kind == DeclKind::Func
+        || decl->Kind == DeclKind::Forward
+        || decl->Kind == DeclKind::NativeFunc )
     {
-        Symbol* op = (Symbol*) head;
-        auto it = mGeneratorMap.find( op->String );
-        if ( it != mGeneratorMap.end() )
-        {
-            (this->*(it->second))( list, config, status );
-        }
-        else
-        {
-            GenerateCall( list, config, status );
-        }
+        Unique<CallExpr> call( new CallExpr() );
+        Unique<NameExpr> nameExpr( new NameExpr() );
+
+        nameExpr->String = symbol->String;
+        nameExpr->Decl = symbol->Decl;
+        call->Head = std::move( nameExpr );
+
+        GenerateCall( call.get(), config, status );
     }
     else
     {
-        ThrowError( CERR_UNSUPPORTED, head, "only symbols are supported at the head of a list" );
+        GenerateSymbol( symbol.get(), config, status );
     }
 }
 
-void Compiler::GenerateArithmetic( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol )
 {
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "arithmetic functions take 2 or more operands" );
-    if ( list->Elements.size() > 3 )
-        ThrowError( CERR_UNSUPPORTED, list, "arithmetic functions with more than 2 operands are unsupported" );
+    GenerateEvalStar( callOrSymbol, Config(), Status() );
+}
 
-    auto op = (Symbol*) list->Elements[0].get();
+void Compiler::GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
+{
+    auto& op = binary->Op;
     int primitive;
 
-    if ( op->String == "+" )
+    if ( op == "+" )
         primitive = PRIM_ADD;
-    else if ( op->String == "*" )
+    else if ( op == "-" )
+        primitive = PRIM_SUB;
+    else if ( op == "*" )
         primitive = PRIM_MUL;
-    else if ( op->String == "/" )
+    else if ( op == "/" )
         primitive = PRIM_DIV;
-    else if ( op->String == "%" )
+    else if ( op == "%" )
         primitive = PRIM_MOD;
     else
     {
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 
-    GenerateBinaryPrimitive( list, primitive, config, status );
+    GenerateBinaryPrimitive( binary, primitive, config, status );
 }
 
-void Compiler::GenerateNegate( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitBinaryExpr( BinaryExpr* binary )
 {
-    if ( list->Elements.size() == 3 )
+    if ( binary->Op[0] == '='
+        || binary->Op[0] == '<'
+        || binary->Op[0] == '>' )
     {
-        GenerateBinaryPrimitive( list, PRIM_SUB, config, status );
+        GenerateComparison( binary, Config(), Status() );
     }
-    else if ( list->Elements.size() == 2 )
+    else if ( binary->Op == "and" )
     {
-        GenerateUnaryPrimitive( list->Elements[1].get(), config, status );
+        GenerateAnd( binary, Config(), Status() );
     }
-    else if ( list->Elements.size() == 1 )
+    else if ( binary->Op == "or" )
     {
-        ThrowError( CERR_SEMANTICS, list, "too few arguments for negation or subtraction function" );
+        GenerateOr( binary, Config(), Status() );
     }
     else
     {
-        ThrowError( CERR_UNSUPPORTED, list, "arithmetic functions with more than 2 operands are unsupported" );
+        GenerateArithmetic( binary, Config(), Status() );
     }
 }
 
-void Compiler::GenerateReturn( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateReturn( ReturnStatement* retStmt, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() > 2 )
-        ThrowError( CERR_UNSUPPORTED, list, "returning more than 1 value is unsupported" );
-
-    if ( list->Elements.size() == 2 )
+    if ( retStmt->Inner != nullptr )
     {
-        Generate( list->Elements[1].get() );
+        Generate( retStmt->Inner.get() );
     }
     else
     {
         mCodeBinPtr[0] = OP_LDC_S;
         mCodeBinPtr[1] = 0;
         mCodeBinPtr += 2;
+        IncreaseExprDepth();
     }
 
     mCodeBinPtr[0] = OP_RET;
     mCodeBinPtr += 1;
+    DecreaseExprDepth();
 
     status.discarded = true;
     status.tailRet = true;
 }
 
-void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitReturnStatement( ReturnStatement* retStmt )
 {
-    if ( list->Elements.size() < 3 || list->Elements.size() > 4 )
-        ThrowError( CERR_SEMANTICS, list, "'if' takes 2 or 3 arguments" );
-
-    U8* leaveOffset;
-
-    PatchChain  newTrueChain;
-    PatchChain  newFalseChain;
-
-    Generate( list->Elements[1].get(), GenConfig::Expr( &newTrueChain, &newFalseChain, false ) );
-
-    ElideTrue( &newTrueChain, &newFalseChain );
-    Patch( &newTrueChain );
-
-    GenConfig statementConfig = GenConfig::Statement( config.discard );
-
-    // True
-    Generate( list->Elements[2].get(), statementConfig );
-    mCodeBinPtr[0] = OP_B;
-    leaveOffset = &mCodeBinPtr[1];
-    mCodeBinPtr += BranchInst::Size;
-
-    ElideFalse( &newTrueChain, &newFalseChain );
-
-    U8* falsePtr = mCodeBinPtr;
-
-    // False
-    if ( list->Elements.size() == 4 )
-    {
-        Generate( list->Elements[3].get(), statementConfig );
-    }
-    else
-    {
-        if ( !config.discard )
-        {
-            mCodeBinPtr[0] = OP_LDC_S;
-            mCodeBinPtr[1] = 0;
-            mCodeBinPtr += 2;
-        }
-    }
-
-    ptrdiff_t ptrOffset = mCodeBinPtr - leaveOffset - (BranchInst::Size - 1);
-
-    if ( ptrOffset < BranchInst::OffsetMin || ptrOffset > BranchInst::OffsetMax )
-        ThrowError( CERR_UNSUPPORTED, list, "Branch target is too far." );
-
-    if ( ptrOffset != 0 )
-    {
-        BranchInst::StoreOffset( leaveOffset, ptrOffset );
-    }
-    else
-    {
-        // Remove the uncoditional branch out of the True clause.
-        mCodeBinPtr -= BranchInst::Size;
-        falsePtr = mCodeBinPtr;
-    }
-
-    Patch( &newFalseChain, falsePtr );
-
-    if ( config.discard )
-        status.discarded = true;
-
-    // TODO: if both branches tail-return, then set status.tailRet.
-    //       This doesn't apply, if there's only one branch.
+    GenerateReturn( retStmt, Config(), Status() );
 }
 
-void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenStatus& status )
 {
+    PatchChain  falseChain;
     PatchChain  leaveChain;
     bool        foundCatchAll = false;
+    int         exprDepth = mCurExprDepth;
+    U8*         startPtr = mCodeBinPtr;
 
-    GenConfig statementConfig = GenConfig::Statement( config.discard );
+    GenConfig statementConfig = GenConfig::Statement( config.discard )
+        .WithLoop( config.breakChain, config.nextChain );
 
     // TODO: check all the clauses for tail-return. If they all do, then set status.tailRet.
 
-    for ( size_t i = 1; i < list->Elements.size(); i++ )
+    for ( int i = 0; i < (int) condExpr->Clauses.size(); i++ )
     {
-        auto clause = list->Elements[i].get();
-        if ( clause->Code != Elem_Slist )
-            ThrowError( CERR_SEMANTICS, clause, "each clause of COND must be a list" );
+        // Restore the expression depth, so that it doesn't accumulate
+        mCurExprDepth = exprDepth;
 
-        auto clauseList = (Slist*) clause;
-        if ( clauseList->Elements.size() < 1 )
-            ThrowError( CERR_SEMANTICS, clause, "each clause of COND must have at least one argument" );
+        auto clause = condExpr->Clauses[i].get();
 
-        // TODO: make the check more general.
+        auto optVal = GetOptionalSyntaxValue( clause->Condition.get() );
 
-        bool isConstantTrue = false;
-
-        if ( clauseList->Elements[0].get()->Code == Elem_Number )
-        {
-            if ( ((Number*) clauseList->Elements[0].get())->Value != 0 )
-                isConstantTrue = true;
-        }
-        else if ( clauseList->Elements[0].get()->Code == Elem_Symbol )
-        {
-            auto decl = FindSymbol( ((Symbol*) clauseList->Elements[0].get())->String );
-            if ( decl != nullptr && decl->Kind == Decl_Const && ((ConstDecl*) decl)->Value != 0 )
-                isConstantTrue = true;
-        }
+        bool isConstantTrue = optVal.has_value() && optVal.value() != 0;
 
         if ( isConstantTrue )
         {
-            if ( clauseList->Elements.size() == 1 )
+            if ( clause->Body.Statements.size() == 0 && !condExpr->IsIf )
             {
-                if ( !config.discard )
-                {
-                    mCodeBinPtr[0] = OP_LDC_S;
-                    mCodeBinPtr[1] = 1;
-                    mCodeBinPtr += 2;
-                }
+                GenStatus clauseStatus = { ExprKind::Other };
+                Generate( clause->Condition.get(), statementConfig, clauseStatus );
             }
             else
             {
-                GenStatus clauseStatus = { Expr_Other };
-                GenerateImplicitProgn( clauseList, 1, statementConfig, clauseStatus );
+                GenStatus clauseStatus = { ExprKind::Other };
+                GenerateImplicitProgn( &clause->Body, statementConfig, clauseStatus );
             }
             foundCatchAll = true;
             break;
         }
 
-        if ( clauseList->Elements.size() == 1 )
+        if ( clause->Body.Statements.size() == 0 && !condExpr->IsIf )
         {
-            Generate( clauseList->Elements[0].get() );
+            Generate( clause->Condition.get() );
 
-            if ( config.discard )
+            if ( !config.discard )
             {
                 mCodeBinPtr[0] = OP_DUP;
                 mCodeBinPtr++;
+                IncreaseExprDepth();
             }
 
             PushPatch( &leaveChain );
 
             mCodeBinPtr[0] = OP_BTRUE;
             mCodeBinPtr += BranchInst::Size;
-
-            if ( config.discard )
-            {
-                mCodeBinPtr[0] = OP_POP;
-                mCodeBinPtr++;
-            }
+            DecreaseExprDepth();
         }
         else
         {
             PatchChain  trueChain;
-            PatchChain  falseChain;
 
-            Generate( clauseList->Elements[0].get(), GenConfig::Expr( &trueChain, &falseChain, false ) );
+            falseChain = PatchChain();
+
+            Generate( clause->Condition.get(), GenConfig::Expr( &trueChain, &falseChain, false ) );
             ElideTrue( &trueChain, &falseChain );
             Patch( &trueChain );
 
             // True
-            GenStatus clauseStatus = { Expr_Other };
-            GenerateImplicitProgn( clauseList, 1, statementConfig, clauseStatus );
+            GenStatus clauseStatus = { ExprKind::Other };
+            GenerateImplicitProgn( &clause->Body, statementConfig, clauseStatus );
 
-            PushPatch( &leaveChain );
-
-            mCodeBinPtr[0] = OP_B;
-            mCodeBinPtr += BranchInst::Size;
+            if ( i < (int) condExpr->Clauses.size() - 1 || !config.discard )
+            {
+                PushPatch( &leaveChain );
+                mCodeBinPtr[0] = OP_B;
+                mCodeBinPtr += BranchInst::Size;
+            }
 
             ElideFalse( &trueChain, &falseChain );
             Patch( &falseChain );
@@ -702,7 +477,18 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
             mCodeBinPtr[0] = OP_LDC_S;
             mCodeBinPtr[1] = 0;
             mCodeBinPtr += 2;
+            IncreaseExprDepth();
         }
+    }
+
+    if ( (mCodeBinPtr - startPtr) >= BranchInst::Size
+        && mCodeBinPtr[-BranchInst::Size] == OP_B
+        && leaveChain.First != nullptr
+        && leaveChain.First->Inst == &mCodeBinPtr[-BranchInst::Size]
+        && falseChain.PatchedPtr == mCodeBinPtr )
+    {
+        mCodeBinPtr -= BranchInst::Size;
+        Patch( &falseChain );
     }
 
     Patch( &leaveChain );
@@ -711,120 +497,106 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
         status.discarded = true;
 }
 
-void Compiler::GenerateProgn( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitCondExpr( CondExpr* condExpr )
 {
-    GenerateImplicitProgn( list, 1, config, status );
+    GenerateCond( condExpr, Config(), Status() );
 }
 
-void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() != 3 )
-        ThrowError( CERR_SEMANTICS, list, "'set' takes 2 arguments" );
-
     // Value
-    Generate( list->Elements[2].get() );
+    Generate( assignment->Right.get() );
 
     if ( config.discard )
+    {
         status.discarded = true;
+    }
     else
+    {
         *mCodeBinPtr++ = OP_DUP;
-
-    if ( list->Elements[1]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'set' : first argument must be a symbol" );
-
-    auto targetSym = (Symbol*) list->Elements[1].get();
-    auto decl = FindSymbol( targetSym->String );
-    if ( decl != nullptr )
-    {
-        switch ( decl->Kind )
-        {
-        case Decl_Global:
-            mCodeBinPtr[0] = OP_STGLO;
-            mCodeBinPtr++;
-            WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
-            break;
-
-        case Decl_Local:
-            mCodeBinPtr[0] = OP_STLOC;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            break;
-
-        case Decl_Arg:
-            mCodeBinPtr[0] = OP_STARG;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            break;
-
-        case Decl_Func:
-        case Decl_Forward:
-            ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
-            break;
-
-        default:
-            assert( false );
-            ThrowInternalError();
-        }
+        IncreaseExprDepth();
     }
-    else
+
+    if ( assignment->Left->Kind == SyntaxKind::Index )
     {
-        ThrowError( CERR_SEMANTICS, targetSym, "symbol not found '%s'", targetSym->String.c_str() );
+        auto indexExpr = (IndexExpr*) assignment->Left.get();
+
+        GenerateArrayElementRef( indexExpr );
+
+        mCodeBinPtr[0] = OP_STOREI;
+        mCodeBinPtr++;
+
+        DecreaseExprDepth( 2 );
+        return;
     }
+
+    auto targetSym = (NameExpr*) assignment->Left.get();
+    auto decl = targetSym->Decl.get();
+
+    switch ( decl->Kind )
+    {
+    case DeclKind::Global:
+        mCodeBinPtr[0] = OP_STMOD;
+        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr += 2;
+        WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
+        break;
+
+    case DeclKind::Local:
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        break;
+
+    case DeclKind::Arg:
+        mCodeBinPtr[0] = OP_STARG;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        break;
+
+    case DeclKind::Func:
+    case DeclKind::Forward:
+    case DeclKind::ExternalFunc:
+    case DeclKind::NativeFunc:
+        mRep.ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
+        break;
+
+    case DeclKind::Const:
+        mRep.ThrowError( CERR_SEMANTICS, targetSym, "Constants can't be changed" );
+        break;
+
+    default:
+        assert( false );
+        mRep.ThrowInternalError();
+    }
+
+    DecreaseExprDepth();
 }
 
-void Compiler::GenerateDefun( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitAssignmentExpr( AssignmentExpr* assignment )
 {
-    if ( mInFunc )
-        ThrowError( CERR_SEMANTICS, list, "a function can't be defined inside another" );
+    GenerateSet( assignment, Config(), Status() );
+}
 
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "'defun' takes 2 or more arguments" );
-
-    if ( list->Elements[1]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'defun' first argument must be a name" );
-
-    mInFunc = true;
-
-    Symbol* funcSym = (Symbol*) list->Elements[1].get();
+void Compiler::VisitProcDecl( ProcDecl* procDecl )
+{
     U32 addr = (mCodeBinPtr - mCodeBin);
 
-    SymTable::iterator it = mGlobalTable.find( funcSym->String );
-    if ( it != mGlobalTable.end() )
-    {
-        if ( it->second->Kind == Decl_Forward )
-        {
-            Function* func = (Function*) it->second.get();
-            func->Kind = Decl_Func;
-            func->Address = addr;
-            PatchCalls( &func->Patches, addr );
-            mForwards--;
-        }
-        else if ( it->second->Kind == Decl_Func )
-        {
-            ThrowError( CERR_SEMANTICS, funcSym, "the function '%s' is already defined", funcSym->String.c_str() );
-        }
-        else
-        {
-            ThrowError( CERR_SEMANTICS, funcSym, "the symbol '%s' is already defined", funcSym->String.c_str() );
-        }
-    }
-    else
-    {
-        Function* func = AddFunc( funcSym->String, addr );
+    auto func = (Function*) procDecl->Decl.get();
 
-        mEnv->AddExternal( funcSym->String, External_Bytecode, func->Address );
-    }
+    func->Address = addr;
 
-    GenerateProc( list, 2 );
+    auto patchIt = mPatchMap.find( func->Name );
+    if ( patchIt != mPatchMap.end() )
+        PatchCalls( &patchIt->second, addr );
 
-    mInFunc = false;
+    mEnv->AddExternal( procDecl->Name, External_Bytecode, func->Address );
+
+    GenerateProc( procDecl, func );
 }
 
-void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateLambda( LambdaExpr* lambdaExpr, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'lambda' takes 1 or more arguments" );
-
     if ( config.discard )
     {
         status.discarded = true;
@@ -835,209 +607,655 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     mCodeBinPtr++;
 
     DeferredLambda lambda = { 0 };
-    lambda.Definition = list;
+    lambda.Definition = lambdaExpr->Proc.get();
     lambda.Patch = mCodeBinPtr;
     mLambdas.push_back( lambda );
 
+    // Add the reference to the deferred lambda just linked
+    mLocalAddrRefs.push_back( { AddrRefKind::Lambda, mLambdas.size() - 1 } );
+
     WriteU32( mCodeBinPtr, 0 );
+    IncreaseExprDepth();
 }
 
-void Compiler::GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitLambdaExpr( LambdaExpr* lambdaExpr )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'funcall' takes 1 or more arguments" );
+    GenerateLambda( lambdaExpr, Config(), Status() );
+}
 
-    for ( size_t i = list->Elements.size() - 1; i > 0; i-- )
+void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, GenStatus& status )
+{
+    if ( config.discard )
     {
-        Generate( list->Elements[i].get() );
+        status.discarded = true;
+        return;
     }
 
-    mCodeBinPtr[0] = OP_CALLI;
-    mCodeBinPtr[1] = CallFlags::Build( list->Elements.size() - 2, config.discard );
-    mCodeBinPtr += 2;
+    U32 addr = 0;
+
+    auto func = (Function*) addrOf->Inner->Decl.get();
+
+    if ( func->Address != INT32_MAX )
+    {
+        addr = func->Address;
+    }
+    else
+    {
+        PatchChain* chain = PushFuncPatch( func->Name );
+
+        AddrRef ref = { AddrRefKind::Inst };
+        ref.InstPtr = &chain->First->Inst;
+        mLocalAddrRefs.push_back( ref );
+    }
+
+    mCodeBinPtr[0] = OP_LDC;
+    mCodeBinPtr++;
+    WriteU24( mCodeBinPtr, addr );
+    mCodeBinPtr[0] = mModIndex;
+    mCodeBinPtr++;
+
+    IncreaseExprDepth();
 }
 
-void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitAddrOfExpr( AddrOfExpr* addrOf )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'let' takes 1 or more arguments" );
-    if ( list->Elements[1]->Code != Elem_Slist )
-        ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'let' : first argument must be a list" );
+    GenerateFunction( addrOf, Config(), Status() );
+}
 
-    Slist* allList = (Slist*) list->Elements[1].get();
-    SymTable localTable;
-
-    for ( size_t i = 0; i < allList->Elements.size(); i++ )
+void Compiler::GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status )
+{
+    for ( int i = call->Arguments.size() - 1; i >= 0; i-- )
     {
-        if ( allList->Elements[i]->Code != Elem_Slist )
-            ThrowError( CERR_SEMANTICS, allList->Elements[i].get(), "'let' : element %d of binding list must be a list", i+1 );
+        Generate( call->Arguments[i].get() );
+    }
 
-        Slist* localList = (Slist*) allList->Elements[i].get();
+    Generate( call->Head.get() );
 
-        if ( localList->Elements.size() != 2 )
-            ThrowError( CERR_SEMANTICS, localList, "'let' : binding pair must have 2 elements" );
-        if ( localList->Elements[0]->Code != Elem_Symbol )
-            ThrowError( CERR_SEMANTICS, localList->Elements[0].get(), "'let' : first element of binding pair must be a symbol" );
+    int argCount = call->Arguments.size();
 
-        Symbol* localSym = (Symbol*) localList->Elements[0].get();
-        Storage* local = AddLocal( localTable, localSym->String, mCurLocalCount );
+    mCodeBinPtr[0] = OP_CALLI;
+    mCodeBinPtr[1] = CallFlags::Build( argCount, config.discard );
+    mCodeBinPtr += 2;
 
-        mCurLocalCount++;
-        if ( mCurLocalCount > mMaxLocalCount )
-            mMaxLocalCount = mCurLocalCount;
+    DecreaseExprDepth();
 
-        if ( localList->Elements.size() > 1 )
+    if ( config.discard )
+        status.discarded = true;
+    else
+        IncreaseExprDepth();
+
+    DecreaseExprDepth( argCount );
+
+    if ( mInFunc )
+        mCurFunc->CallsIndirectly = true;
+}
+
+void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenStatus& status )
+{
+    for ( auto& binding : letStmt->Variables )
+    {
+        GenerateLetBinding( binding.get() );
+    }
+
+    GenerateImplicitProgn( &letStmt->Body, config, status );
+}
+
+void Compiler::GenerateLetBinding( DataDecl* binding )
+{
+    auto local = (Storage*) binding->GetDecl();
+    auto type = local->Type.get();
+
+    if ( type->GetKind() == TypeKind::Int
+        || type->GetKind() == TypeKind::Pointer )
+    {
+        if ( binding->Initializer != nullptr )
         {
-            Generate( localList->Elements[1].get() );
+            Generate( binding->Initializer.get() );
             mCodeBinPtr[0] = OP_STLOC;
             mCodeBinPtr[1] = local->Offset;
             mCodeBinPtr += 2;
+            DecreaseExprDepth();
+        }
+    }
+    else if ( type->GetKind() == TypeKind::Array )
+    {
+        auto arrayType = (ArrayType*) type;
+
+        if ( binding->Initializer != nullptr )
+        {
+            AddLocalDataArray( local, binding->Initializer.get(), arrayType->Size );
+        }
+    }
+    else
+    {
+        mRep.ThrowError( CERR_SEMANTICS, binding, "'let' binding takes a name or name and type" );
+    }
+}
+
+void Compiler::VisitLetStatement( LetStatement* letStmt )
+{
+    GenerateLet( letStmt, Config(), Status() );
+}
+
+// TODO: try to merge this with AddGlobalDataArray. Separate the array processing from the code generation
+
+void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size )
+{
+    if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
+        mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+
+    Syntax* lastTwoElems[2] = {};
+    size_t locIndex = local->Offset;
+    size_t i = 0;
+
+    auto initList = (InitList*) valueElem;
+
+    for ( auto& entry : initList->Values )
+    {
+        if ( i == size )
+            mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+
+        lastTwoElems[0] = lastTwoElems[1];
+        lastTwoElems[1] = entry.get();
+
+        Generate( entry.get() );
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = (U8) locIndex;
+        mCodeBinPtr += 2;
+        i++;
+        locIndex--;
+        DecreaseExprDepth();
+    }
+
+    I32 prevValue = 0;
+    I32 step = 0;
+
+    if ( initList->HasExtra && lastTwoElems[1] != nullptr )
+    {
+        prevValue = GetSyntaxValue( lastTwoElems[1], "Array initializer extrapolation requires a constant" );
+
+        if ( lastTwoElems[0] != nullptr )
+        {
+            auto prevValue2 = GetOptionalSyntaxValue( lastTwoElems[0] );
+            if ( prevValue2.has_value() )
+                step = prevValue - prevValue2.value();
         }
     }
 
-    mSymStack.push_back( &localTable );
+    for ( ; i < size; i++ )
+    {
+        I32 newValue = prevValue + step;
 
-    GenerateImplicitProgn( list, 2, config, status );
+        EmitLoadConstant( newValue );
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = (U8) locIndex;
+        mCodeBinPtr += 2;
+        locIndex--;
+        DecreaseExprDepth();
 
-    mSymStack.pop_back();
-
-    mCurLocalCount -= localTable.size();
+        prevValue = newValue;
+    }
 }
 
-void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status )
 {
-    auto op = (Symbol*) list->Elements[0].get();
+    if ( call->Head->Kind != SyntaxKind::Name )
+        mRep.ThrowError( CERR_SEMANTICS, call, "Direct call requires a named function" );
 
-    for ( size_t i = list->Elements.size() - 1; i > 0; i-- )
+    auto op = (NameExpr*) call->Head.get();
+
+    for ( int i = call->Arguments.size() - 1; i >= 0; i-- )
     {
-        Generate( list->Elements[i].get() );
+        Generate( call->Arguments[i].get() );
     }
 
-    U8 callFlags = CallFlags::Build( list->Elements.size() - 1, config.discard );
+    int argCount = call->Arguments.size();
+    U8 callFlags = CallFlags::Build( argCount, config.discard );
 
-    SymTable::iterator it = mGlobalTable.find( op->String );
-    if ( it != mGlobalTable.end() )
+    auto decl = call->Head->GetDecl();
+
+    if ( decl == nullptr )
     {
-        Function* func = (Function*) it->second.get();
+        mRep.ThrowInternalError( "Call head has no declaration" );
+    }
+    else if ( decl->Kind == DeclKind::Func )
+    {
+        Function* func = (Function*) decl;
         U32 addr = 0;
 
-        if ( it->second->Kind == Decl_Func )
+        if ( func->Address != INT32_MAX )
         {
             addr = func->Address;
         }
-        else if ( it->second->Kind == Decl_Forward )
-        {
-            PushPatch( &func->Patches );
-        }
         else
         {
-            ThrowError( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
+            PatchChain* chain = PushFuncPatch( func->Name );
+
+            AddrRef ref = { AddrRefKind::Inst };
+            ref.InstPtr = &chain->First->Inst;
+            mLocalAddrRefs.push_back( ref );
         }
 
         mCodeBinPtr[0] = OP_CALL;
         mCodeBinPtr[1] = callFlags;
         mCodeBinPtr += 2;
         WriteU24( mCodeBinPtr, addr );
+
+        if ( mInFunc )
+            mCurFunc->CalledFunctions.push_back( op->String );
     }
     else
     {
-        ExternalFunc external = { 0 };
         int opCode = 0;
+        I32 id = 0;
 
-        if ( mEnv->FindExternal( op->String, &external ) )
+        if ( decl->Kind == DeclKind::ExternalFunc )
         {
-            if ( external.Kind == External_Bytecode )
-            {
-                opCode = OP_CALLN;
-            }
-            else if ( external.Kind == External_Native )
-            {
-                if ( external.Id >= 0x100 )
-                    opCode = OP_CALLNATIVE;
-                else
-                    opCode = OP_CALLNATIVE_S;
-            }
-            else
-            {
-                assert( false );
-                ThrowInternalError();
-            }
+            opCode = OP_CALLM;
+            id = ((ExternalFunction*) decl)->Id;
 
-            mCodeBinPtr[0] = opCode;
-            mCodeBinPtr[1] = callFlags;
-            mCodeBinPtr += 2;
+            // TODO: Add this external call to the list of called functions
+        }
+        else if ( decl->Kind == DeclKind::NativeFunc )
+        {
+            id = ((NativeFunction*) decl)->Id;
 
-            if ( opCode == OP_CALLNATIVE_S )
-            {
-                *(U8*) mCodeBinPtr = (U8) external.Id;
-                mCodeBinPtr += 1;
-            }
+            if ( id >= 0x100 )
+                opCode = OP_CALLNATIVE;
             else
-            {
-                WriteU32( mCodeBinPtr, external.Id );
-            }
+                opCode = OP_CALLNATIVE_S;
         }
         else
         {
-            Function* func = AddForward( op->String );
-            PushPatch( &func->Patches );
-            mForwards++;
+            assert( false );
+            mRep.ThrowInternalError();
+        }
 
-            mCodeBinPtr[0] = OP_CALL;
-            mCodeBinPtr[1] = callFlags;
-            mCodeBinPtr += 2;
-            WriteU24( mCodeBinPtr, 0 );
+        mCodeBinPtr[0] = opCode;
+        mCodeBinPtr[1] = callFlags;
+        mCodeBinPtr += 2;
+
+        if ( opCode == OP_CALLNATIVE_S )
+        {
+            *(U8*) mCodeBinPtr = (U8) id;
+            mCodeBinPtr += 1;
+        }
+        else
+        {
+            WriteU32( mCodeBinPtr, id );
         }
     }
 
+    IncreaseExprDepth();
+
     if ( config.discard )
+    {
         status.discarded = true;
+        DecreaseExprDepth();
+    }
+
+    DecreaseExprDepth( argCount );
 }
 
-void Compiler::GenerateNot( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitCallExpr( CallExpr* call )
 {
-    if ( list->Elements.size() != 2 )
-        ThrowError( CERR_SEMANTICS, list, "'not' takes 1 argument" );
-
-    Generate( list->Elements[1].get(), config.Invert(), status );
-    status.kind = Expr_Logical;
+    if ( call->IsIndirect )
+        GenerateFuncall( call, Config(), Status() );
+    else
+        GenerateCall( call, Config(), Status() );
 }
 
-void Compiler::GenerateComparison( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() != 3 )
-        ThrowError( CERR_SEMANTICS, list, "comparison operators take 2 operands" );
+    // Variable name
 
-    auto op = (Symbol*) list->Elements[0].get();
+    auto local = (Storage*) forStmt->IndexDecl.get();
+
+    int primitive;
+    int step;
+
+    if ( 0 == strcmp( forStmt->Comparison.c_str(), "below" ) )
+    {
+        primitive = PRIM_LT;
+        step = 1;
+    }
+    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "to" ) )
+    {
+        primitive = PRIM_LE;
+        step = 1;
+    }
+    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "downto" ) )
+    {
+        primitive = PRIM_GE;
+        step = -1;
+    }
+    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "above" ) )
+    {
+        primitive = PRIM_GT;
+        step = -1;
+    }
+    else
+    {
+        mRep.ThrowError( CERR_SEMANTICS, forStmt, "Expected symbol: to, downto, above, below" );
+    }
+
+    PatchChain  bodyChain;
+    PatchChain  testChain;
+    PatchChain  breakChain;
+    PatchChain  nextChain;
+
+    // Beginning expression
+    Generate( forStmt->First.get() );
+    mCodeBinPtr[0] = OP_DUP;
+    mCodeBinPtr[1] = OP_STLOC;
+    mCodeBinPtr[2] = local->Offset;
+    mCodeBinPtr += 3;
+    IncreaseExprDepth();
+    DecreaseExprDepth();
+
+    // The unconditional jump below leaves one value on the expression stack.
+    // Decrease the depth here, because this value overlaps the first one pushed
+    // for a usual test.
+    DecreaseExprDepth();
+
+    PushPatch( &testChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    U8* bodyPtr = mCodeBinPtr;
+
+    // Body
+    GenerateStatements( &forStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
+
+    Patch( &nextChain );
+
+    if ( forStmt->Step != nullptr )
+        Generate( forStmt->Step.get() );
+    else
+        EmitLoadConstant( step );
+
+    mCodeBinPtr[0] = OP_LDLOC;
+    mCodeBinPtr[1] = local->Offset;
+    mCodeBinPtr[2] = OP_PRIM;
+    mCodeBinPtr[3] = PRIM_ADD;
+    mCodeBinPtr[4] = OP_DUP;
+    mCodeBinPtr[5] = OP_STLOC;
+    mCodeBinPtr[6] = local->Offset;
+    mCodeBinPtr += 7;
+    IncreaseExprDepth();
+    DecreaseExprDepth();
+    IncreaseExprDepth();
+    DecreaseExprDepth();
+
+    Patch( &testChain );
+
+    // Ending expression
+    Generate( forStmt->Last.get() );
+
+    mCodeBinPtr[0] = OP_PRIM;
+    mCodeBinPtr[1] = primitive;
+    mCodeBinPtr += 2;
+    DecreaseExprDepth();
+
+    PushPatch( &bodyChain );
+    mCodeBinPtr[0] = OP_BTRUE;
+    mCodeBinPtr += BranchInst::Size;
+    DecreaseExprDepth();
+
+    Patch( &bodyChain, bodyPtr );
+    Patch( &breakChain );
+
+    GenerateNilIfNeeded( config, status );
+}
+
+void Compiler::VisitForStatement( ForStatement* forStmt )
+{
+    GenerateFor( forStmt, Config(), Status() );
+}
+
+void Compiler::GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& config, GenStatus& status )
+{
+    PatchChain  breakChain;
+    PatchChain  nextChain;
+
+    U8* bodyPtr = mCodeBinPtr;
+
+    // Body
+    GenerateStatements( &loopStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
+
+    if ( loopStmt->Condition == nullptr )
+    {
+        PushPatch( &nextChain );
+        mCodeBinPtr[0] = OP_B;
+        mCodeBinPtr += BranchInst::Size;
+
+        Patch( &nextChain, bodyPtr );
+    }
+    else
+    {
+        GenStatus exprStatus;
+        PatchChain bodyChain;
+
+        Patch( &nextChain );
+
+        Generate( loopStmt->Condition.get(), GenConfig::Expr( &bodyChain, &breakChain, false ), exprStatus );
+        ElideFalse( &bodyChain, &breakChain );
+
+        Patch( &bodyChain, bodyPtr );
+    }
+
+    Patch( &breakChain );
+
+    GenerateNilIfNeeded( config, status );
+}
+
+void Compiler::VisitLoopStatement( LoopStatement* loopStmt )
+{
+    GenerateSimpleLoop( loopStmt, Config(), Status() );
+}
+
+void Compiler::GenerateDo( WhileStatement* whileStmt, const GenConfig& config, GenStatus& status )
+{
+    PatchChain  breakChain;
+    PatchChain  nextChain;
+    PatchChain  trueChain;
+
+    U8* testPtr = mCodeBinPtr;
+
+    // Test expression
+    Generate( whileStmt->Condition.get(), GenConfig::Expr( &trueChain, &breakChain, false ) );
+
+    ElideTrue( &trueChain, &breakChain );
+    Patch( &trueChain );
+
+    // Body
+    GenerateStatements( &whileStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
+
+    PushPatch( &nextChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    Patch( &breakChain );
+    Patch( &nextChain, testPtr );
+
+    GenerateNilIfNeeded( config, status );
+}
+
+void Compiler::VisitWhileStatement( WhileStatement* whileStmt )
+{
+    GenerateDo( whileStmt, Config(), Status() );
+}
+
+void Compiler::GenerateBreak( BreakStatement* breakStmt, const GenConfig& config, GenStatus& status )
+{
+    if ( config.breakChain == nullptr )
+        mRep.ThrowError( CERR_SEMANTICS, breakStmt, "Cannot use break outside of a loop" );
+
+    PushPatch( config.breakChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    status.discarded = true;
+}
+
+void Compiler::VisitBreakStatement( BreakStatement* breakStmt )
+{
+    GenerateBreak( breakStmt, Config(), Status() );
+}
+
+void Compiler::GenerateNext( NextStatement* nextStmt, const GenConfig& config, GenStatus& status )
+{
+    if ( config.nextChain == nullptr )
+        mRep.ThrowError( CERR_SEMANTICS, nextStmt, "Cannot use next outside of a loop" );
+
+    PushPatch( config.nextChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    status.discarded = true;
+}
+
+void Compiler::VisitNextStatement( NextStatement* nextStmt )
+{
+    GenerateNext( nextStmt, Config(), Status() );
+}
+
+void Compiler::GenerateCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
+{
+    GenerateGeneralCase( caseExpr, config, status );
+}
+
+void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
+{
+    PatchChain exitChain;
+
+    const GenConfig& statementConfig = config;
+
+    if ( caseExpr->TestKeyDecl != nullptr )
+    {
+        auto local = (Storage*) caseExpr->TestKeyDecl.get();
+
+        Generate( caseExpr->TestKey.get() );
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = local->Offset;
+        mCodeBinPtr += 2;
+        DecreaseExprDepth();
+
+        // Replace the keyform expression with the temporary variable
+        Unique<NameExpr> localSym( new NameExpr() );
+        localSym->String = "$testKey";
+        localSym->Decl = caseExpr->TestKeyDecl;
+        caseExpr->TestKey = std::move( localSym );
+    }
+
+    for ( auto& clause : caseExpr->Clauses )
+    {
+        PatchChain falseChain;
+        PatchChain trueChain;
+
+        int i = 0;
+
+        for ( auto& key : clause->Keys )
+        {
+            i++;
+
+            Generate( caseExpr->TestKey.get() );
+            Generate( key.get() );
+
+            mCodeBinPtr[0] = OP_PRIM;
+            mCodeBinPtr[1] = PRIM_EQ;
+            mCodeBinPtr += 2;
+            DecreaseExprDepth();
+
+            if ( i == clause->Keys.size() )
+            {
+                PushPatch( &falseChain );
+                mCodeBinPtr[0] = OP_BFALSE;
+                mCodeBinPtr += BranchInst::Size;
+                DecreaseExprDepth();
+            }
+            else
+            {
+                PushPatch( &trueChain );
+                mCodeBinPtr[0] = OP_BTRUE;
+                mCodeBinPtr += BranchInst::Size;
+                DecreaseExprDepth();
+            }
+        }
+
+        Patch( &trueChain );
+
+        GenerateImplicitProgn( &clause->Body, statementConfig, status );
+
+        PushPatch( &exitChain );
+        mCodeBinPtr[0] = OP_B;
+        mCodeBinPtr += BranchInst::Size;
+
+        Patch( &falseChain );
+    }
+
+    if ( caseExpr->Fallback != nullptr )
+    {
+        GenerateImplicitProgn( &caseExpr->Fallback->Body, statementConfig, status );
+    }
+    else
+    {
+        GenerateNilIfNeeded( config, status );
+    }
+
+    Patch( &exitChain );
+}
+
+void Compiler::VisitCaseExpr( CaseExpr* caseExpr )
+{
+    GenerateCase( caseExpr, Config(), Status() );
+}
+
+void Compiler::VisitUnaryExpr( UnaryExpr* unary )
+{
+    if ( unary->Op == "not" )
+    {
+        Generate( unary->Inner.get(), Config().Invert(), Status() );
+        Status().kind = ExprKind::Logical;
+    }
+    else if ( unary->Op == "-" )
+    {
+        GenerateUnaryPrimitive( unary->Inner.get(), Config(), Status() );
+    }
+}
+
+void Compiler::GenerateComparison( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
+{
+    auto& op = binary->Op;
     int positivePrimitive;
     int negativePrimitive;
 
-    if ( op->String == "=" )
+    if ( op == "=" )
     {
         positivePrimitive = PRIM_EQ;
         negativePrimitive = PRIM_NE;
     }
-    else if ( op->String == "<>" )
+    else if ( op == "<>" )
     {
         positivePrimitive = PRIM_NE;
         negativePrimitive = PRIM_EQ;
     }
-    else if ( op->String == "<" )
+    else if ( op == "<" )
     {
         positivePrimitive = PRIM_LT;
         negativePrimitive = PRIM_GE;
     }
-    else if ( op->String == "<=" )
+    else if ( op == "<=" )
     {
         positivePrimitive = PRIM_LE;
         negativePrimitive = PRIM_GT;
     }
-    else if ( op->String == ">" )
+    else if ( op == ">" )
     {
         positivePrimitive = PRIM_GT;
         negativePrimitive = PRIM_LE;
     }
-    else if ( op->String == ">=" )
+    else if ( op == ">=" )
     {
         positivePrimitive = PRIM_GE;
         negativePrimitive = PRIM_LT;
@@ -1045,60 +1263,54 @@ void Compiler::GenerateComparison( Slist* list, const GenConfig& config, GenStat
     else
     {
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 
-    GenerateBinaryPrimitive( list, config.invert ? negativePrimitive : positivePrimitive, config, status );
-    status.kind = Expr_Comparison;
+    GenerateBinaryPrimitive( binary, config.invert ? negativePrimitive : positivePrimitive, config, status );
+    status.kind = ExprKind::Comparison;
 }
 
-void Compiler::GenerateAnd( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateAnd( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "'and' takes 2 or more operands" );
-
     ConjSpec spec = { &Compiler::GenerateAndClause, &Compiler::GenerateOrClause };
-    GenerateConj( &spec, list, config );
-    status.kind = Expr_Logical;
+    GenerateConj( &spec, binary, config );
+    status.kind = ExprKind::Logical;
+
+    if ( config.discard )
+        status.discarded = true;
 }
 
-void Compiler::GenerateOr( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateOr( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "'or' takes 2 or more operands" );
-
     ConjSpec spec = { &Compiler::GenerateOrClause, &Compiler::GenerateAndClause };
-    GenerateConj( &spec, list, config );
-    status.kind = Expr_Logical;
+    GenerateConj( &spec, binary, config );
+    status.kind = ExprKind::Logical;
+
+    if ( config.discard )
+        status.discarded = true;
 }
 
-void Compiler::GenerateConj( ConjSpec* spec, Slist* list, const GenConfig& config )
+void Compiler::GenerateConj( ConjSpec* spec, BinaryExpr* binary, const GenConfig& config )
 {
     if ( config.trueChain == nullptr )
     {
-        Atomize( spec, list, config.invert );
+        Atomize( spec, binary, config.invert, config.discard );
         return;
     }
 
-    for ( size_t i = 1; i < list->Elements.size() - 1; i++ )
+    if ( config.invert )
     {
-        if ( config.invert )
-        {
-            (this->*(spec->NegativeGenerator))( list->Elements[i].get(), config );
-        }
-        else
-        {
-            (this->*(spec->PositiveGenerator))( list->Elements[i].get(), config );
-        }
+        (this->*(spec->NegativeGenerator))( binary->Left.get(), config );
+    }
+    else
+    {
+        (this->*(spec->PositiveGenerator))( binary->Left.get(), config );
     }
 
-    if ( list->Elements.size() > 1 )
-    {
-        Generate( list->Elements.back().get(), config );
-    }
+    Generate( binary->Right.get(), config );
 }
 
-void Compiler::GenerateAndClause( Element* elem, const GenConfig& config )
+void Compiler::GenerateAndClause( Syntax* elem, const GenConfig& config )
 {
     PatchChain  newTrueChain;
     Generate( elem, config.WithTrue( &newTrueChain ) );
@@ -1106,7 +1318,7 @@ void Compiler::GenerateAndClause( Element* elem, const GenConfig& config )
     Patch( &newTrueChain );
 }
 
-void Compiler::GenerateOrClause( Element* elem, const GenConfig& config )
+void Compiler::GenerateOrClause( Syntax* elem, const GenConfig& config )
 {
     PatchChain  newFalseChain;
     Generate( elem, config.WithFalse( &newFalseChain ) );
@@ -1114,28 +1326,38 @@ void Compiler::GenerateOrClause( Element* elem, const GenConfig& config )
     Patch( &newFalseChain );
 }
 
-void Compiler::Atomize( ConjSpec* spec, Slist* list, bool invert )
+void Compiler::Atomize( ConjSpec* spec, BinaryExpr* binary, bool invert, bool discard )
 {
     PatchChain  trueChain;
     PatchChain  falseChain;
 
-    GenerateConj( spec, list, GenConfig::Expr( &trueChain, &falseChain, invert ) );
+    GenerateConj( spec, binary, GenConfig::Expr( &trueChain, &falseChain, invert ) );
 
     ElideTrue( &trueChain, &falseChain );
 
     Patch( &trueChain );
-    mCodeBinPtr[0] = OP_LDC_S;
-    mCodeBinPtr[1] = 1;
-    mCodeBinPtr[2] = OP_B;
-    mCodeBinPtr += 3;
 
-    // Offset of 2 to jump over LDC.S below.
-    BranchInst::WriteOffset( mCodeBinPtr, 2 );
+    if ( !discard )
+    {
+        mCodeBinPtr[0] = OP_LDC_S;
+        mCodeBinPtr[1] = 1;
+        mCodeBinPtr[2] = OP_B;
+        mCodeBinPtr += 3;
+
+        // Offset of 2 to jump over LDC.S below.
+        BranchInst::WriteOffset( mCodeBinPtr, 2 );
+    }
 
     Patch( &falseChain );
-    mCodeBinPtr[0] = OP_LDC_S;
-    mCodeBinPtr[1] = 0;
-    mCodeBinPtr += 2;
+
+    if ( !discard )
+    {
+        mCodeBinPtr[0] = OP_LDC_S;
+        mCodeBinPtr[1] = 0;
+        mCodeBinPtr += 2;
+
+        IncreaseExprDepth();
+    }
 }
 
 U8 Compiler::InvertJump( U8 opCode )
@@ -1146,7 +1368,7 @@ U8 Compiler::InvertJump( U8 opCode )
     case OP_BFALSE: return OP_BTRUE;
     default:
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 }
 
@@ -1154,35 +1376,49 @@ void Compiler::PushPatch( PatchChain* chain )
 {
     InstPatch* link = new InstPatch;
     link->Inst = mCodeBinPtr;
-    link->Next = chain->Next;
-    chain->Next = link;
+    link->Next = chain->First;
+    chain->First = link;
 }
 
 void Compiler::PopPatch( PatchChain* chain )
 {
-    assert( chain->Next != nullptr );
+    assert( chain->First != nullptr );
 
-    auto link = chain->Next;
-    chain->Next = chain->Next->Next;
+    auto link = chain->First;
+    chain->First = chain->First->Next;
     delete link;
+}
+
+Compiler::PatchChain* Compiler::PushFuncPatch( const std::string& name )
+{
+    auto patchIt = mPatchMap.find( name );
+    if ( patchIt == mPatchMap.end() )
+    {
+        auto result = mPatchMap.insert( PatchMap::value_type( { name, PatchChain() } ) );
+        patchIt = std::move( result.first );
+    }
+
+    PushPatch( &patchIt->second );
+
+    return &patchIt->second;
 }
 
 void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
 {
-    if (   trueChain->Next  == nullptr 
-        || falseChain->Next == nullptr )
+    if (   trueChain->First  == nullptr
+        || falseChain->First == nullptr )
         return;
 
     U8* target = mCodeBinPtr;
-    size_t diff = target - (trueChain->Next->Inst + BranchInst::Size);
+    size_t diff = target - (trueChain->First->Inst + BranchInst::Size);
 
     if ( diff == BranchInst::Size
         && mCodeBinPtr[-BranchInst::Size] == OP_B
-        && &mCodeBinPtr[-BranchInst::Size] == falseChain->Next->Inst
+        && &mCodeBinPtr[-BranchInst::Size] == falseChain->First->Inst
         )
     {
-        falseChain->Next->Inst = trueChain->Next->Inst;
-        trueChain->Next->Inst[0] = InvertJump( trueChain->Next->Inst[0] );
+        falseChain->First->Inst = trueChain->First->Inst;
+        trueChain->First->Inst[0] = InvertJump( trueChain->First->Inst[0] );
 
         // Remove the branch instruction.
         PopPatch( trueChain );
@@ -1192,11 +1428,11 @@ void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
 
 void Compiler::ElideFalse( PatchChain* trueChain, PatchChain* falseChain )
 {
-    if ( falseChain->Next == nullptr )
+    if ( falseChain->First == nullptr )
         return;
 
     U8* target = mCodeBinPtr;
-    size_t diff = target - (falseChain->Next->Inst + BranchInst::Size);
+    size_t diff = target - (falseChain->First->Inst + BranchInst::Size);
 
     if ( diff == 0 )
     {
@@ -1210,26 +1446,37 @@ void Compiler::Patch( PatchChain* chain, U8* targetPtr )
 {
     U8* target = (targetPtr != nullptr) ? targetPtr : mCodeBinPtr;
 
-    for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
+    for ( InstPatch* link = chain->First; link != nullptr; link = link->Next )
     {
         ptrdiff_t diff = target - (link->Inst + BranchInst::Size);
 
         if ( diff < BranchInst::OffsetMin || diff > BranchInst::OffsetMax )
-            ThrowError( CERR_UNSUPPORTED, nullptr, "Branch target is too far." );
+            mRep.ThrowError( CERR_UNSUPPORTED, nullptr, "Branch target is too far." );
 
         BranchInst::StoreOffset( &link->Inst[1], diff );
     }
+
+    chain->PatchedPtr = target;
 }
 
 void Compiler::PatchCalls( PatchChain* chain, U32 addr )
 {
-    for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
+    for ( InstPatch* link = chain->First; link != nullptr; link = link->Next )
     {
-        StoreU24( &link->Inst[2], addr );
+        int offset = 0;
+
+        switch ( link->Inst[0] )
+        {
+        case OP_CALL:   offset = 2; break;
+        case OP_LDC:    offset = 1; break;
+        default:        assert( false ); break;
+        }
+
+        StoreU24( &link->Inst[offset], addr );
     }
 }
 
-void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateUnaryPrimitive( Syntax* elem, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -1237,95 +1484,259 @@ void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, G
     }
     else
     {
-        Generate( elem );
-
         mCodeBinPtr[0] = OP_LDC_S;
         mCodeBinPtr[1] = 0;
-        mCodeBinPtr[2] = OP_CALLP;
-        mCodeBinPtr[3] = PRIM_SUB;
-        mCodeBinPtr += 4;
+        mCodeBinPtr += 2;
+
+        Generate( elem );
+
+        mCodeBinPtr[0] = OP_PRIM;
+        mCodeBinPtr[1] = PRIM_SUB;
+        mCodeBinPtr += 2;
+
+        IncreaseExprDepth();
+        DecreaseExprDepth();
     }
 }
 
-void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
-        GenerateDiscard( list->Elements[2].get() );
-        GenerateDiscard( list->Elements[1].get() );
+        GenerateDiscard( binary->Left.get() );
+        GenerateDiscard( binary->Right.get() );
         status.discarded = true;
     }
     else
     {
-        Generate( list->Elements[2].get() );
-        Generate( list->Elements[1].get() );
+        Generate( binary->Left.get() );
+        Generate( binary->Right.get() );
 
-        mCodeBinPtr[0] = OP_CALLP;
+        mCodeBinPtr[0] = OP_PRIM;
         mCodeBinPtr[1] = primitive;
         mCodeBinPtr += 2;
+
+        DecreaseExprDepth();
     }
+}
+
+void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
+{
+    if ( indexExpr->Head->Kind != SyntaxKind::Name )
+        mRep.ThrowError( CERR_SEMANTICS, indexExpr, "Only named arrays can be indexed" );
+
+    Generate( indexExpr->Index.get() );
+
+    auto symbol = (NameExpr*) indexExpr->Head.get();
+    uint32_t addrWord;
+
+    auto decl = symbol->Decl.get();
+
+    if ( decl == nullptr )
+    {
+        mRep.ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+    }
+    else
+    {
+        switch ( decl->Kind )
+        {
+        case DeclKind::Global:
+            addrWord = CodeAddr::Build( ((Storage*) decl)->Offset, mModIndex );
+            mCodeBinPtr[0] = OP_LDC;
+            mCodeBinPtr++;
+            WriteU32( mCodeBinPtr, addrWord );
+            break;
+
+        case DeclKind::Local:
+            mCodeBinPtr[0] = OP_LDLOCA;
+            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+            mCodeBinPtr += 2;
+            break;
+
+        default:
+            mRep.ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals and locals" );
+        }
+    }
+
+    IncreaseExprDepth();
+
+    mCodeBinPtr[0] = OP_PRIM;
+    mCodeBinPtr[1] = PRIM_ADD;
+    mCodeBinPtr += 2;
+
+    DecreaseExprDepth();
+}
+
+void Compiler::GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status )
+{
+    if ( config.discard )
+    {
+        status.discarded = true;
+        return;
+    }
+
+    GenerateArrayElementRef( indexExpr );
+
+    mCodeBinPtr[0] = OP_LOADI;
+    mCodeBinPtr++;
+
+    DecreaseExprDepth();
+    IncreaseExprDepth();
+}
+
+void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
+{
+    GenerateAref( indexExpr, Config(), Status() );
+}
+
+void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )
+{
+    auto global = (Storage*) varDecl->GetDecl();
+    auto type = global->Type.get();
+
+    if ( type->GetKind() == TypeKind::Int
+        || type->GetKind() == TypeKind::Pointer )
+    {
+        if ( varDecl->Initializer != nullptr )
+        {
+            AddGlobalData( global->Offset, varDecl->Initializer.get() );
+        }
+    }
+    else if ( type->GetKind() == TypeKind::Array )
+    {
+        auto arrayType = (ArrayType*) type;
+
+        if ( varDecl->Initializer != nullptr )
+        {
+            AddGlobalDataArray( global, varDecl->Initializer.get(), arrayType->Size );
+        }
+    }
+    else
+    {
+        mRep.ThrowError( CERR_SEMANTICS, varDecl, "'defvar' takes a name or name and type" );
+    }
+}
+
+void Compiler::VisitVarDecl( VarDecl* varDecl )
+{
+    GenerateDefvar( varDecl, Config(), Status() );
+}
+
+void Compiler::AddGlobalData( U32 offset, Syntax* valueElem )
+{
+    mGlobals[offset] = GetSyntaxValue( valueElem, "Globals must be initialized with constant data" );
+}
+
+void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size )
+{
+    if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
+        mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+
+    size_t i = 0;
+
+    auto initList = (InitList*) valueElem;
+
+    for ( auto& entry : initList->Values )
+    {
+        if ( i == size )
+            mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+
+        AddGlobalData( global->Offset + i, entry.get() );
+        i++;
+    }
+
+    I32 prevValue = 0;
+    I32 step = 0;
+
+    if ( initList->HasExtra )
+    {
+        if ( i >= 1 )
+            prevValue = mGlobals[global->Offset + i - 1];
+
+        if ( i >= 2 )
+            step = prevValue - mGlobals[global->Offset + i - 2];
+    }
+
+    for ( ; i < size; i++ )
+    {
+        I32 newValue = prevValue + step;
+
+        mGlobals[global->Offset + i] = newValue;
+        prevValue = newValue;
+    }
+}
+
+void Compiler::VisitConstDecl( ConstDecl* constDecl )
+{
+    // Nothing
+}
+
+void Compiler::VisitNativeDecl( NativeDecl* nativeDecl )
+{
+    // Nothing
+}
+
+void Compiler::VisitNameTypeRef( NameTypeRef* nameTypeRef )
+{
+    // Nothing
+}
+
+void Compiler::VisitPointerTypeRef( PointerTypeRef* pointerTypeRef )
+{
+    // Nothing
+}
+
+void Compiler::VisitProcTypeRef( ProcTypeRef* procTypeRef )
+{
+    // Nothing
 }
 
 void Compiler::GenerateLambdas()
 {
-    for ( auto it = mLambdas.begin(); it != mLambdas.end(); it++ )
+    long i = 0;
+
+    for ( auto it = mLambdas.begin(); it != mLambdas.end(); it++, i++ )
     {
         int address = mCodeBinPtr - mCodeBin;
-        StoreU32( it->Patch, address );
-        GenerateProc( it->Definition, 1 );
+        int addrWord = CodeAddr::Build( address, mModIndex );
+        StoreU32( it->Patch, addrWord );
+
+        auto func = (Function*) it->Definition->GetDecl();
+
+        func->Address = address;
+
+        GenerateProc( it->Definition, func );
     }
 }
 
-void Compiler::GenerateProc( Slist* list, int startIndex )
+void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
 {
-    assert( (size_t) startIndex < list->Elements.size() );
+    mInFunc = true;
+    mCurFunc = func;
 
-    const size_t ArgsIndex = startIndex;
-    const size_t BodyIndex = startIndex + 1;
+    constexpr uint8_t PushInstSize = 2;
 
-    SymTable argTable;
-
-    mSymStack.push_back( &argTable );
-
-    if ( list->Elements[ArgsIndex]->Code != Elem_Slist )
-        ThrowError( CERR_SEMANTICS, list->Elements[ArgsIndex].get(), "function parameter list is missing" );
-
-    Slist* arglist = (Slist*) list->Elements[ArgsIndex].get();
-
-    for ( size_t i = 0; i < arglist->Elements.size(); i++ )
-    {
-        if ( arglist->Elements[i]->Code != Elem_Symbol )
-            ThrowError( CERR_UNSUPPORTED, arglist->Elements[i].get(), "only simple parameters are supported" );
-
-        Symbol* argSym = (Symbol*) arglist->Elements[i].get();
-        AddArg( argTable, argSym->String, argTable.size() );
-    }
-
-    bool hasLocals = false;
+    U8* bodyPtr = mCodeBinPtr;
     U8* pushCountPatch = nullptr;
 
-    for ( size_t i = BodyIndex; i < list->Elements.size(); i++ )
-    {
-        if ( HasLocals( list->Elements[i].get() ) )
-        {
-            hasLocals = true;
-            break;
-        }
-    }
+    // Assume that there are local variables
+    *mCodeBinPtr = OP_PUSH;
+    mCodeBinPtr++;
+    pushCountPatch = mCodeBinPtr;
+    mCodeBinPtr++;
 
-    if ( hasLocals )
-    {
-        *mCodeBinPtr = OP_PUSH;
-        mCodeBinPtr++;
-        pushCountPatch = mCodeBinPtr;
-        mCodeBinPtr++;
-    }
+    mCurExprDepth = 0;
+    mMaxExprDepth = 0;
+    mLocalAddrRefs.clear();
 
-    mMaxLocalCount = 0;
-    mCurLocalCount = 0;
+    GenConfig config = GenConfig::Statement();
+    GenStatus status = { ExprKind::Other };
 
-    GenStatus status = { Expr_Other };
-    GenerateImplicitProgn( list, BodyIndex, GenConfig::Statement(), status );
+    mGenStack.push_back( { config, status } );
+
+    procDecl->Body.Accept( this );
+
+    mGenStack.pop_back();
 
     if ( !status.tailRet )
     {
@@ -1333,209 +1744,307 @@ void Compiler::GenerateProc( Slist* list, int startIndex )
         mCodeBinPtr += 1;
     }
 
-    if ( hasLocals )
-        *pushCountPatch = mMaxLocalCount;
-
-    mSymStack.pop_back();
-}
-
-void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status )
-{
-    for ( size_t i = startIndex; i < list->Elements.size() - 1; i++ )
+    if ( func->LocalCount > 0 )
     {
-        GenerateDiscard( list->Elements[i].get() );
-    }
-
-    if ( list->Elements.size() > (size_t) startIndex )
-    {
-        Generate( list->Elements.back().get(), config, status );
+        *pushCountPatch = (uint8_t) func->LocalCount;
     }
     else
     {
-        if ( config.discard )
+        // No locals. So, delete the PUSH instruction
+        memmove( bodyPtr, bodyPtr + PushInstSize, (mCodeBinPtr - bodyPtr) - PushInstSize );
+        mCodeBinPtr -= PushInstSize;
+
+        // If local lambda references were generated, then shift them
+        // This also includes references to any function
+        for ( auto ref : mLocalAddrRefs )
         {
-            status.discarded = true;
-        }
-        else
-        {
-            mCodeBinPtr[0] = OP_LDC_S;
-            mCodeBinPtr[1] = 0;
-            mCodeBinPtr += 2;
-        }
-    }
-}
+            U8** ppInst = nullptr;
 
-bool Compiler::HasLocals( Element* elem )
-{
-    if ( elem->Code != Elem_Slist )
-        return false;
-
-    Slist* list = (Slist*) elem;
-
-    if ( list->Elements.size() == 0 )
-        return false;
-
-    if ( list->Elements[0]->Code == Elem_Symbol )
-    {
-        auto* op = (Symbol*) list->Elements[0].get();
-        if ( op->String == "let" )
-            return true;
-        else if ( op->String == "lambda" )
-            return false;
-    }
-
-    for ( size_t i = 0; i < list->Elements.size(); i++ )
-    {
-        if ( HasLocals( list->Elements[i].get() ) )
-            return true;
-    }
-
-    return false;
-}
-
-Compiler::Declaration* Compiler::FindSymbol( const std::string& symbol )
-{
-    for ( auto stackIt = mSymStack.rbegin(); stackIt != mSymStack.rend(); stackIt++ )
-    {
-        auto tableIt = (*stackIt)->find( symbol );
-        if ( tableIt != (*stackIt)->end() )
-            return tableIt->second.get();
-    }
-
-    int offset = 0;
-
-    if ( mEnv->FindGlobal( symbol, offset ) )
-    {
-        static Storage dummy;
-        dummy.Kind = Decl_Global;
-        dummy.Offset = offset;
-        return &dummy;
-    }
-
-    return nullptr;
-}
-
-Compiler::Storage* Compiler::AddArg( SymTable& table, const std::string& name, int offset )
-{
-    auto* arg = new Storage();
-    arg->Kind = Decl_Arg;
-    arg->Offset = offset;
-    table.insert( SymTable::value_type( name, arg ) );
-    return arg;
-}
-
-Compiler::Function* Compiler::AddFunc( const std::string& name, int address )
-{
-    auto* func = new Function();
-    func->Kind = Decl_Func;
-    func->Name = name;
-    func->Address = address;
-    mGlobalTable.insert( SymTable::value_type( name, func ) );
-    return func;
-}
-
-Compiler::Function* Compiler::AddForward( const std::string& name )
-{
-    auto* func = new Function();
-    func->Kind = Decl_Forward;
-    func->Name = name;
-    func->Address = 0;
-    mGlobalTable.insert( SymTable::value_type( name, func ) );
-    return func;
-}
-
-Compiler::Storage* Compiler::AddLocal( SymTable& table, const std::string& name, int offset )
-{
-    auto* local = new Storage();
-    local->Kind = Decl_Local;
-    local->Offset = offset;
-    table.insert( SymTable::value_type( name, local ) );
-    return local;
-}
-
-Compiler::ConstDecl* Compiler::AddConst( const std::string& name, int value )
-{
-    auto* constant = new ConstDecl();
-    constant->Kind = Decl_Const;
-    constant->Value = value;
-    mConstTable.insert( SymTable::value_type( name, constant ) );
-    return constant;
-}
-
-void Compiler::MakeStdEnv()
-{
-    AddConst( "#f", 0 );
-    AddConst( "#t", 1 );
-}
-
-void Compiler::ThrowSyntaxError( const char* format, ... )
-{
-    if ( mLog != nullptr )
-    {
-        va_list args;
-        va_start( args, format );
-        Log( LOG_ERROR, mTokLine, mTokCol, format, args );
-        va_end( args );
-    }
-
-    throw CompilerException( CERR_SYNTAX );
-}
-
-void Compiler::ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... )
-{
-    if ( mLog != nullptr )
-    {
-        int line = 0;
-        int col = 0;
-
-        if ( elem != nullptr )
-        {
-            line = elem->Line;
-            col = elem->Column;
-        }
-
-        va_list args;
-        va_start( args, format );
-        Log( LOG_ERROR, line, col, format, args );
-        va_end( args );
-    }
-
-    throw CompilerException( exceptionCode );
-}
-
-void Compiler::Log( LogCategory category, int line, int col, const char* format, va_list args )
-{
-    if ( mLog != nullptr )
-    {
-        char msg[256] = "";
-        vsprintf_s( msg, format, args );
-        mLog->Add( category, line, col, msg );
-    }
-}
-
-void Compiler::ThrowInternalError()
-{
-    if ( mLog != nullptr )
-        mLog->Add( LOG_ERROR, mLine, GetColumn(), "internal error" );
-
-    throw CompilerException( CERR_INTERNAL );
-}
-
-void Compiler::ThrowUnresolvedFuncsError()
-{
-    if ( mLog != nullptr )
-    {
-        char msg[256] = "";
-
-        for ( auto it = mGlobalTable.begin(); it != mGlobalTable.end(); it++ )
-        {
-            if ( it->second->Kind == Decl_Forward )
+            switch ( ref.Kind )
             {
-                sprintf_s( msg, "unresolved function: %s", it->first.c_str() );
-                mLog->Add( LOG_ERROR, 0, 0, msg );
+            case AddrRefKind::Lambda:
+                ppInst = &mLambdas[ref.LambdaIndex].Patch;
+                break;
+
+            case AddrRefKind::Inst:
+                ppInst = ref.InstPtr;
+                break;
+
+            default:
+                mRep.ThrowInternalError();
+            }
+
+            *ppInst -= PushInstSize;
+        }
+    }
+
+    func->ExprDepth = mMaxExprDepth;
+
+    mCurFunc = nullptr;
+    mInFunc = false;
+}
+
+void Compiler::GenerateImplicitProgn( StatementList* stmtList, const GenConfig& config, GenStatus& status )
+{
+    for ( int i = 0; i < (int) stmtList->Statements.size() - 1; i++ )
+    {
+        GenerateDiscard( stmtList->Statements[i].get() );
+    }
+
+    if ( stmtList->Statements.size() >= 1 )
+    {
+        Generate( stmtList->Statements.back().get(), config, status );
+    }
+    else    // There are no expressions
+    {
+        GenerateNilIfNeeded( config, status );
+    }
+}
+
+void Compiler::VisitStatementList( StatementList* stmtList )
+{
+    GenerateImplicitProgn( stmtList, Config(), Status() );
+}
+
+void Compiler::GenerateStatements( StatementList* list, const GenConfig& config, GenStatus& status )
+{
+    for ( auto& node : list->Statements )
+    {
+        GenerateDiscard( node.get(), config );
+    }
+}
+
+void Compiler::GenerateNilIfNeeded( const GenConfig& config, GenStatus& status )
+{
+    if ( config.discard )
+    {
+        status.discarded = true;
+    }
+    else
+    {
+        mCodeBinPtr[0] = OP_LDC_S;
+        mCodeBinPtr[1] = 0;
+        mCodeBinPtr += 2;
+
+        IncreaseExprDepth();
+    }
+}
+
+const Compiler::GenConfig& Compiler::Config() const
+{
+    assert( mGenStack.size() >= 1 );
+    return mGenStack.back().config;
+}
+
+Compiler::GenStatus& Compiler::Status()
+{
+    assert( mGenStack.size() >= 1 );
+    return mGenStack.back().status;
+}
+
+void Compiler::GenerateSentinel()
+{
+    for ( int i = 0; i < SENTINEL_SIZE; i++ )
+    {
+        mCodeBinPtr[i] = OP_SENTINEL;
+    }
+
+    mCodeBinPtr += SENTINEL_SIZE;
+}
+
+I32 Compiler::GetSyntaxValue( Syntax* node, const char* message )
+{
+    auto optValue = GetOptionalSyntaxValue( node );
+
+    if ( optValue.has_value() )
+        return optValue.value();
+
+    if ( message != nullptr )
+        mRep.ThrowError( CERR_SEMANTICS, node, message );
+    else
+        mRep.ThrowError( CERR_SEMANTICS, node, "Expected a constant value" );
+}
+
+void Compiler::IncreaseExprDepth()
+{
+    mCurExprDepth++;
+
+    if ( mMaxExprDepth < mCurExprDepth )
+        mMaxExprDepth = mCurExprDepth;
+}
+
+void Compiler::DecreaseExprDepth( int amount )
+{
+    assert( amount >= 0 );
+    assert( amount <= mCurExprDepth );
+
+    mCurExprDepth -= amount;
+}
+
+void Compiler::CalculateStackDepth()
+{
+    mStats.Lambda = {};
+    mStats.Static = {};
+    mStats.CallsIndirectly = false;
+
+    for ( const auto& [name, decl] : mGlobalTable )
+    {
+        if ( decl->Kind == DeclKind::Func )
+        {
+            Function*  func = (Function*) decl.get();
+            CallStats* callStats;
+
+            CalculateStackDepth( func );
+
+            if ( name._Starts_with( "$Lambda$" ) )
+            {
+                callStats = &mStats.Lambda;
+            }
+            else
+            {
+                callStats = &mStats.Static;
+
+                if ( func->CallsIndirectly )
+                    mStats.CallsIndirectly = true;
+            }
+
+            // Only count parameters of publics, if that's ever a distinction
+
+            int16_t stackUsage = func->TreeStackUsage + func->ArgCount;
+
+            callStats->MaxCallDepth  = std::max( callStats->MaxCallDepth,  func->CallDepth );
+            callStats->MaxStackUsage = std::max( callStats->MaxStackUsage, stackUsage );
+
+            if ( func->IsRecursive )
+                callStats->Recurses = true;
+        }
+    }
+}
+
+void Compiler::CalculateStackDepth( Function* func )
+{
+    if ( func->IsDepthKnown )
+        return;
+
+    if ( func->IsCalculating )
+    {
+        func->IsRecursive = true;
+        return;
+    }
+
+    // TODO: Put Machine::FRAME_WORDS somewhere common, and use it here.
+
+    func->IsCalculating = true;
+    func->IndividualStackUsage = 2 + func->LocalCount + func->ExprDepth;
+
+    int16_t maxChildDepth = 0;
+    int16_t maxChildStackUsage = 0;
+
+    for ( const auto& name : func->CalledFunctions )
+    {
+        if ( auto it = mGlobalTable.find( name );
+            it != mGlobalTable.end() )
+        {
+            if ( it->second->Kind != DeclKind::Func )
+                continue;
+
+            auto childFunc = (Function*) it->second.get();
+
+            CalculateStackDepth( childFunc );
+
+            maxChildDepth = std::max( maxChildDepth, childFunc->CallDepth );
+            maxChildStackUsage = std::max( maxChildStackUsage, childFunc->TreeStackUsage );
+
+            if ( childFunc->CallsIndirectly )
+                func->CallsIndirectly = true;
+
+            if ( childFunc->IsRecursive )
+            {
+                func->IsRecursive = true;
+                break;
             }
         }
     }
 
-    ThrowError( CERR_SEMANTICS, nullptr, "there are %d unresolved functions", mForwards );
+    func->IsCalculating = false;
+    func->IsDepthKnown = true;
+    func->CallDepth = 1 + maxChildDepth;
+    func->TreeStackUsage = func->IndividualStackUsage + maxChildStackUsage;
+}
+
+
+//----------------------------------------------------------------------------
+
+void Log( ICompilerLog* log, LogCategory category, const char* fileName, int line, int col, const char* format, va_list args );
+
+
+Reporter::Reporter( ICompilerLog* log ) :
+    mLog( log )
+{
+    assert( log != nullptr );
+}
+
+ICompilerLog* Reporter::GetLog()
+{
+    return mLog;
+}
+
+void Reporter::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... )
+{
+    va_list args;
+    va_start( args, format );
+    const char* fileName = nullptr;
+    int line = 0;
+    int column = 0;
+    if ( elem != nullptr )
+    {
+        fileName = elem->FileName;
+        line = elem->Line;
+        column = elem->Column;
+    }
+    ThrowError( exceptionCode, fileName, line, column, format, args );
+    va_end( args );
+}
+
+void Reporter::ThrowError( CompilerErr exceptionCode, const char* fileName, int line, int col, const char* format, va_list args )
+{
+    Log( LOG_ERROR, fileName, line, col, format, args );
+    throw CompilerException( exceptionCode );
+}
+
+void Reporter::ThrowInternalError()
+{
+    ThrowInternalError( "Internal error" );
+}
+
+void Reporter::ThrowInternalError( const char* format, ... )
+{
+    va_list args;
+    va_start( args, format );
+    ThrowError( CERR_INTERNAL, 0, 0, format, args );
+    va_end( args );
+}
+
+void Reporter::Log( LogCategory category, const char* fileName, int line, int col, const char* format, va_list args )
+{
+    ::Log( mLog, category, fileName, line, col, format, args );
+}
+
+void Reporter::LogWarning( const char* fileName, int line, int col, const char* format, ... )
+{
+    va_list args;
+    va_start( args, format );
+    Log( LOG_WARNING, fileName, line, col, format, args );
+    va_end( args );
+}
+
+
+void Log( ICompilerLog* log, LogCategory category, const char* fileName, int line, int col, const char* format, va_list args )
+{
+    if ( log != nullptr )
+    {
+        char msg[256] = "";
+        vsprintf_s( msg, format, args );
+        log->Add( category, fileName, line, col, msg );
+    }
 }

@@ -1,0 +1,428 @@
+var @0 := 0
+var @1 := 0
+var @2 := 0
+var @3 := 0
+
+def None
+end
+
+def Talk
+    ShowDialog( @1, 0 )
+end
+
+def TalkIfEvent
+    if HasEventFlag( @0 ) then
+        ShowDialog( @2, 0 )
+    else
+        ShowDialog( @1, 0 )
+    end
+end
+
+def TalkIfVisible
+    if IsObjectVisible( @0 ) then
+        ShowDialog( @2, 0 )
+    else
+        ShowDialog( @1, 0 )
+    end
+end
+
+def TalkIfItem
+    if not HasItem( @0 ) then
+        ShowDialog( @2, 0 )
+    else
+        ShowDialog( @1, 0 )
+    end
+end
+
+def TalkFight
+    SetObjectVisible( @0, false )
+    ShowDialog( @1, 0 )
+    Fight( @3 )
+end
+
+def Replace
+    SetObjectVisible( @0, false )
+    SetObjectVisible( @3, true )
+    ShowDialog( @1, 0 )
+end
+
+def _4Orb
+    if HasItem( 20 ) and HasItem( 21 ) and HasItem( 18 ) and HasItem( 19 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def KingConeria
+    if not IsObjectVisible( 18 ) then
+        ShowDialog( @1, 0 )
+    elsif not HasWorldEventFlag( 0 ) then
+        SetWorldEventFlag( 0, true )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    else
+        ShowDialog( @3, 0 )
+    end
+end
+
+def Garland
+    SetObjectVisible( 2, false )
+    ShowDialog( @1, 0 )
+    Fight( 127 )
+end
+
+def Princess1
+    SetObjectVisible( 3, false )
+    SetObjectVisible( 18, true )
+    ShowDialog( @1, 0 )
+    FadeOut( 15 )
+    SwapMap( 24, 12, 7, 1 )
+    MakeAllObjects()
+    PlayDefaultSong()
+    FadeIn( 15 )
+end
+
+def Bikke
+    if not HasEventFlag( 4 ) then
+        SetEventFlag( 4, true )
+        ShowDialog( @1, 0 )
+        Fight( 126 )
+    elsif not HasWorldEventFlag( 3 ) then
+        SetWorldEventFlag( 3, true )
+        SetObjectVisible( 63, true )
+        SetObjectVisible( 64, true )
+        SetObjectVisible( 65, true )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    else
+        ShowDialog( @3, 0 )
+    end
+end
+
+def ElfDoc
+    if HasEventFlag( 6 ) then
+        ShowDialog( @3, 0 )
+    elsif not HasItem( 4 ) then
+        ShowDialog( @1, 0 )
+    else
+        RemoveItem( 4, 1 )
+        SetEventFlag( 6, true )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    end
+end
+
+def ElfPrince
+    if not HasEventFlag( 6 ) then
+        ShowDialog( @3, 0 )
+    elsif HasItem( 5 ) then
+        ShowDialog( @2, 0 )
+    else
+        AddItem( 5, 1 )
+        PlayFanfare()
+        ShowDialog( @1, 0 )
+    end
+end
+
+def Astos
+    if not HasItem( 2 ) then
+        ShowDialog( @1, 0 )
+    else
+        AddItem( 3, 1 )
+        SetObjectVisible( 7, false )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+        Fight( 125 )
+    end
+end
+
+def Nerrick
+    if not HasItem( 6 ) then
+        ShowDialog( @1, 0 )
+    else
+        RemoveItem( 6, 1 )
+        SetWorldEventFlag( 1, false )
+        SetObjectVisible( 8, false )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    end
+end
+
+def Smith
+    if HasEventFlag( 9 ) then
+        ShowDialog( @3, 0 )
+    elsif not HasItem( 7 ) then
+        ShowDialog( @1, 0 )
+    else
+        AddItem( 66, 1 )
+        SetEventFlag( 9, true )
+        RemoveItem( 7, 1 )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    end
+end
+
+def Matoya
+    if HasItem( 4 ) then
+        ShowDialog( @3, 0 )
+    else
+        if not HasItem( 3 ) then
+            if not HasEventFlag( 6 ) then
+                ShowDialog( @1, 0 )
+            else
+                ShowDialog( @3, 0 )
+            end
+        else
+            RemoveItem( 3, 1 )
+            AddItem( 4, 1 )
+            PlayFanfare()
+            ShowDialog( @2, 0 )
+        end
+    end
+end
+
+def Unne
+    if HasEventFlag( 11 ) then
+        ShowDialog( @3, 0 )
+    elsif not HasItem( 8 ) then
+        ShowDialog( @1, 0 )
+    else
+        RemoveItem( 8, 1 )
+        SetEventFlag( 11, true )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    end
+end
+
+def Vampire
+    SetObjectVisible( 12, false )
+    ShowDialog( @1, 0 )
+    Fight( 124 )
+end
+
+def Sarda
+    if not HasItem( 10 ) and not IsObjectVisible( 12 ) then
+        AddItem( 10, 1 )
+        PlayFanfare()
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def Bahamut
+    if HasEventFlag( 14 ) then
+        ShowDialog( @3, 0 )
+    elsif not HasItem( 13 ) then
+        ShowDialog( @1, 0 )
+    else
+        RemoveItem( 13, 1 )
+        SetEventFlag( 14, true )
+        UpgradeClass()
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    end
+end
+
+def SubEng
+    if not HasItem( 16 ) then
+        ShowDialog( @1, 0 )
+    else
+        SetObjectVisible( 16, false )
+        ShowDialog( @2, 0 )
+    end
+end
+
+def CubeBot
+    if HasItem( 14 ) then
+        ShowDialog( @2, 0 )
+    else
+        AddItem( 14, 1 )
+        PlayFanfare()
+        ShowDialog( @1, 0 )
+    end
+end
+
+def Princess2
+    if HasItem( 1 ) then
+        ShowDialog( @2, 0 )
+    else
+        AddItem( 1, 1 )
+        PlayFanfare()
+        ShowDialog( @1, 0 )
+    end
+end
+
+def Fairy
+    if HasItem( 16 ) then
+        ShowDialog( @2, 0 )
+    else
+        AddItem( 16, 1 )
+        PlayFanfare()
+        ShowDialog( @1, 0 )
+    end
+end
+
+def Titan
+    if not HasItem( 9 ) then
+        ShowDialog( @1, 0 )
+    else
+        RemoveItem( 9, 1 )
+        SetObjectVisible( 20, false )
+        PlayFanfare()
+        ShowDialog( @2, 0 )
+    end
+end
+
+def CanoeSage
+    if not HasWorldEventFlag( 2 ) and HasItem( 21 ) then
+        AddItem( 17, 1 )
+        SetWorldEventFlag( 2, true )
+        PlayFanfare()
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def IfBridge
+    if HasWorldEventFlag( 0 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def GoBridge
+    if IsObjectVisible( 18 ) and not HasWorldEventFlag( 0 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def Invis
+    if not IsObjectVisible( 18 ) and not HasItem( 1 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def IfCanoe
+    if HasWorldEventFlag( 2 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def IfCanal
+    if not HasWorldEventFlag( 1 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def IfKeyTnt
+    if HasItem( 5 ) and not HasItem( 6 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def IfAirship
+    if not HasWorldEventFlag( 4 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def IfEarthVamp
+    if not IsObjectVisible( 12 ) and not HasItem( 21 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def CoOGuy
+    SetObjectVisible( @0, false )
+    ShowDialog( @1, 0 )
+end
+
+def IfEarthFire
+    if HasItem( 21 ) and not HasItem( 18 ) then
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def CubeBotBad
+    if HasItem( 14 ) then
+        ShowDialog( @2, 0 )
+    else
+        AddItem( 14, 1 )
+        ShowDialog( @1, 0 )
+    end
+end
+
+def Chime
+    if not HasEventFlag( 11 ) then
+        ShowDialog( @3, 0 )
+    elsif HasItem( 12 ) then
+        ShowDialog( @2, 0 )
+    else
+        AddItem( 12, 1 )
+        PlayFanfare()
+        ShowDialog( @1, 0 )
+    end
+end
+
+def BlackOrb
+    if HasItem( 20 ) and HasItem( 21 ) and HasItem( 18 ) and HasItem( 19 ) then
+        SetObjectVisible( 202, false )
+        PlayGotItem()
+        ShowDialog( @1, 0 )
+    else
+        ShowDialog( @2, 0 )
+    end
+end
+
+def SampleMovement
+    StartTrack( 0,
+        lambda ()
+            Turn( 1 )
+            Pause( 60 )
+            Turn( 3 )
+            Pause( 60 )
+            Turn( 2 )
+            Pause( 60 )
+            Turn( 4 )
+        end
+    )
+    StartTrack( 1, lambda () Turn( 3 ) end )
+
+    Join()
+    ShowDialog( 10, 0 )
+    Fight( 1 )
+    Pause( 15 )
+    PushSong( 19 )
+    ShowDialog( 20, 0 )
+    UpgradeClass()
+    Pause( 60 )
+    SwapMap( 12, 32, 30, 0 )
+    MakeAllObjects()
+    PlayDefaultSong()
+    SetObjectVisible( 255, true )
+
+    if IsObjectVisible( 255 ) then AddItem( 25, 10 ) end
+    if HasItem( 25 ) then RemoveItem( 25, 3 ) end
+    SetEventFlag( 255, true )
+    if HasEventFlag( 255 ) then AddItem( 17, 1 ) end
+end

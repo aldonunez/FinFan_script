@@ -933,7 +933,7 @@ namespace ExtractRes
         {
             string compilerPath = options.MakeOutPath( "GeminiC.exe" );
             string thisPath = Path.GetDirectoryName( Process.GetCurrentProcess().MainModule.FileName );
-            string scriptFile = Path.Combine( thisPath, @"Data\ObjEvents.gem" );
+            string scriptFile = Path.Combine( thisPath, @"Data\ObjEvents.gema" );
             string outBin = options.MakeOutPath( "objEvents.prg" );
             string outIndex = options.MakeOutPath( "objEvents.prgidx" );
             string args = string.Format( "\"{0}\" \"{1}\" \"{2}\"", scriptFile, outBin, outIndex );
