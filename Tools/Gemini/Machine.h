@@ -12,16 +12,13 @@ enum
     ERR_BAD_OPCODE,
     ERR_BAD_ADDRESS,
     ERR_STACK_OVERFLOW,
+    ERR_STACK_UNDERFLOW,
     ERR_BYTECODE_NOT_FOUND,
     ERR_NATIVECODE_NOT_FOUND,
     ERR_DIVIDE,
     ERR_NATIVE_ERROR,
 };
 
-enum
-{
-    ADDRESS_MAX = 0xFFFFFF,
-};
 
 typedef I32 CELL;
 typedef uintptr_t UserContext;
@@ -55,9 +52,9 @@ public:
 
 struct StackFrame
 {
-    StackFrame*     Prev;
-    U32             RetAddrWord;
+    U16             FrameAddr;
     U8              CallFlags;
+    U32             RetAddrWord;
 };
 
 class Machine : private IEnvironment
@@ -75,10 +72,10 @@ public:
     };
 
 private:
+    CELL*           mGlobals;
     CELL*           mStack;
     U16             mStackSize;
-    CELL*           mGlobals;
-    StackFrame*     mCurFrame;
+    U16             mFramePtr;
     CELL*           mSP;
     IEnvironment*   mEnv;
     UserContext     mScriptCtx;

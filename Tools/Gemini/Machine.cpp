@@ -25,20 +25,20 @@ bfalse, btrue <int8>
 */
 
 
-Machine::Machine()
-    :   mCurFrame( nullptr ),
-        mGlobals( nullptr ),
-        mStack( nullptr ),
-        mStackSize( 0 ),
-        mSP( nullptr ),
-        mEnv( nullptr ),
-        mScriptCtx( 0 ),
-        mNativeContinuation( nullptr ),
-        mNativeContinuationContext( 0 ),
-        mNativeContinuationFlags( 0 ),
-        mMod(),
-        mModIndex(),
-        mPC()
+Machine::Machine() :
+    mGlobals( nullptr ),
+    mStack( nullptr ),
+    mStackSize( 0 ),
+    mFramePtr(),
+    mSP( nullptr ),
+    mEnv( nullptr ),
+    mScriptCtx( 0 ),
+    mNativeContinuation( nullptr ),
+    mNativeContinuationContext( 0 ),
+    mNativeContinuationFlags( 0 ),
+    mMod(),
+    mModIndex(),
+    mPC()
 {
 }
 
@@ -63,11 +63,12 @@ void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, UserContext scrip
     mStackSize = stackSize;
     mSP = &stack[stackSize - 1];
     mScriptCtx = scriptCtx;
+    mFramePtr = mStackSize;
 }
 
 bool Machine::IsRunning()
 {
-    return mCurFrame != nullptr;
+    return mFramePtr < mStackSize;
 }
 
 UserContext Machine::GetScriptContext()
@@ -104,7 +105,7 @@ CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
 void Machine::Reset()
 {
     mSP = &mStack[mStackSize - 1];
-    mCurFrame = nullptr;
+    mFramePtr = mStackSize;
 }
 
 int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
@@ -153,7 +154,7 @@ int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
 
 int Machine::Run()
 {
-    if ( mCurFrame == nullptr )
+    if ( mFramePtr >= mStackSize )
         return ERR_NOT_RUNING;
 
     if ( mNativeContinuation != nullptr )
@@ -210,7 +211,7 @@ int Machine::Run()
             {
                 int index = *(U8*) codePtr;
                 codePtr++;
-                CELL* args = (CELL*) mCurFrame + FRAME_WORDS;
+                CELL* args = &mStack[mFramePtr + FRAME_WORDS];
                 CELL word = args[index];
                 *mSP = word;
                 mSP--;
@@ -221,7 +222,7 @@ int Machine::Run()
             {
                 int index = *(U8*) codePtr;
                 codePtr++;
-                CELL* args = (CELL*) mCurFrame + FRAME_WORDS;
+                CELL* args = &mStack[mFramePtr + FRAME_WORDS];
                 mSP++;
                 CELL word = *mSP;
                 args[index] = word;
@@ -233,7 +234,7 @@ int Machine::Run()
                 int index = *(U8*) codePtr;
                 codePtr++;
                 index = -index;
-                CELL* localsTop = ((CELL*) mCurFrame) - 1;
+                CELL* localsTop = &mStack[mFramePtr - 1];
                 CELL word = localsTop[index];
                 *mSP = word;
                 mSP--;
@@ -245,7 +246,7 @@ int Machine::Run()
                 int index = *(U8*) codePtr;
                 codePtr++;
                 index = -index;
-                CELL* localsTop = ((CELL*) mCurFrame) - 1;
+                CELL* localsTop = &mStack[mFramePtr - 1];
                 mSP++;
                 CELL word = *mSP;
                 localsTop[index] = word;
@@ -319,7 +320,7 @@ int Machine::Run()
                 int err = PopFrame();
                 if ( err != ERR_NONE )
                     return err;
-                if ( mCurFrame == nullptr )
+                if ( mFramePtr >= mStackSize )
                     goto Done;
 
                 codePtr = mMod->CodeBase + mPC;
@@ -431,30 +432,31 @@ StackFrame* Machine::PushFrame( const U8* curCodePtr, U8 callFlags )
         return nullptr;
 
     mSP -= FRAME_WORDS;
-    auto* frame = (StackFrame*) (mSP + 1);
+    auto frame = (StackFrame*) (mSP + 1);
 
     U32 retAddr = curCodePtr - mMod->CodeBase;
 
     frame->RetAddrWord = CodeAddr::Build( retAddr, mModIndex );
     frame->CallFlags = callFlags;
-    frame->Prev = mCurFrame;
+    frame->FrameAddr = mFramePtr;
 
-    mCurFrame = frame;
+    mFramePtr = (CELL*) frame - mStack;
 
     return frame;
 }
 
 int Machine::PopFrame()
 {
-    bool  autoPop = CallFlags::GetAutoPop( mCurFrame->CallFlags );
-    U8    argCount = CallFlags::GetCount( mCurFrame->CallFlags );
+    auto  curFrame = (StackFrame*) &mStack[mFramePtr];
+    bool  autoPop = CallFlags::GetAutoPop( curFrame->CallFlags );
+    U8    argCount = CallFlags::GetCount( curFrame->CallFlags );
     CELL* oldSP = mSP;
-    CELL* newSP = ((CELL*) mCurFrame) + FRAME_WORDS - 1 + argCount;
+    CELL* newSP = ((CELL*) curFrame) + FRAME_WORDS - 1 + argCount;
 
     if ( newSP >= &mStack[mStackSize] )
-        return ERR_STACK_OVERFLOW;
+        return ERR_STACK_UNDERFLOW;
 
-    U8 newModIndex = CodeAddr::GetModule( mCurFrame->RetAddrWord );
+    U8 newModIndex = CodeAddr::GetModule( curFrame->RetAddrWord );
 
     if ( newModIndex != mModIndex )
     {
@@ -465,12 +467,12 @@ int Machine::PopFrame()
         mModIndex = newModIndex;
     }
 
-    mPC = CodeAddr::GetAddress( mCurFrame->RetAddrWord );
+    mPC = CodeAddr::GetAddress( curFrame->RetAddrWord );
     mSP = newSP;
-    mCurFrame = mCurFrame->Prev;
+    mFramePtr = curFrame->FrameAddr;
 
     if ( (mSP - 1) < mStack )
-        return ERR_STACK_OVERFLOW;
+        return ERR_STACK_UNDERFLOW;
 
     mSP -= 1;
     mSP[1] = oldSP[1];
