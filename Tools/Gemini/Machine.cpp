@@ -61,7 +61,7 @@ void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, UserContext scrip
     mGlobals = globals;
     mStack = stack;
     mStackSize = stackSize;
-    mSP = &stack[stackSize - 1];
+    mSP = &stack[stackSize];
     mScriptCtx = scriptCtx;
     mFramePtr = mStackSize;
 }
@@ -76,12 +76,6 @@ UserContext Machine::GetScriptContext()
     return mScriptCtx;
 }
 
-CELL* Machine::Push( U8 count )
-{
-    mSP -= count;
-    return mSP + 1;
-}
-
 CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
 {
     const Module* module = GetModule( modIndex );
@@ -89,12 +83,18 @@ CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
     if ( module == nullptr )
         return nullptr;
 
-    U8 callFlags = CallFlags::Build( argCount, false );
-    CELL* args = Push( argCount );
+    if ( mSP - mStack < argCount )
+        return nullptr;
+
+    mSP -= argCount;
+
+    CELL* args = mSP;
 
     mPC         = address;
     mMod        = module;
     mModIndex   = modIndex;
+
+    U8 callFlags = CallFlags::Build( argCount, false );
 
     if ( PushFrame( mMod->CodeBase, callFlags ) == nullptr )
         return nullptr;
@@ -104,7 +104,7 @@ CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
 
 void Machine::Reset()
 {
-    mSP = &mStack[mStackSize - 1];
+    mSP = &mStack[mStackSize];
     mFramePtr = mStackSize;
 }
 
@@ -113,7 +113,7 @@ int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
     bool  autoPop = CallFlags::GetAutoPop( callFlags );
     U8    argCount = CallFlags::GetCount( callFlags );
 
-    CELL* args = mSP + 1;
+    CELL* args = mSP;
     CELL* oldSP = mSP;
 
     int ret = proc( this, argCount, args, context );
@@ -127,12 +127,11 @@ int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
 
         if ( resultCount == 0 )
         {
-            *mSP = 0;
-            mSP--;
+            Push( 0 );
         }
         else if ( resultCount == 1 )
         {
-            mSP[1] = newSP[1];
+            mSP[0] = newSP[0];
         }
         else
         {
@@ -182,8 +181,8 @@ int Machine::Run()
         {
         case OP_DUP:
             {
-                *mSP = *(mSP + 1);
                 mSP--;
+                *mSP = *(mSP + 1);
             }
             break;
 
@@ -203,7 +202,7 @@ int Machine::Run()
 
         case OP_NOT:
             {
-                mSP[1] = !mSP[1];
+                mSP[0] = !mSP[0];
             }
             break;
 
@@ -212,9 +211,7 @@ int Machine::Run()
                 int index = *(U8*) codePtr;
                 codePtr++;
                 CELL* args = &mStack[mFramePtr + FRAME_WORDS];
-                CELL word = args[index];
-                *mSP = word;
-                mSP--;
+                Push( args[index] );
             }
             break;
 
@@ -223,9 +220,7 @@ int Machine::Run()
                 int index = *(U8*) codePtr;
                 codePtr++;
                 CELL* args = &mStack[mFramePtr + FRAME_WORDS];
-                mSP++;
-                CELL word = *mSP;
-                args[index] = word;
+                args[index] = Pop();
             }
             break;
 
@@ -235,9 +230,7 @@ int Machine::Run()
                 codePtr++;
                 index = -index;
                 CELL* localsTop = &mStack[mFramePtr - 1];
-                CELL word = localsTop[index];
-                *mSP = word;
-                mSP--;
+                Push( localsTop[index] );
             }
             break;
 
@@ -247,9 +240,7 @@ int Machine::Run()
                 codePtr++;
                 index = -index;
                 CELL* localsTop = &mStack[mFramePtr - 1];
-                mSP++;
-                CELL word = *mSP;
-                localsTop[index] = word;
+                localsTop[index] = Pop();
             }
             break;
 
@@ -257,25 +248,21 @@ int Machine::Run()
             {
                 U16 addr = ReadU16( codePtr );
                 CELL word = mGlobals[addr];
-                *mSP = word;
-                mSP--;
+                Push( word );
             }
             break;
 
         case OP_STGLO:
             {
                 U16 addr = ReadU16( codePtr );
-                mSP++;
-                CELL word = *mSP;
-                mGlobals[addr] = word;
+                mGlobals[addr] = Pop();
             }
             break;
 
         case OP_LDC:
             {
                 CELL word = ReadI32( codePtr );
-                *mSP = word;
-                mSP--;
+                Push( word );
             }
             break;
 
@@ -283,8 +270,7 @@ int Machine::Run()
             {
                 CELL word = *(I8*) codePtr;
                 codePtr += 1;
-                *mSP = word;
-                mSP--;
+                Push( word );
             }
             break;
 
@@ -298,8 +284,7 @@ int Machine::Run()
         case OP_BFALSE:
             {
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
-                mSP++;
-                CELL condition = *mSP;
+                CELL condition = Pop();
                 if ( !condition )
                     codePtr += offset;
             }
@@ -308,8 +293,7 @@ int Machine::Run()
         case OP_BTRUE:
             {
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
-                mSP++;
-                CELL condition = *mSP;
+                CELL condition = Pop();
                 if ( condition )
                     codePtr += offset;
             }
@@ -359,8 +343,7 @@ int Machine::Run()
 
                 if ( op == OP_CALLI )
                 {
-                mSP++;
-                    addrWord = *mSP;
+                    addrWord = Pop();
                 }
                 else
                 {
@@ -374,10 +357,10 @@ int Machine::Run()
                 U8  newModIndex = CodeAddr::GetModule( addrWord );
 
                 if ( newModIndex != mModIndex )
-            {
+                {
                     mMod = GetModule( newModIndex );
                     if ( mMod == nullptr )
-                    return ERR_BYTECODE_NOT_FOUND;
+                        return ERR_BYTECODE_NOT_FOUND;
 
                     mModIndex = newModIndex;
                 }
@@ -428,11 +411,11 @@ Done:
 
 StackFrame* Machine::PushFrame( const U8* curCodePtr, U8 callFlags )
 {
-    if ( (mSP - FRAME_WORDS) < mStack )
+    if ( (mSP - mStack) < FRAME_WORDS )
         return nullptr;
 
     mSP -= FRAME_WORDS;
-    auto frame = (StackFrame*) (mSP + 1);
+    auto frame = (StackFrame*) mSP;
 
     U32 retAddr = curCodePtr - mMod->CodeBase;
 
@@ -450,10 +433,11 @@ int Machine::PopFrame()
     auto  curFrame = (StackFrame*) &mStack[mFramePtr];
     bool  autoPop = CallFlags::GetAutoPop( curFrame->CallFlags );
     U8    argCount = CallFlags::GetCount( curFrame->CallFlags );
-    CELL* oldSP = mSP;
-    CELL* newSP = ((CELL*) curFrame) + FRAME_WORDS - 1 + argCount;
 
-    if ( newSP >= &mStack[mStackSize] )
+    // Subtract one to save room for the return value
+    unsigned long newStackPtr = mFramePtr + FRAME_WORDS + argCount - 1;
+
+    if ( newStackPtr >= mStackSize )
         return ERR_STACK_UNDERFLOW;
 
     U8 newModIndex = CodeAddr::GetModule( curFrame->RetAddrWord );
@@ -467,15 +451,13 @@ int Machine::PopFrame()
         mModIndex = newModIndex;
     }
 
+    CELL* oldSP = mSP;
+
     mPC = CodeAddr::GetAddress( curFrame->RetAddrWord );
-    mSP = newSP;
+    mSP = &mStack[newStackPtr];
     mFramePtr = curFrame->FrameAddr;
 
-    if ( (mSP - 1) < mStack )
-        return ERR_STACK_UNDERFLOW;
-
-    mSP -= 1;
-    mSP[1] = oldSP[1];
+    mSP[0] = oldSP[0];
 
     if ( autoPop )
         mSP++;
@@ -485,8 +467,7 @@ int Machine::PopFrame()
 
 int Machine::PushCell( CELL value )
 {
-    *mSP = value;
-    mSP--;
+    Push( value );
     return ERR_NONE;
 }
 
@@ -503,8 +484,8 @@ int Machine::Yield( NativeFunc proc, UserContext context )
 int Machine::CallPrimitive( U8 func )
 {
     CELL result;
-    CELL a = *(mSP + 1);
-    CELL b = *(mSP + 2);
+    CELL a = *(mSP + 0);
+    CELL b = *(mSP + 1);
 
     switch ( func )
     {
@@ -582,7 +563,7 @@ int Machine::CallPrimitive( U8 func )
         return ERR_BAD_OPCODE;
     }
 
-    *(mSP + 2) = result;
+    *(mSP + 1) = result;
     mSP++;
 
     return ERR_NONE;

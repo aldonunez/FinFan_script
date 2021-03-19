@@ -101,11 +101,21 @@ public:
 
 private:
     void Init( CELL* globals, CELL* stack, U16 stackSize, UserContext scriptCtx );
-    CELL* Push( U8 count );
     StackFrame* PushFrame( const U8* curCodePtr, U8 argCount );
     int PopFrame();
     int CallPrimitive( U8 func );
     int CallNative( NativeFunc proc, U8 argCount, UserContext context );
+
+    void Push( CELL word )
+    {
+        mSP--;
+        *mSP = word;
+    }
+
+    CELL Pop()
+    {
+        return *mSP++;
+    }
 
     const Module* GetModule( U8 index );
 
