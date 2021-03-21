@@ -26,6 +26,7 @@ typedef uintptr_t UserContext;
 struct Module
 {
     const U8*       CodeBase;
+    U32             CodeSize;
 };
 
 struct ByteCode
@@ -72,11 +73,11 @@ public:
     };
 
 private:
-    CELL*           mGlobals;
+    CELL*           mSP;
     CELL*           mStack;
     U16             mStackSize;
     U16             mFramePtr;
-    CELL*           mSP;
+    CELL*           mGlobals;
     IEnvironment*   mEnv;
     UserContext     mScriptCtx;
 
@@ -84,13 +85,14 @@ private:
     UserContext     mNativeContinuationContext;
     U8              mNativeContinuationFlags;
     U8              mModIndex;
+    U16             mGlobalSize;
     U32             mPC;
     const Module*   mMod;
 
 public:
     Machine();
-    void Init( CELL* globals, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx = 0 );
-    void Init( CELL* globals, CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx = 0 );
+    void Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx = 0 );
+    void Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx = 0 );
     bool IsRunning();
     UserContext GetScriptContext();
     CELL* Start( U8 modIndex, U32 address, U8 argCount );
@@ -100,22 +102,19 @@ public:
     int PushCell( CELL value );
 
 private:
-    void Init( CELL* globals, CELL* stack, U16 stackSize, UserContext scriptCtx );
+    void Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, UserContext scriptCtx );
     StackFrame* PushFrame( const U8* curCodePtr, U8 argCount );
     int PopFrame();
     int CallPrimitive( U8 func );
     int CallNative( NativeFunc proc, U8 argCount, UserContext context );
 
-    void Push( CELL word )
-    {
-        mSP--;
-        *mSP = word;
-    }
+    void Push( CELL word );
+    CELL Pop();
 
-    CELL Pop()
-    {
-        return *mSP++;
-    }
+    bool WouldOverflow() const;
+    bool WouldOverflow( U16 count ) const;
+    bool WouldUnderflow() const;
+    bool WouldUnderflow( U16 count ) const;
 
     const Module* GetModule( U8 index );
 

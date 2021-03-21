@@ -368,7 +368,7 @@ int _tmain(int argc, _TCHAR* argv[])
         CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, stack, _countof( stack ), &env );
+        machine.Init( data, _countof( data ), stack, _countof( stack ), &env );
         ExternalFunc external = { 0 };
         ByteCode byteCode = { 0 };
         bool b = false;
@@ -414,7 +414,7 @@ int _tmain(int argc, _TCHAR* argv[])
         CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, stack, _countof( stack ), &env );
+        machine.Init( data, _countof( data ), stack, _countof( stack ), &env );
 
         ExternalFunc external = { 0 };
         ByteCode byteCode = { 0 };
@@ -445,7 +445,7 @@ int _tmain(int argc, _TCHAR* argv[])
         CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, stack, _countof( stack ), nullptr );
+        machine.Init( data, _countof( data ), stack, _countof( stack ), nullptr );
 
         Module mod;
         mod.CodeBase = bin;
@@ -605,7 +605,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
     CELL stack[Machine::MIN_STACK];
     Machine machine;
-    machine.Init( data, stack, _countof( stack ), &env );
+    machine.Init( data, _countof( data ), stack, _countof( stack ), &env );
 
     Module mod;
     mod.CodeBase = program2;

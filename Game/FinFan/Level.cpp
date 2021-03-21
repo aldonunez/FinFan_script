@@ -178,7 +178,7 @@ Level::Level()
 
     for ( int i = 0; i < ObjScripts; i++ )
     {
-        objScripts[i].Init( scriptGlobals, objStacks[i], _countof( objStacks[i] ), &scriptEnv, i );
+        objScripts[i].Init( scriptGlobals, _countof( scriptGlobals ), objStacks[i], _countof( objStacks[i] ), &scriptEnv, i );
     }
 #endif
 }
@@ -1539,7 +1539,7 @@ int Level::StartTrack_E( Machine* machine, U8 argc, CELL* args, UserContext cont
     if ( nullptr == objScripts[index].Start( 0, args[1], 0 ) )
         return ERR_NATIVE_ERROR;
 
-    return RunDiscard( objScripts[index] );
+    return 0;
 }
 
 int Level::Join_E_C( Machine* machine, U8 argc, CELL* args, UserContext context )

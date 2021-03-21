@@ -12,10 +12,10 @@ typedef signed int I32;
 template <typename T, size_t Size = sizeof( T )>
 T ReadPacked( const uint8_t*& p )
 {
-    static_assert(Size >= 2 && Size <= sizeof( T ), "Size must be 2 to sizeof(T)");
+    static_assert(Size >= 1 && Size <= sizeof( T ), "Size must be 1 to sizeof(T)");
 
     T x = p[0]
-        | (p[1] << 8)
+        | ((Size > 1) ? (p[1] << 8)  : 0)
         | ((Size > 2) ? (p[2] << 16) : 0)
         | ((Size > 3) ? (p[3] << 24) : 0);
 
@@ -58,6 +58,8 @@ void WritePacked( uint8_t*& p, S value )
 #define StoreU24    StorePacked<uint32_t, 3>
 #define StoreU32    StorePacked<uint32_t>
 
+#define ReadI8      ReadPacked<int8_t>
+#define ReadU8      ReadPacked<uint8_t>
 #define ReadI16     ReadPacked<int16_t>
 #define ReadU16     ReadPacked<uint16_t>
 #define ReadU24     ReadPacked<uint32_t, 3>

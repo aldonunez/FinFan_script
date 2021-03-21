@@ -27,6 +27,7 @@ bfalse, btrue <int8>
 
 Machine::Machine() :
     mGlobals( nullptr ),
+    mGlobalSize(),
     mStack( nullptr ),
     mStackSize( 0 ),
     mFramePtr(),
@@ -42,28 +43,29 @@ Machine::Machine() :
 {
 }
 
-void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx )
+void Machine::Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx )
 {
-    Init( globals, stack, stackSize, scriptCtx );
+    Init( globals, globalSize, stack, stackSize, scriptCtx );
     mEnv = environment;
 }
 
-void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx )
+void Machine::Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx )
 {
-    Init( globals, stack, stackSize, scriptCtx );
+    Init( globals, globalSize, stack, stackSize, scriptCtx );
     mEnv = this;
     mMod = module;
     mModIndex = modIndex;
 }
 
-void Machine::Init( CELL* globals, CELL* stack, U16 stackSize, UserContext scriptCtx )
+void Machine::Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, UserContext scriptCtx )
 {
     mGlobals = globals;
+    mGlobalSize = globalSize;
     mStack = stack;
     mStackSize = stackSize;
-    mSP = &stack[stackSize];
     mScriptCtx = scriptCtx;
-    mFramePtr = mStackSize;
+
+    Reset();
 }
 
 bool Machine::IsRunning()
@@ -81,6 +83,9 @@ CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
     const Module* module = GetModule( modIndex );
 
     if ( module == nullptr )
+        return nullptr;
+
+    if ( address >= module->CodeSize )
         return nullptr;
 
     if ( mSP - mStack < argCount )
@@ -106,12 +111,22 @@ void Machine::Reset()
 {
     mSP = &mStack[mStackSize];
     mFramePtr = mStackSize;
+
+    mNativeContinuation = nullptr;
+    mNativeContinuationContext = 0;
+    mNativeContinuationFlags = 0;
 }
 
 int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
 {
     bool  autoPop = CallFlags::GetAutoPop( callFlags );
     U8    argCount = CallFlags::GetCount( callFlags );
+
+    if ( WouldUnderflow( argCount ) )
+        return ERR_STACK_UNDERFLOW;
+
+    if ( WouldOverflow() )
+        return ERR_STACK_OVERFLOW;
 
     CELL* args = mSP;
     CELL* oldSP = mSP;
@@ -140,8 +155,6 @@ int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
 
         if ( autoPop )
             mSP++;
-
-        mNativeContinuationFlags = 0;
     }
     else if ( ret == ERR_YIELDED )
     {
@@ -160,19 +173,18 @@ int Machine::Run()
     {
         NativeFunc continuation = mNativeContinuation;
         UserContext context = mNativeContinuationContext;
-        U8 count = CallFlags::GetCount( mNativeContinuationFlags );
 
         mNativeContinuation = nullptr;
         mNativeContinuationContext = 0;
 
-        int ret = CallNative( continuation, count, context );
+        int ret = CallNative( continuation, mNativeContinuationFlags, context );
         if ( ret != ERR_NONE )
             return ret;
     }
 
     const U8* codePtr = mMod->CodeBase + mPC;
 
-    for ( ; ; )
+    while ( true )
     {
         const U8 op = *codePtr;
         codePtr++;
@@ -181,6 +193,12 @@ int Machine::Run()
         {
         case OP_DUP:
             {
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
                 mSP--;
                 *mSP = *(mSP + 1);
             }
@@ -188,79 +206,126 @@ int Machine::Run()
 
         case OP_PUSH:
             {
-                U8 count = *(U8*) codePtr;
-                codePtr++;
+                U8 count = ReadU8( codePtr );
+
+                if ( WouldOverflow( count ) )
+                    return ERR_STACK_OVERFLOW;
+
                 mSP -= count;
             }
             break;
 
         case OP_POP:
             {
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
                 mSP++;
             }
             break;
 
         case OP_NOT:
             {
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
                 mSP[0] = !mSP[0];
             }
             break;
 
         case OP_LDARG:
             {
-                int index = *(U8*) codePtr;
-                codePtr++;
-                CELL* args = &mStack[mFramePtr + FRAME_WORDS];
-                Push( args[index] );
+                int index = ReadU8( codePtr );
+                long offset = mFramePtr + FRAME_WORDS + index;
+
+                if ( offset >= mStackSize )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                Push( mStack[offset] );
             }
             break;
 
         case OP_STARG:
             {
-                int index = *(U8*) codePtr;
-                codePtr++;
-                CELL* args = &mStack[mFramePtr + FRAME_WORDS];
-                args[index] = Pop();
+                int index = ReadU8( codePtr );
+                long offset = mFramePtr + FRAME_WORDS + index;
+
+                if ( offset >= mStackSize )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
+                mStack[offset] = Pop();
             }
             break;
 
         case OP_LDLOC:
             {
-                int index = *(U8*) codePtr;
-                codePtr++;
-                index = -index;
-                CELL* localsTop = &mStack[mFramePtr - 1];
-                Push( localsTop[index] );
+                int index = ReadU8( codePtr );
+                long offset = mFramePtr - 1 - index;
+
+                if ( offset < 0 )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                Push( mStack[offset] );
             }
             break;
 
         case OP_STLOC:
             {
-                int index = *(U8*) codePtr;
-                codePtr++;
-                index = -index;
-                CELL* localsTop = &mStack[mFramePtr - 1];
-                localsTop[index] = Pop();
+                int index = ReadU8( codePtr );
+                long offset = mFramePtr - 1 - index;
+
+                if ( offset < 0 )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
+                mStack[offset] = Pop();
             }
             break;
 
         case OP_LDGLO:
             {
                 U16 addr = ReadU16( codePtr );
-                CELL word = mGlobals[addr];
-                Push( word );
+
+                if ( addr >= mGlobalSize )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                Push( mGlobals[addr] );
             }
             break;
 
         case OP_STGLO:
             {
                 U16 addr = ReadU16( codePtr );
+
+                if ( addr >= mGlobalSize )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
                 mGlobals[addr] = Pop();
             }
             break;
 
         case OP_LDC:
             {
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
                 CELL word = ReadI32( codePtr );
                 Push( word );
             }
@@ -268,8 +333,10 @@ int Machine::Run()
 
         case OP_LDC_S:
             {
-                CELL word = *(I8*) codePtr;
-                codePtr += 1;
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                CELL word = ReadI8( codePtr );
                 Push( word );
             }
             break;
@@ -283,6 +350,9 @@ int Machine::Run()
 
         case OP_BFALSE:
             {
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
                 CELL condition = Pop();
                 if ( !condition )
@@ -292,6 +362,9 @@ int Machine::Run()
 
         case OP_BTRUE:
             {
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
                 CELL condition = Pop();
                 if ( condition )
@@ -307,14 +380,16 @@ int Machine::Run()
                 if ( mFramePtr >= mStackSize )
                     goto Done;
 
+                if ( mPC >= mMod->CodeSize )
+                    return ERR_BAD_ADDRESS;
+
                 codePtr = mMod->CodeBase + mPC;
             }
             break;
 
         case OP_CALLP:
             {
-                U8 func = *(U8*) codePtr;
-                codePtr++;
+                U8 func = ReadU8( codePtr );
                 int err = CallPrimitive( func );
                 if ( err != ERR_NONE )
                     return err;
@@ -323,12 +398,14 @@ int Machine::Run()
 
         case OP_CALL:
             {
-                U8 callFlags = *(U8*) codePtr;
-                codePtr++;
+                U8 callFlags = ReadU8( codePtr );
                 U32 addr = ReadU24( codePtr );
 
                 if ( PushFrame( codePtr, callFlags ) == nullptr )
                     return ERR_STACK_OVERFLOW;
+
+                if ( addr >= mMod->CodeSize )
+                    return ERR_BAD_ADDRESS;
 
                 codePtr = mMod->CodeBase + addr;
             }
@@ -337,12 +414,14 @@ int Machine::Run()
         case OP_CALLI:
         case OP_CALLM:
             {
-                U8 callFlags = *(U8*) codePtr;
-                codePtr++;
+                U8 callFlags = ReadU8( codePtr );
                 U32 addrWord;
 
                 if ( op == OP_CALLI )
                 {
+                    if ( WouldUnderflow() )
+                        return ERR_STACK_UNDERFLOW;
+
                     addrWord = Pop();
                 }
                 else
@@ -365,6 +444,9 @@ int Machine::Run()
                     mModIndex = newModIndex;
                 }
 
+                if ( addr >= mMod->CodeSize )
+                    return ERR_BAD_ADDRESS;
+
                 codePtr = mMod->CodeBase + addr;
             }
             break;
@@ -372,8 +454,7 @@ int Machine::Run()
         case OP_CALLNATIVE:
         case OP_CALLNATIVE_S:
             {
-                U8 callFlags = *(U8*) codePtr;
-                codePtr++;
+                U8 callFlags = ReadU8( codePtr );
                 U32 id;
 
                 if ( op == OP_CALLNATIVE )
@@ -382,8 +463,7 @@ int Machine::Run()
                 }
                 else
                 {
-                    id = *codePtr;
-                    codePtr += 1;
+                    id = ReadU8( codePtr );
                 }
 
                 // If the native call yields, then we have to remember where we were.
@@ -412,6 +492,9 @@ Done:
 StackFrame* Machine::PushFrame( const U8* curCodePtr, U8 callFlags )
 {
     if ( (mSP - mStack) < FRAME_WORDS )
+        return nullptr;
+
+    if ( WouldUnderflow( CallFlags::GetCount( callFlags ) ) )
         return nullptr;
 
     mSP -= FRAME_WORDS;
@@ -467,6 +550,9 @@ int Machine::PopFrame()
 
 int Machine::PushCell( CELL value )
 {
+    if ( WouldOverflow() )
+        return ERR_STACK_OVERFLOW;
+
     Push( value );
     return ERR_NONE;
 }
@@ -483,9 +569,12 @@ int Machine::Yield( NativeFunc proc, UserContext context )
 
 int Machine::CallPrimitive( U8 func )
 {
+    if ( WouldUnderflow( 2 ) )
+        return ERR_STACK_UNDERFLOW;
+
     CELL result;
-    CELL a = *(mSP + 0);
-    CELL b = *(mSP + 1);
+    CELL a = mSP[0];
+    CELL b = mSP[1];
 
     switch ( func )
     {
@@ -563,10 +652,41 @@ int Machine::CallPrimitive( U8 func )
         return ERR_BAD_OPCODE;
     }
 
-    *(mSP + 1) = result;
+    mSP[1] = result;
     mSP++;
 
     return ERR_NONE;
+}
+
+void Machine::Push( CELL word )
+{
+    mSP--;
+    *mSP = word;
+}
+
+CELL Machine::Pop()
+{
+    return *mSP++;
+}
+
+bool Machine::WouldOverflow() const
+{
+    return mSP == mStack;
+}
+
+bool Machine::WouldOverflow( U16 count ) const
+{
+    return count > (mSP - mStack);
+}
+
+bool Machine::WouldUnderflow() const
+{
+    return mSP == &mStack[mStackSize];
+}
+
+bool Machine::WouldUnderflow( U16 count ) const
+{
+    return count > (&mStack[mStackSize] - mSP);
 }
 
 const Module* Machine::GetModule( U8 index )

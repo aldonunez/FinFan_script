@@ -830,6 +830,7 @@ namespace ObjEvents
             return false;
 
         scriptMod.CodeBase = scriptCode;
+        scriptMod.CodeSize = codeSize;
 
         return true;
     }
