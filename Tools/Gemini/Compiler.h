@@ -37,6 +37,7 @@ public:
 enum LogCategory
 {
     LOG_ERROR,
+    LOG_WARNING,
 };
 
 class ICompilerLog
@@ -341,7 +342,7 @@ private:
     void GenerateConj( ConjSpec* spec, Slist* list, const GenConfig& config );
     void GenerateAndClause( Element* elem, const GenConfig& config );
     void GenerateOrClause( Element* elem, const GenConfig& config );
-    void Atomize( ConjSpec* spec, Slist* list, bool invert );
+    void Atomize( ConjSpec* spec, Slist* list, bool invert, bool discard );
 
     // And and Or plumbing
     void ElideTrue( PatchChain* trueChain, PatchChain* falseChain );
@@ -365,9 +366,13 @@ private:
 
     bool HasLocals( Element* elem );
 
-    __declspec(noreturn) void ThrowSyntaxError( const char* format, ... );
-    __declspec(noreturn) void ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... );
-    __declspec(noreturn) void ThrowInternalError();
-    __declspec(noreturn) void ThrowUnresolvedFuncsError();
+    [[noreturn]] void ThrowSyntaxError( const char* format, ... );
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... );
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
+    [[noreturn]] void ThrowInternalError();
+    [[noreturn]] void ThrowInternalError( const char* format, ... );
+    [[noreturn]] void ThrowUnresolvedFuncsError();
+
     void Log( LogCategory category, int line, int col, const char* format, va_list args );
+    void LogWarning( int line, int col, const char* format, ... );
 };

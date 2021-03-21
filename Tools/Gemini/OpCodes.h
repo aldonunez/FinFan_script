@@ -5,7 +5,7 @@ enum
 {
     OP_DUP,
     OP_PUSH,
-    OP_POP,
+    OP_POP,     // TODO: Can this be removed?
     OP_NOT,
     OP_LDARG,
     OP_STARG,

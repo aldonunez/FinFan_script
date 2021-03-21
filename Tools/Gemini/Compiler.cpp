@@ -6,23 +6,23 @@
 
 
 Compiler::Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env,
-    ICompilerLog* log, int modIndex )
-    :   mCodeTextPtr( codeText ),
-        mCodeTextEnd( codeText + codeTextLen ),
-        mCodeBin( codeBin ),
-        mCodeBinPtr( codeBin ),
-        mCodeBinEnd( codeBin + codeBinLen ),
-        mLine( 1 ),
-        mLineStart( codeText ),
-        mCurToken( Token_Bof ),
-        mCurNumber( 0 ),
-        mTokLine( 0 ),
-        mTokCol( 0 ),
-        mForwards( 0 ),
-        mEnv( env ),
-        mLog( log ),
-        mModIndex( modIndex ),
-        mInFunc( false )
+    ICompilerLog* log, int modIndex ) :
+    mCodeTextPtr( codeText ),
+    mCodeTextEnd( codeText + codeTextLen ),
+    mCodeBin( codeBin ),
+    mCodeBinPtr( codeBin ),
+    mCodeBinEnd( codeBin + codeBinLen ),
+    mLine( 1 ),
+    mLineStart( codeText ),
+    mCurToken( Token_Bof ),
+    mCurNumber( 0 ),
+    mTokLine( 0 ),
+    mTokCol( 0 ),
+    mForwards( 0 ),
+    mEnv( env ),
+    mLog( log ),
+    mModIndex( modIndex ),
+    mInFunc( false )
 {
     mGeneratorMap.insert( GeneratorMap::value_type( "+", &Compiler::GenerateArithmetic ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "*", &Compiler::GenerateArithmetic ) );
@@ -350,6 +350,9 @@ void Compiler::GenerateDiscard( Element* elem )
 
     if ( !status.discarded )
     {
+        assert( status.discarded );
+        LogWarning( elem->Line, elem->Column, "Deprecated: POP was emitted." );
+
         *mCodeBinPtr = OP_POP;
         mCodeBinPtr++;
     }
@@ -656,7 +659,7 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
         {
             Generate( clauseList->Elements[0].get() );
 
-            if ( config.discard )
+            if ( !config.discard )
             {
                 mCodeBinPtr[0] = OP_DUP;
                 mCodeBinPtr++;
@@ -666,12 +669,6 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
 
             mCodeBinPtr[0] = OP_BTRUE;
             mCodeBinPtr += BranchInst::Size;
-
-            if ( config.discard )
-            {
-                mCodeBinPtr[0] = OP_POP;
-                mCodeBinPtr++;
-            }
         }
         else
         {
@@ -1061,6 +1058,9 @@ void Compiler::GenerateAnd( Slist* list, const GenConfig& config, GenStatus& sta
     ConjSpec spec = { &Compiler::GenerateAndClause, &Compiler::GenerateOrClause };
     GenerateConj( &spec, list, config );
     status.kind = Expr_Logical;
+
+    if ( config.discard )
+        status.discarded = true;
 }
 
 void Compiler::GenerateOr( Slist* list, const GenConfig& config, GenStatus& status )
@@ -1071,13 +1071,16 @@ void Compiler::GenerateOr( Slist* list, const GenConfig& config, GenStatus& stat
     ConjSpec spec = { &Compiler::GenerateOrClause, &Compiler::GenerateAndClause };
     GenerateConj( &spec, list, config );
     status.kind = Expr_Logical;
+
+    if ( config.discard )
+        status.discarded = true;
 }
 
 void Compiler::GenerateConj( ConjSpec* spec, Slist* list, const GenConfig& config )
 {
     if ( config.trueChain == nullptr )
     {
-        Atomize( spec, list, config.invert );
+        Atomize( spec, list, config.invert, config.discard );
         return;
     }
 
@@ -1115,7 +1118,7 @@ void Compiler::GenerateOrClause( Element* elem, const GenConfig& config )
     Patch( &newFalseChain );
 }
 
-void Compiler::Atomize( ConjSpec* spec, Slist* list, bool invert )
+void Compiler::Atomize( ConjSpec* spec, Slist* list, bool invert, bool discard )
 {
     PatchChain  trueChain;
     PatchChain  falseChain;
@@ -1125,18 +1128,26 @@ void Compiler::Atomize( ConjSpec* spec, Slist* list, bool invert )
     ElideTrue( &trueChain, &falseChain );
 
     Patch( &trueChain );
-    mCodeBinPtr[0] = OP_LDC_S;
-    mCodeBinPtr[1] = 1;
-    mCodeBinPtr[2] = OP_B;
-    mCodeBinPtr += 3;
 
-    // Offset of 2 to jump over LDC.S below.
-    BranchInst::WriteOffset( mCodeBinPtr, 2 );
+    if ( !discard )
+    {
+        mCodeBinPtr[0] = OP_LDC_S;
+        mCodeBinPtr[1] = 1;
+        mCodeBinPtr[2] = OP_B;
+        mCodeBinPtr += 3;
+
+        // Offset of 2 to jump over LDC.S below.
+        BranchInst::WriteOffset( mCodeBinPtr, 2 );
+    }
 
     Patch( &falseChain );
-    mCodeBinPtr[0] = OP_LDC_S;
-    mCodeBinPtr[1] = 0;
-    mCodeBinPtr += 2;
+
+    if ( !discard )
+    {
+        mCodeBinPtr[0] = OP_LDC_S;
+        mCodeBinPtr[1] = 0;
+        mCodeBinPtr += 2;
+    }
 }
 
 U8 Compiler::InvertJump( U8 opCode )
@@ -1472,15 +1483,10 @@ void Compiler::MakeStdEnv()
 
 void Compiler::ThrowSyntaxError( const char* format, ... )
 {
-    if ( mLog != nullptr )
-    {
-        va_list args;
-        va_start( args, format );
-        Log( LOG_ERROR, mTokLine, mTokCol, format, args );
-        va_end( args );
-    }
-
-    throw CompilerException( CERR_SYNTAX );
+    va_list args;
+    va_start( args, format );
+    ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
+    va_end( args );
 }
 
 void Compiler::ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... )
@@ -1505,22 +1511,23 @@ void Compiler::ThrowError( CompilerErr exceptionCode, Element* elem, const char*
     throw CompilerException( exceptionCode );
 }
 
-void Compiler::Log( LogCategory category, int line, int col, const char* format, va_list args )
+void Compiler::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
 {
-    if ( mLog != nullptr )
-    {
-        char msg[256] = "";
-        vsprintf_s( msg, format, args );
-        mLog->Add( category, line, col, msg );
-    }
+    Log( LOG_ERROR, line, col, format, args );
+    throw CompilerException( exceptionCode );
 }
 
 void Compiler::ThrowInternalError()
 {
-    if ( mLog != nullptr )
-        mLog->Add( LOG_ERROR, mLine, GetColumn(), "internal error" );
+    ThrowInternalError( "Internal error" );
+}
 
-    throw CompilerException( CERR_INTERNAL );
+void Compiler::ThrowInternalError( const char* format, ... )
+{
+    va_list args;
+    va_start( args, format );
+    ThrowError( CERR_INTERNAL, mLine, GetColumn(), format, args );
+    va_end( args );
 }
 
 void Compiler::ThrowUnresolvedFuncsError()
@@ -1540,4 +1547,22 @@ void Compiler::ThrowUnresolvedFuncsError()
     }
 
     ThrowError( CERR_SEMANTICS, nullptr, "there are %d unresolved functions", mForwards );
+}
+
+void Compiler::Log( LogCategory category, int line, int col, const char* format, va_list args )
+{
+    if ( mLog != nullptr )
+    {
+        char msg[256] = "";
+        vsprintf_s( msg, format, args );
+        mLog->Add( category, line, col, msg );
+    }
+}
+
+void Compiler::LogWarning( int line, int col, const char* format, ... )
+{
+    va_list args;
+    va_start( args, format );
+    Log( LOG_WARNING, line, col, format, args );
+    va_end( args );
 }
