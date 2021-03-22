@@ -85,7 +85,9 @@ CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
     if ( module == nullptr )
         return nullptr;
 
-    if ( address >= module->CodeSize )
+    if (   module->CodeBase == nullptr
+        || module->CodeSize <= SENTINEL_SIZE
+        || address >= module->CodeSize - SENTINEL_SIZE )
         return nullptr;
 
     if ( mSP - mStack < argCount )
@@ -344,7 +346,12 @@ int Machine::Run()
         case OP_B:
             {
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
-                codePtr += offset;
+                I32 addr = (codePtr - mMod->CodeBase) + offset;
+
+                if ( !IsCodeInBounds( addr ) )
+                    return ERR_BAD_ADDRESS;
+
+                codePtr = mMod->CodeBase + addr;
             }
             break;
 
@@ -354,9 +361,14 @@ int Machine::Run()
                     return ERR_STACK_UNDERFLOW;
 
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
+                I32 addr = (codePtr - mMod->CodeBase) + offset;
+
+                if ( !IsCodeInBounds( addr ) )
+                    return ERR_BAD_ADDRESS;
+
                 CELL condition = Pop();
                 if ( !condition )
-                    codePtr += offset;
+                    codePtr = mMod->CodeBase + addr;
             }
             break;
 
@@ -366,9 +378,14 @@ int Machine::Run()
                     return ERR_STACK_UNDERFLOW;
 
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
+                I32 addr = (codePtr - mMod->CodeBase) + offset;
+
+                if ( !IsCodeInBounds( addr ) )
+                    return ERR_BAD_ADDRESS;
+
                 CELL condition = Pop();
                 if ( condition )
-                    codePtr += offset;
+                    codePtr = mMod->CodeBase + addr;
             }
             break;
 
@@ -380,7 +397,7 @@ int Machine::Run()
                 if ( mFramePtr >= mStackSize )
                     goto Done;
 
-                if ( mPC >= mMod->CodeSize )
+                if ( !IsCodeInBounds( mPC ) )
                     return ERR_BAD_ADDRESS;
 
                 codePtr = mMod->CodeBase + mPC;
@@ -404,7 +421,7 @@ int Machine::Run()
                 if ( PushFrame( codePtr, callFlags ) == nullptr )
                     return ERR_STACK_OVERFLOW;
 
-                if ( addr >= mMod->CodeSize )
+                if ( !IsCodeInBounds( addr ) )
                     return ERR_BAD_ADDRESS;
 
                 codePtr = mMod->CodeBase + addr;
@@ -435,16 +452,11 @@ int Machine::Run()
                 U32 addr        = CodeAddr::GetAddress( addrWord );
                 U8  newModIndex = CodeAddr::GetModule( addrWord );
 
-                if ( newModIndex != mModIndex )
-                {
-                    mMod = GetModule( newModIndex );
-                    if ( mMod == nullptr )
-                        return ERR_BYTECODE_NOT_FOUND;
+                int err = SwitchModule( newModIndex );
+                if ( err != ERR_NONE )
+                    return err;
 
-                    mModIndex = newModIndex;
-                }
-
-                if ( addr >= mMod->CodeSize )
+                if ( !IsCodeInBounds( addr ) )
                     return ERR_BAD_ADDRESS;
 
                 codePtr = mMod->CodeBase + addr;
@@ -525,14 +537,9 @@ int Machine::PopFrame()
 
     U8 newModIndex = CodeAddr::GetModule( curFrame->RetAddrWord );
 
-    if ( newModIndex != mModIndex )
-    {
-        mMod = GetModule( newModIndex );
-        if ( mMod == nullptr )
-            return ERR_BYTECODE_NOT_FOUND;
-
-        mModIndex = newModIndex;
-    }
+    int err = SwitchModule( newModIndex );
+    if ( err != ERR_NONE )
+        return err;
 
     CELL* oldSP = mSP;
 
@@ -658,6 +665,24 @@ int Machine::CallPrimitive( U8 func )
     return ERR_NONE;
 }
 
+int Machine::SwitchModule( U8 newModIndex )
+{
+    if ( newModIndex != mModIndex )
+    {
+        mMod = GetModule( newModIndex );
+        if ( mMod == nullptr )
+            return ERR_BYTECODE_NOT_FOUND;
+
+        if (   mMod->CodeBase == nullptr
+            || mMod->CodeSize <= SENTINEL_SIZE )
+            return ERR_BAD_MODULE;
+
+        mModIndex = newModIndex;
+    }
+
+    return ERR_NONE;
+}
+
 void Machine::Push( CELL word )
 {
     mSP--;
@@ -687,6 +712,11 @@ bool Machine::WouldUnderflow() const
 bool Machine::WouldUnderflow( U16 count ) const
 {
     return count > (&mStack[mStackSize] - mSP);
+}
+
+bool Machine::IsCodeInBounds( U32 address ) const
+{
+    return address < (mMod->CodeSize - SENTINEL_SIZE);
 }
 
 const Module* Machine::GetModule( U8 index )

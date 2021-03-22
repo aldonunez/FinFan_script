@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 
 typedef unsigned char U8;
 typedef unsigned short U16;
@@ -7,6 +9,9 @@ typedef unsigned int U32;
 typedef signed char I8;
 typedef signed short I16;
 typedef signed int I32;
+
+
+constexpr uint8_t SENTINEL_SIZE = 6;
 
 
 template <typename T, size_t Size = sizeof( T )>

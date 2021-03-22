@@ -76,6 +76,8 @@ CompilerErr Compiler::Compile()
 
         if ( mForwards != 0 )
             ThrowUnresolvedFuncsError();
+
+        GenerateSentinel();
     }
     catch ( CompilerException& ex )
     {
@@ -1404,6 +1406,16 @@ bool Compiler::HasLocals( Element* elem )
     }
 
     return false;
+}
+
+void Compiler::GenerateSentinel()
+{
+    for ( int i = 0; i < SENTINEL_SIZE; i++ )
+    {
+        mCodeBinPtr[i] = OP_SENTINEL;
+    }
+
+    mCodeBinPtr += SENTINEL_SIZE;
 }
 
 Compiler::Declaration* Compiler::FindSymbol( const std::string& symbol )

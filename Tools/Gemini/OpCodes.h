@@ -1,5 +1,7 @@
 #pragma once
 
+#include <assert.h>
+
 
 enum
 {
@@ -25,7 +27,17 @@ enum
     OP_B,
     OP_BFALSE,
     OP_BTRUE,
-    OP_MAXOPCODE
+    OP_MAXOPCODE,
+
+    // Having each module end with this unsupported opcode ensures that:
+    // 1. an error will result if control flows into the end of a module,
+    //    without needing to check each instruction's bounds.
+    // 2. modules can be easily verified.
+    //
+    // Also, having one guaranteed instruction for this purpose allows the
+    // rest of the instruction set to be extended.
+
+    OP_SENTINEL = 0xFF
 };
 
 enum

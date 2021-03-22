@@ -11,6 +11,7 @@ enum
     ERR_BAD_ARG,
     ERR_BAD_OPCODE,
     ERR_BAD_ADDRESS,
+    ERR_BAD_MODULE,
     ERR_STACK_OVERFLOW,
     ERR_STACK_UNDERFLOW,
     ERR_BYTECODE_NOT_FOUND,
@@ -108,6 +109,8 @@ private:
     int CallPrimitive( U8 func );
     int CallNative( NativeFunc proc, U8 argCount, UserContext context );
 
+    int SwitchModule( U8 newModIndex );
+
     void Push( CELL word );
     CELL Pop();
 
@@ -116,8 +119,13 @@ private:
     bool WouldUnderflow() const;
     bool WouldUnderflow( U16 count ) const;
 
+    bool IsCodeInBounds( U32 address ) const;
+
     const Module* GetModule( U8 index );
 
     virtual bool FindNativeCode( U32 id, NativeCode* nativeCode ) override;
     virtual const Module* FindModule( U8 index ) override;
 };
+
+
+int VerifyModule( const Module* mod );

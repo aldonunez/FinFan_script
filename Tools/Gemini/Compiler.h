@@ -1,6 +1,11 @@
 #pragma once
 
 #include "GeminiCommon.h"
+#include <string>
+#include <vector>
+#include <memory>
+#include <map>
+#include <unordered_map>
 
 
 enum CompilerErr
@@ -337,6 +342,8 @@ private:
     void GenerateLambdas();
     void GenerateProc( Slist* list, int startIndex );
     void GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status );
+
+    void GenerateSentinel();
 
     // And and Or
     void GenerateConj( ConjSpec* spec, Slist* list, const GenConfig& config );

@@ -58,12 +58,16 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
     const U8* origCodePtr = mCodePtr;
     U8 op = *mCodePtr++;
 
-    if ( op >= OP_MAXOPCODE )
-        return -1;
-
-    const char* opName = gOpCodes[op];
+    const char* opName = nullptr;
     int charsWritten = 0;
     int totalCharsWritten = 0;
+
+    if ( op < OP_MAXOPCODE )
+        opName = gOpCodes[op];
+    else if ( op == OP_SENTINEL )
+        opName = "SENTINEL";
+    else
+        opName = "*Invalid opcode";
 
     charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), "%06X:  %s", addr, opName );
     if ( charsWritten < 0 )
@@ -179,6 +183,12 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
             int offset = BranchInst::ReadOffset( mCodePtr );
             int target = mCodePtr - mCodeBin + offset;
             charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " $%06X", target );
+        }
+        break;
+
+    default:
+        {
+            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " $%02X", op );
         }
         break;
     }
