@@ -51,9 +51,19 @@ public:
     virtual void Add( LogCategory category, int line, int column, const char* message ) = 0;
 };
 
+struct CallStats
+{
+    int16_t     MaxCallDepth;
+    int16_t     MaxStackUsage;
+    bool        Recurses;
+};
+
 struct CompilerStats
 {
-    int     CodeBytesWritten;
+    int         CodeBytesWritten;
+    bool        CallsIndirectly;
+    CallStats   Lambda;
+    CallStats   Static;
 };
 
 class Compiler
@@ -171,6 +181,21 @@ class Compiler
         std::string Name;
         int         Address;
         PatchChain  Patches;
+
+        int16_t     LocalCount;
+        int16_t     ArgCount;
+        int16_t     ExprDepth;
+
+        int16_t     CallDepth;
+        int16_t     IndividualStackUsage;
+        int16_t     TreeStackUsage;
+
+        bool        IsCalculating;
+        bool        IsRecursive;
+        bool        IsDepthKnown;
+        bool        CallsIndirectly;
+
+        std::list<std::string> CalledFunctions;
     };
 
     struct DeferredLambda
@@ -275,12 +300,19 @@ class Compiler
     int             mMaxLocalCount;
     int             mForwards;
     bool            mInFunc;
+    Function*       mCurFunc;
+    int16_t         mCurExprDepth;
+    int16_t         mMaxExprDepth;
 
     ICompilerEnv*   mEnv;
     ICompilerLog*   mLog;
     int             mModIndex;
 
     GeneratorMap    mGeneratorMap;
+
+    bool            mCompiled;
+    bool            mCalculatedStats;
+    CompilerStats   mStats;
 
 public:
     Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env, 
@@ -340,7 +372,7 @@ private:
     void GenerateBinaryPrimitive( Slist* list, int primitive, const GenConfig& config, GenStatus& status );
 
     void GenerateLambdas();
-    void GenerateProc( Slist* list, int startIndex );
+    void GenerateProc( Slist* list, int startIndex, Function* func );
     void GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status );
 
     void GenerateSentinel();
@@ -372,6 +404,11 @@ private:
     void MakeStdEnv();
 
     bool HasLocals( Element* elem );
+
+    void IncreaseExprDepth();
+    void DecreaseExprDepth( int amount = 1 );
+    void CalculateStackDepth();
+    void CalculateStackDepth( Function* func );
 
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );
     [[noreturn]] void ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... );

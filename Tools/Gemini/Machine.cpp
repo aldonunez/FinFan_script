@@ -160,6 +160,9 @@ int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
     }
     else if ( ret == ERR_YIELDED )
     {
+        if ( mNativeContinuation == nullptr )
+            return ERR_NATIVE_ERROR;
+
         mNativeContinuationFlags = callFlags;
     }
 

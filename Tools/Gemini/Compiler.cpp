@@ -22,7 +22,13 @@ Compiler::Compiler( const char* codeText, int codeTextLen, U8* codeBin, int code
     mEnv( env ),
     mLog( log ),
     mModIndex( modIndex ),
-    mInFunc( false )
+    mInFunc( false ),
+    mCurFunc(),
+    mCurExprDepth(),
+    mMaxExprDepth(),
+    mCompiled(),
+    mCalculatedStats(),
+    mStats()
 {
     mGeneratorMap.insert( GeneratorMap::value_type( "+", &Compiler::GenerateArithmetic ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "*", &Compiler::GenerateArithmetic ) );
@@ -85,12 +91,23 @@ CompilerErr Compiler::Compile()
     }
 #endif
 
+    mCompiled = true;
+
     return CERR_OK;
 }
 
 void Compiler::GetStats( CompilerStats& stats )
 {
-    stats.CodeBytesWritten = mCodeBinPtr - mCodeBin;
+    if ( mCompiled && !mCalculatedStats )
+    {
+        mStats.CodeBytesWritten = mCodeBinPtr - mCodeBin;
+
+        CalculateStackDepth();
+
+        mCalculatedStats = true;
+    }
+
+    stats = mStats;
 }
 
 Compiler::TokenCode Compiler::NextToken()
@@ -325,6 +342,7 @@ void Compiler::Generate( Element* elem, const GenConfig& config, GenStatus& stat
 
             mCodeBinPtr[0] = (config.invert && status.kind != Expr_Comparison) ? OP_BFALSE : OP_BTRUE;
             mCodeBinPtr += BranchInst::Size;
+            DecreaseExprDepth();
 
             PushPatch( config.falseChain );
 
@@ -357,6 +375,8 @@ void Compiler::GenerateDiscard( Element* elem )
 
         *mCodeBinPtr = OP_POP;
         mCodeBinPtr++;
+
+        DecreaseExprDepth();
     }
 }
 
@@ -380,6 +400,8 @@ void Compiler::GenerateNumber( Number* number, const GenConfig& config, GenStatu
         mCodeBinPtr++;
         WriteI32( mCodeBinPtr, number->Value );
     }
+
+    IncreaseExprDepth();
 }
 
 void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatus& status )
@@ -399,18 +421,21 @@ void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatu
             mCodeBinPtr[0] = OP_LDGLO;
             mCodeBinPtr++;
             WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
+            IncreaseExprDepth();
             break;
 
         case Decl_Local:
             mCodeBinPtr[0] = OP_LDLOC;
             mCodeBinPtr[1] = ((Storage*) decl)->Offset;
             mCodeBinPtr += 2;
+            IncreaseExprDepth();
             break;
 
         case Decl_Arg:
             mCodeBinPtr[0] = OP_LDARG;
             mCodeBinPtr[1] = ((Storage*) decl)->Offset;
             mCodeBinPtr += 2;
+            IncreaseExprDepth();
             break;
 
         case Decl_Func:
@@ -526,10 +551,12 @@ void Compiler::GenerateReturn( Slist* list, const GenConfig& config, GenStatus& 
         mCodeBinPtr[0] = OP_LDC_S;
         mCodeBinPtr[1] = 0;
         mCodeBinPtr += 2;
+        IncreaseExprDepth();
     }
 
     mCodeBinPtr[0] = OP_RET;
     mCodeBinPtr += 1;
+    DecreaseExprDepth();
 
     status.discarded = true;
     status.tailRet = true;
@@ -551,6 +578,7 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
     Patch( &newTrueChain );
 
     GenConfig statementConfig = GenConfig::Statement( config.discard );
+    int exprDepth = mCurExprDepth;
 
     // True
     Generate( list->Elements[2].get(), statementConfig );
@@ -563,6 +591,10 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
     U8* falsePtr = mCodeBinPtr;
 
     // False
+
+    // Restore the expression depth, so that it doesn't accumulate
+    mCurExprDepth = exprDepth;
+
     if ( list->Elements.size() == 4 )
     {
         Generate( list->Elements[3].get(), statementConfig );
@@ -574,6 +606,7 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
             mCodeBinPtr[0] = OP_LDC_S;
             mCodeBinPtr[1] = 0;
             mCodeBinPtr += 2;
+            IncreaseExprDepth();
         }
     }
 
@@ -606,6 +639,7 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
 {
     PatchChain  leaveChain;
     bool        foundCatchAll = false;
+    int         exprDepth = mCurExprDepth;
 
     GenConfig statementConfig = GenConfig::Statement( config.discard );
 
@@ -613,6 +647,9 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
 
     for ( size_t i = 1; i < list->Elements.size(); i++ )
     {
+        // Restore the expression depth, so that it doesn't accumulate
+        mCurExprDepth = exprDepth;
+
         auto clause = list->Elements[i].get();
         if ( clause->Code != Elem_Slist )
             ThrowError( CERR_SEMANTICS, clause, "each clause of COND must be a list" );
@@ -646,6 +683,7 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
                     mCodeBinPtr[0] = OP_LDC_S;
                     mCodeBinPtr[1] = 1;
                     mCodeBinPtr += 2;
+                    IncreaseExprDepth();
                 }
             }
             else
@@ -665,12 +703,14 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
             {
                 mCodeBinPtr[0] = OP_DUP;
                 mCodeBinPtr++;
+                IncreaseExprDepth();
             }
 
             PushPatch( &leaveChain );
 
             mCodeBinPtr[0] = OP_BTRUE;
             mCodeBinPtr += BranchInst::Size;
+            DecreaseExprDepth();
         }
         else
         {
@@ -702,6 +742,7 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
             mCodeBinPtr[0] = OP_LDC_S;
             mCodeBinPtr[1] = 0;
             mCodeBinPtr += 2;
+            IncreaseExprDepth();
         }
     }
 
@@ -725,9 +766,14 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
     Generate( list->Elements[2].get() );
 
     if ( config.discard )
+    {
         status.discarded = true;
+    }
     else
+    {
         *mCodeBinPtr++ = OP_DUP;
+        IncreaseExprDepth();
+    }
 
     if ( list->Elements[1]->Code != Elem_Symbol )
         ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'set' : first argument must be a symbol" );
@@ -765,6 +811,8 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
             assert( false );
             ThrowInternalError();
         }
+
+        DecreaseExprDepth();
     }
     else
     {
@@ -783,17 +831,17 @@ void Compiler::GenerateDefun( Slist* list, const GenConfig& config, GenStatus& s
     if ( list->Elements[1]->Code != Elem_Symbol )
         ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'defun' first argument must be a name" );
 
-    mInFunc = true;
-
     Symbol* funcSym = (Symbol*) list->Elements[1].get();
     U32 addr = (mCodeBinPtr - mCodeBin);
 
     SymTable::iterator it = mGlobalTable.find( funcSym->String );
+    Function* func = nullptr;
+
     if ( it != mGlobalTable.end() )
     {
         if ( it->second->Kind == Decl_Forward )
         {
-            Function* func = (Function*) it->second.get();
+            func = (Function*) it->second.get();
             func->Kind = Decl_Func;
             func->Address = addr;
             PatchCalls( &func->Patches, addr );
@@ -810,14 +858,12 @@ void Compiler::GenerateDefun( Slist* list, const GenConfig& config, GenStatus& s
     }
     else
     {
-        Function* func = AddFunc( funcSym->String, addr );
-
-        mEnv->AddExternal( funcSym->String, External_Bytecode, func->Address );
+        func = AddFunc( funcSym->String, addr );
     }
 
-    GenerateProc( list, 2 );
+    mEnv->AddExternal( funcSym->String, External_Bytecode, func->Address );
 
-    mInFunc = false;
+    GenerateProc( list, 2, func );
 }
 
 void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& status )
@@ -840,6 +886,7 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     mLambdas.push_back( lambda );
 
     WriteU32( mCodeBinPtr, 0 );
+    IncreaseExprDepth();
 }
 
 void Compiler::GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status )
@@ -852,9 +899,23 @@ void Compiler::GenerateFuncall( Slist* list, const GenConfig& config, GenStatus&
         Generate( list->Elements[i].get() );
     }
 
+    int argCount = list->Elements.size() - 2;
+
     mCodeBinPtr[0] = OP_CALLI;
-    mCodeBinPtr[1] = CallFlags::Build( list->Elements.size() - 2, config.discard );
+    mCodeBinPtr[1] = CallFlags::Build( argCount, config.discard );
     mCodeBinPtr += 2;
+
+    DecreaseExprDepth();
+
+    if ( config.discard )
+        status.discarded = true;
+    else
+        IncreaseExprDepth();
+
+    DecreaseExprDepth( argCount );
+
+    if ( mInFunc )
+        mCurFunc->CallsIndirectly = true;
 }
 
 void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& status )
@@ -892,6 +953,7 @@ void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& sta
             mCodeBinPtr[0] = OP_STLOC;
             mCodeBinPtr[1] = local->Offset;
             mCodeBinPtr += 2;
+            DecreaseExprDepth();
         }
     }
 
@@ -913,7 +975,8 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         Generate( list->Elements[i].get() );
     }
 
-    U8 callFlags = CallFlags::Build( list->Elements.size() - 1, config.discard );
+    int argCount = list->Elements.size() - 1;
+    U8 callFlags = CallFlags::Build( argCount, config.discard );
 
     SymTable::iterator it = mGlobalTable.find( op->String );
     if ( it != mGlobalTable.end() )
@@ -938,6 +1001,9 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         mCodeBinPtr[1] = callFlags;
         mCodeBinPtr += 2;
         WriteU24( mCodeBinPtr, addr );
+
+        if ( mInFunc )
+            mCurFunc->CalledFunctions.push_back( op->String );
     }
     else
     {
@@ -949,6 +1015,8 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             if ( external.Kind == External_Bytecode )
             {
                 opCode = OP_CALLM;
+
+                // TODO: Add this external call to the list of called functions
             }
             else if ( external.Kind == External_Native )
             {
@@ -987,11 +1055,21 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
             mCodeBinPtr[1] = callFlags;
             mCodeBinPtr += 2;
             WriteU24( mCodeBinPtr, 0 );
+
+            if ( mInFunc )
+                mCurFunc->CalledFunctions.push_back( op->String );
         }
     }
 
+    IncreaseExprDepth();
+
     if ( config.discard )
+    {
         status.discarded = true;
+        DecreaseExprDepth();
+    }
+
+    DecreaseExprDepth( argCount );
 }
 
 void Compiler::GenerateNot( Slist* list, const GenConfig& config, GenStatus& status )
@@ -1149,6 +1227,8 @@ void Compiler::Atomize( ConjSpec* spec, Slist* list, bool invert, bool discard )
         mCodeBinPtr[0] = OP_LDC_S;
         mCodeBinPtr[1] = 0;
         mCodeBinPtr += 2;
+
+        IncreaseExprDepth();
     }
 }
 
@@ -1258,6 +1338,9 @@ void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, G
         mCodeBinPtr[2] = OP_CALLP;
         mCodeBinPtr[3] = PRIM_SUB;
         mCodeBinPtr += 4;
+
+        IncreaseExprDepth();
+        DecreaseExprDepth();
     }
 }
 
@@ -1277,23 +1360,36 @@ void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenCon
         mCodeBinPtr[0] = OP_CALLP;
         mCodeBinPtr[1] = primitive;
         mCodeBinPtr += 2;
+
+        DecreaseExprDepth();
     }
 }
 
 void Compiler::GenerateLambdas()
 {
-    for ( auto it = mLambdas.begin(); it != mLambdas.end(); it++ )
+    long i = 0;
+
+    for ( auto it = mLambdas.begin(); it != mLambdas.end(); it++, i++ )
     {
         int address = mCodeBinPtr - mCodeBin;
         int addrWord = CodeAddr::Build( address, mModIndex );
         StoreU32( it->Patch, addrWord );
-        GenerateProc( it->Definition, 1 );
+
+        char name[256];
+
+        sprintf_s( name, "$Lambda$%d", i );
+        Function* func = AddFunc( name, address );
+
+        GenerateProc( it->Definition, 1, func );
     }
 }
 
-void Compiler::GenerateProc( Slist* list, int startIndex )
+void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
 {
     assert( (size_t) startIndex < list->Elements.size() );
+
+    mInFunc = true;
+    mCurFunc = func;
 
     const size_t ArgsIndex = startIndex;
     const size_t BodyIndex = startIndex + 1;
@@ -1314,6 +1410,8 @@ void Compiler::GenerateProc( Slist* list, int startIndex )
 
         Symbol* argSym = (Symbol*) arglist->Elements[i].get();
         AddArg( argTable, argSym->String, argTable.size() );
+
+        func->ArgCount++;
     }
 
     bool hasLocals = false;
@@ -1338,6 +1436,8 @@ void Compiler::GenerateProc( Slist* list, int startIndex )
 
     mMaxLocalCount = 0;
     mCurLocalCount = 0;
+    mCurExprDepth = 0;
+    mMaxExprDepth = 0;
 
     GenStatus status = { Expr_Other };
     GenerateImplicitProgn( list, BodyIndex, GenConfig::Statement(), status );
@@ -1351,7 +1451,13 @@ void Compiler::GenerateProc( Slist* list, int startIndex )
     if ( hasLocals )
         *pushCountPatch = mMaxLocalCount;
 
+    func->LocalCount = mMaxLocalCount;
+    func->ExprDepth = mMaxExprDepth;
+
     mSymStack.pop_back();
+
+    mCurFunc = nullptr;
+    mInFunc = false;
 }
 
 void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status )
@@ -1365,7 +1471,7 @@ void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConf
     {
         Generate( list->Elements.back().get(), config, status );
     }
-    else
+    else    // There are no expressions
     {
         if ( config.discard )
         {
@@ -1376,6 +1482,8 @@ void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConf
             mCodeBinPtr[0] = OP_LDC_S;
             mCodeBinPtr[1] = 0;
             mCodeBinPtr += 2;
+
+            IncreaseExprDepth();
         }
     }
 }
@@ -1431,7 +1539,7 @@ Compiler::Declaration* Compiler::FindSymbol( const std::string& symbol )
 
     if ( mEnv->FindGlobal( symbol, offset ) )
     {
-        static Storage dummy;
+        static Storage dummy {};
         dummy.Kind = Decl_Global;
         dummy.Offset = offset;
         return &dummy;
@@ -1491,6 +1599,113 @@ void Compiler::MakeStdEnv()
 {
     AddConst( "#f", 0 );
     AddConst( "#t", 1 );
+}
+
+void Compiler::IncreaseExprDepth()
+{
+    mCurExprDepth++;
+
+    if ( mMaxExprDepth < mCurExprDepth )
+        mMaxExprDepth = mCurExprDepth;
+}
+
+void Compiler::DecreaseExprDepth( int amount )
+{
+    assert( amount >= 0 );
+    assert( amount <= mCurExprDepth );
+
+    mCurExprDepth -= amount;
+}
+
+void Compiler::CalculateStackDepth()
+{
+    mStats.Lambda = {};
+    mStats.Static = {};
+    mStats.CallsIndirectly = false;
+
+    for ( const auto& [name, decl] : mGlobalTable )
+    {
+        if ( decl->Kind == Decl_Func )
+        {
+            Function*  func = (Function*) decl.get();
+            CallStats* callStats;
+
+            CalculateStackDepth( func );
+
+            if ( name._Starts_with( "$Lambda$" ) )
+            {
+                callStats = &mStats.Lambda;
+            }
+            else
+            {
+                callStats = &mStats.Static;
+
+                if ( func->CallsIndirectly )
+                    mStats.CallsIndirectly = true;
+            }
+
+            // Only count parameters of publics, if that's ever a distinction
+
+            int16_t stackUsage = func->TreeStackUsage + func->ArgCount;
+
+            callStats->MaxCallDepth  = std::max( callStats->MaxCallDepth,  func->CallDepth );
+            callStats->MaxStackUsage = std::max( callStats->MaxStackUsage, stackUsage );
+
+            if ( func->IsRecursive )
+                callStats->Recurses = true;
+        }
+    }
+}
+
+void Compiler::CalculateStackDepth( Function* func )
+{
+    if ( func->IsDepthKnown )
+        return;
+
+    if ( func->IsCalculating )
+    {
+        func->IsRecursive = true;
+        return;
+    }
+
+    // TODO: Put Machine::FRAME_WORDS somewhere common, and use it here.
+
+    func->IsCalculating = true;
+    func->IndividualStackUsage = 2 + func->LocalCount + func->ExprDepth;
+
+    int16_t maxChildDepth = 0;
+    int16_t maxChildStackUsage = 0;
+
+    for ( const auto& name : func->CalledFunctions )
+    {
+        if ( auto it = mGlobalTable.find( name );
+            it != mGlobalTable.end() )
+        {
+            if ( it->second->Kind != Decl_Func )
+                continue;
+
+            auto childFunc = (Function*) it->second.get();
+
+            CalculateStackDepth( childFunc );
+
+            maxChildDepth = std::max( maxChildDepth, childFunc->CallDepth );
+            maxChildStackUsage = std::max( maxChildStackUsage, childFunc->TreeStackUsage );
+
+            if ( childFunc->CallsIndirectly )
+                func->CallsIndirectly = true;
+
+            if ( childFunc->IsRecursive )
+            {
+                func->IsRecursive = true;
+                break;
+            }
+        }
+    }
+
+    func->IsCalculating = false;
+    func->IsDepthKnown = true;
+    func->CallDepth = 1 + maxChildDepth;
+    func->TreeStackUsage = func->IndividualStackUsage + maxChildStackUsage;
 }
 
 void Compiler::ThrowSyntaxError( const char* format, ... )

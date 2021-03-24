@@ -263,6 +263,20 @@ int main( int argc, char* argv[] )
     }
 
     printf( "%d bytes written.\n", stats.CodeBytesWritten );
+    printf( "Calls indirectly: %s\n", stats.CallsIndirectly ? "true" : "false" );
+    printf( "Type     Depth   Bytes   Recurses\n" );
+
+    CallStats* callSets[] = { &stats.Static, &stats.Lambda };
+    const char* callSetTypes[] = { "Static", "Lambda" };
+    int i = 0;
+
+    for ( auto set : callSets )
+    {
+        printf( "%6s   %05d   %05d   %s\n",
+            callSetTypes[i], set->MaxCallDepth, set->MaxStackUsage, set->Recurses ? "true" : "false" );
+        i++;
+    }
+
     printf( "\n" );
 
     if ( disassemble )
