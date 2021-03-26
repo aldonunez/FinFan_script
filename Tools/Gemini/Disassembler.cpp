@@ -17,16 +17,16 @@ static const char* gOpCodes[] =
     "STMOD",
     "LDC",
     "LDC.S",
-    "RET",
-    "CALL",
-    "CALLI",
-    "CALLP",
-    "CALLM",
-    "CALLNATIVE",
-    "CALLNATIVE.S",
+    "PRIM",
     "B",
     "BFALSE",
     "BTRUE",
+    "RET",
+    "CALL",
+    "CALLI",
+    "CALLM",
+    "CALLNATIVE",
+    "CALLNATIVE.S",
 };
 
 static const char* gPrimitives[] = 
@@ -141,7 +141,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
     }
         break;
 
-    case OP_CALLP:
+    case OP_PRIM:
         {
             int primitive = *(U8*) mCodePtr++;
             if ( primitive >= PRIM_MAXPRIMITIVE )

@@ -1337,7 +1337,7 @@ void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, G
 
         mCodeBinPtr[0] = OP_LDC_S;
         mCodeBinPtr[1] = 0;
-        mCodeBinPtr[2] = OP_CALLP;
+        mCodeBinPtr[2] = OP_PRIM;
         mCodeBinPtr[3] = PRIM_SUB;
         mCodeBinPtr += 4;
 
@@ -1359,7 +1359,7 @@ void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenCon
         Generate( list->Elements[2].get() );
         Generate( list->Elements[1].get() );
 
-        mCodeBinPtr[0] = OP_CALLP;
+        mCodeBinPtr[0] = OP_PRIM;
         mCodeBinPtr[1] = primitive;
         mCodeBinPtr += 2;
 

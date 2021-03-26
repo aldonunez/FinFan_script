@@ -352,6 +352,15 @@ int Machine::Run()
             }
             break;
 
+        case OP_PRIM:
+            {
+                U8 func = ReadU8( codePtr );
+                int err = CallPrimitive( func );
+                if ( err != ERR_NONE )
+                    return err;
+            }
+            break;
+
         case OP_B:
             {
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
@@ -410,15 +419,6 @@ int Machine::Run()
                     return ERR_BAD_ADDRESS;
 
                 codePtr = mMod->CodeBase + mPC;
-            }
-            break;
-
-        case OP_CALLP:
-            {
-                U8 func = ReadU8( codePtr );
-                int err = CallPrimitive( func );
-                if ( err != ERR_NONE )
-                    return err;
             }
             break;
 
@@ -534,6 +534,9 @@ StackFrame* Machine::PushFrame( const U8* curCodePtr, U8 callFlags )
 
 int Machine::PopFrame()
 {
+    if ( (mFramePtr + FRAME_WORDS) > mStackSize )
+        return ERR_STACK_UNDERFLOW;
+
     auto  curFrame = (StackFrame*) &mStack[mFramePtr];
     bool  autoPop = CallFlags::GetAutoPop( curFrame->CallFlags );
     U8    argCount = CallFlags::GetCount( curFrame->CallFlags );
