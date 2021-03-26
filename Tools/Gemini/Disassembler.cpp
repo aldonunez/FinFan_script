@@ -13,8 +13,8 @@ static const char* gOpCodes[] =
     "STARG",
     "LDLOC",
     "STLOC",
-    "LDGLO",
-    "STGLO",
+    "LDMOD",
+    "STMOD",
     "LDC",
     "LDC.S",
     "RET",
@@ -104,11 +104,12 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
         }
         break;
 
-    case OP_LDGLO:
-    case OP_STGLO:
+    case OP_LDMOD:
+    case OP_STMOD:
         {
+            int iMod = ReadU8( mCodePtr );
             int addr = ReadU16( mCodePtr );
-            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " $%04X", addr );
+            charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " $%02X, $%04X", iMod, addr );
         }
         break;
 

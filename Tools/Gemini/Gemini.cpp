@@ -365,10 +365,9 @@ int _tmain(int argc, _TCHAR* argv[])
             printf( "%s\n", disasm );
         }
 
-        CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, _countof( data ), stack, _countof( stack ), &env );
+        machine.Init( stack, _countof( stack ), &env );
         ExternalFunc external = { 0 };
         ByteCode byteCode = { 0 };
         bool b = false;
@@ -411,10 +410,9 @@ int _tmain(int argc, _TCHAR* argv[])
         env.SetCurrentModule( &mod2 );
         compiler2.Compile();
 
-        CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, _countof( data ), stack, _countof( stack ), &env );
+        machine.Init( stack, _countof( stack ), &env );
 
         ExternalFunc external = { 0 };
         ByteCode byteCode = { 0 };
@@ -442,10 +440,9 @@ int _tmain(int argc, _TCHAR* argv[])
         CompilerEnv env;
         Compiler compiler( progStr1, sizeof progStr1 - 1, bin, sizeof bin, &env, nullptr );
         compiler.Compile();
-        CELL data[100];
         CELL stack[Machine::MIN_STACK];
         Machine machine;
-        machine.Init( data, _countof( data ), stack, _countof( stack ), nullptr );
+        machine.Init( stack, _countof( stack ), nullptr );
 
         Module mod;
         mod.CodeBase = bin;
@@ -484,10 +481,12 @@ int _tmain(int argc, _TCHAR* argv[])
         2,
         1,
         OP_DUP,
-        OP_STGLO,
+        OP_STMOD,
+        0,
         3,
         0,
-        OP_LDGLO,
+        OP_LDMOD,
+        0,
         3,
         0,
         OP_STLOC,
@@ -600,12 +599,12 @@ int _tmain(int argc, _TCHAR* argv[])
         OP_RET,
         1
     };
-    CELL data[10];
+
     Env env;
 
     CELL stack[Machine::MIN_STACK];
     Machine machine;
-    machine.Init( data, _countof( data ), stack, _countof( stack ), &env );
+    machine.Init( stack, _countof( stack ), &env );
 
     Module mod;
     mod.CodeBase = program2;

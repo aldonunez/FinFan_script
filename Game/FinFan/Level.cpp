@@ -52,6 +52,8 @@ Level* Level::instance;
 
 #if defined( SCENE_SCRIPT )
 
+Module scriptMod;
+
 class ScriptEnv : public IEnvironment
 {
     const NativeFunc*   mFuncs;
@@ -82,7 +84,7 @@ public:
 
     const Module* FindModule( U8 index ) override
     {
-        return index == 0 ? &ObjEvents::GetScriptModule(): nullptr;
+        return index == 0 ? &scriptMod : nullptr;
     }
 };
 
@@ -176,9 +178,14 @@ Level::Level()
 
     scriptEnv.Init( funcs, _countof( funcs ) );
 
+    scriptMod.CodeBase = ObjEvents::GetScriptModule().CodeBase;
+    scriptMod.CodeSize = ObjEvents::GetScriptModule().CodeSize;
+    scriptMod.DataBase = scriptGlobals;
+    scriptMod.DataSize = _countof( scriptGlobals );
+
     for ( int i = 0; i < ObjScripts; i++ )
     {
-        objScripts[i].Init( scriptGlobals, _countof( scriptGlobals ), objStacks[i], _countof( objStacks[i] ), &scriptEnv, i );
+        objScripts[i].Init( objStacks[i], _countof( objStacks[i] ), &scriptEnv, i );
     }
 #endif
 }

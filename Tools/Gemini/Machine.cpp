@@ -26,8 +26,6 @@ bfalse, btrue <int8>
 
 
 Machine::Machine() :
-    mGlobals( nullptr ),
-    mGlobalSize(),
     mStack( nullptr ),
     mStackSize( 0 ),
     mFramePtr(),
@@ -43,24 +41,22 @@ Machine::Machine() :
 {
 }
 
-void Machine::Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx )
+void Machine::Init( CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx )
 {
-    Init( globals, globalSize, stack, stackSize, scriptCtx );
+    Init( stack, stackSize, scriptCtx );
     mEnv = environment;
 }
 
-void Machine::Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx )
+void Machine::Init( CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx )
 {
-    Init( globals, globalSize, stack, stackSize, scriptCtx );
+    Init( stack, stackSize, scriptCtx );
     mEnv = this;
     mMod = module;
     mModIndex = modIndex;
 }
 
-void Machine::Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, UserContext scriptCtx )
+void Machine::Init( CELL* stack, U16 stackSize, UserContext scriptCtx )
 {
-    mGlobals = globals;
-    mGlobalSize = globalSize;
     mStack = stack;
     mStackSize = stackSize;
     mScriptCtx = scriptCtx;
@@ -298,31 +294,41 @@ int Machine::Run()
             }
             break;
 
-        case OP_LDGLO:
+        case OP_LDMOD:
             {
+                U8  iMod = ReadU8( codePtr );
                 U16 addr = ReadU16( codePtr );
 
-                if ( addr >= mGlobalSize )
+                auto [err, mod] = GetDataModule( iMod );
+                if ( err != ERR_NONE )
+                    return err;
+
+                if ( addr >= mod->DataSize )
                     return ERR_BAD_ADDRESS;
 
                 if ( WouldOverflow() )
                     return ERR_STACK_OVERFLOW;
 
-                Push( mGlobals[addr] );
+                Push( mod->DataBase[addr] );
             }
             break;
 
-        case OP_STGLO:
+        case OP_STMOD:
             {
+                U8  iMod = ReadU8( codePtr );
                 U16 addr = ReadU16( codePtr );
 
-                if ( addr >= mGlobalSize )
+                auto [err, mod] = GetDataModule( iMod );
+                if ( err != ERR_NONE )
+                    return err;
+
+                if ( addr >= mod->DataSize )
                     return ERR_BAD_ADDRESS;
 
                 if ( WouldUnderflow() )
                     return ERR_STACK_UNDERFLOW;
 
-                mGlobals[addr] = Pop();
+                mod->DataBase[addr] = Pop();
             }
             break;
 
@@ -720,6 +726,27 @@ bool Machine::WouldUnderflow( U16 count ) const
 bool Machine::IsCodeInBounds( U32 address ) const
 {
     return address < (mMod->CodeSize - SENTINEL_SIZE);
+}
+
+std::pair<int, const Module*> Machine::GetDataModule( U8 index )
+{
+    const Module* mod;
+
+    if ( index == mModIndex )
+    {
+        mod = mMod;
+    }
+    else
+    {
+        mod = GetModule( index );
+        if ( mod == nullptr )
+            return std::pair( ERR_BYTECODE_NOT_FOUND, nullptr );
+    }
+
+    if ( mod->DataBase == nullptr )
+        return std::pair( ERR_BAD_ADDRESS, nullptr );
+
+    return std::pair( ERR_NONE, mod );
 }
 
 const Module* Machine::GetModule( U8 index )

@@ -418,8 +418,9 @@ void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatu
         switch ( decl->Kind )
         {
         case Decl_Global:
-            mCodeBinPtr[0] = OP_LDGLO;
-            mCodeBinPtr++;
+            mCodeBinPtr[0] = OP_LDMOD;
+            mCodeBinPtr[1] = mModIndex;
+            mCodeBinPtr += 2;
             WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
             IncreaseExprDepth();
             break;
@@ -785,8 +786,9 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
         switch ( decl->Kind )
         {
         case Decl_Global:
-            mCodeBinPtr[0] = OP_STGLO;
-            mCodeBinPtr++;
+            mCodeBinPtr[0] = OP_STMOD;
+            mCodeBinPtr[1] = mModIndex;
+            mCodeBinPtr += 2;
             WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
             break;
 

@@ -2,6 +2,8 @@
 
 #include "GeminiCommon.h"
 
+#include <utility>
+
 
 enum
 {
@@ -27,7 +29,9 @@ typedef uintptr_t UserContext;
 struct Module
 {
     const U8*       CodeBase;
+    CELL*           DataBase;
     U32             CodeSize;
+    U16             DataSize;
 };
 
 struct ByteCode
@@ -78,7 +82,6 @@ private:
     CELL*           mStack;
     U16             mStackSize;
     U16             mFramePtr;
-    CELL*           mGlobals;
     IEnvironment*   mEnv;
     UserContext     mScriptCtx;
 
@@ -86,14 +89,13 @@ private:
     UserContext     mNativeContinuationContext;
     U8              mNativeContinuationFlags;
     U8              mModIndex;
-    U16             mGlobalSize;
     U32             mPC;
     const Module*   mMod;
 
 public:
     Machine();
-    void Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx = 0 );
-    void Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx = 0 );
+    void Init( CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx = 0 );
+    void Init( CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx = 0 );
     bool IsRunning();
     UserContext GetScriptContext();
     CELL* Start( U8 modIndex, U32 address, U8 argCount );
@@ -103,7 +105,7 @@ public:
     int PushCell( CELL value );
 
 private:
-    void Init( CELL* globals, U16 globalSize, CELL* stack, U16 stackSize, UserContext scriptCtx );
+    void Init( CELL* stack, U16 stackSize, UserContext scriptCtx );
     StackFrame* PushFrame( const U8* curCodePtr, U8 argCount );
     int PopFrame();
     int CallPrimitive( U8 func );
@@ -120,6 +122,8 @@ private:
     bool WouldUnderflow( U16 count ) const;
 
     bool IsCodeInBounds( U32 address ) const;
+
+    std::pair<int, const Module*> GetDataModule( U8 index );
 
     const Module* GetModule( U8 index );
 
