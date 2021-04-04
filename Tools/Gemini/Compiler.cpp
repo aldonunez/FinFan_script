@@ -1571,17 +1571,7 @@ void Compiler::ThrowUnresolvedFuncsError()
 
 void Compiler::Log( LogCategory category, int line, int col, const char* format, va_list args )
 {
-    Log( mLog, category, line, col, format, args );
-}
-
-void Compiler::Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args )
-{
-    if ( log != nullptr )
-    {
-        char msg[256] = "";
-        vsprintf_s( msg, format, args );
-        log->Add( category, line, col, msg );
-    }
+    ::Log( mLog, category, line, col, format, args );
 }
 
 void Compiler::LogWarning( int line, int col, const char* format, ... )
@@ -1590,4 +1580,15 @@ void Compiler::LogWarning( int line, int col, const char* format, ... )
     va_start( args, format );
     Log( LOG_WARNING, line, col, format, args );
     va_end( args );
+}
+
+
+void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args )
+{
+    if ( log != nullptr )
+    {
+        char msg[256] = "";
+        vsprintf_s( msg, format, args );
+        log->Add( category, line, col, msg );
+    }
 }

@@ -84,6 +84,7 @@
     <None Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AlgolyParser.h" />
     <ClInclude Include="Compiler.h" />
     <ClInclude Include="Disassembler.h" />
     <ClInclude Include="GeminiCommon.h" />
@@ -94,6 +95,7 @@
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AlgolyParser.cpp" />
     <ClCompile Include="Compiler.cpp" />
     <ClCompile Include="Disassembler.cpp" />
     <ClCompile Include="Gemini.cpp" />

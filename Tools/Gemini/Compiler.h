@@ -302,8 +302,6 @@ public:
     CompilerErr Compile( Slist* progTree );
     void GetStats( CompilerStats& stats );
 
-    static void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args );
-
 private:
     // Code generation
 
@@ -387,3 +385,6 @@ private:
     void Log( LogCategory category, int line, int col, const char* format, va_list args );
     void LogWarning( int line, int col, const char* format, ... );
 };
+
+
+void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args );
