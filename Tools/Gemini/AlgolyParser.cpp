@@ -95,6 +95,11 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         ReadLineEnding();
         break;
 
+    case ';':
+        NextChar();
+        mCurToken = TokenCode::Separator;
+        break;
+
     case ':':
         NextChar();
 
@@ -105,7 +110,7 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         }
         else
         {
-            mCurToken = TokenCode::Separator;
+            ThrowSyntaxError( "Bad character: U+%02X", ':' );
         }
         break;
 
@@ -248,7 +253,7 @@ void AlgolyParser::SkipWhitespace()
             NextChar();
         }
 
-        if ( PeekChar() != ';' )
+        if ( PeekChar() != '#' )
         {
             break;
         }
@@ -281,7 +286,6 @@ bool AlgolyParser::IsIdentifierInitial( int c )
 {
     return isalpha( c )
         || (c == '_')
-        || (c == '#')
         || (c == '@');
 }
 
