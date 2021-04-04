@@ -24,17 +24,57 @@ static const uint8_t sIdentifierInitialCharMap[] =
 LispyParser::LispyParser( const char* codeText, int codeTextLen, ICompilerLog* log ) :
     mCodeTextPtr( codeText ),
     mCodeTextEnd( codeText + codeTextLen ),
-    mLine( 1 ),
     mLineStart( codeText ),
+    mLine( 1 ),
+    mCurChar( 0 ),
     mCurToken( Token_Bof ),
     mCurNumber( 0 ),
     mTokLine( 0 ),
     mTokCol( 0 ),
     mLog( log )
 {
+    if ( mCodeTextPtr < mCodeTextEnd )
+    {
+        mCurChar = *mCodeTextPtr;
+    }
 }
 
-LispyParser::TokenCode LispyParser::NextToken()
+int LispyParser::GetColumn()
+{
+    return mCodeTextPtr - mLineStart + 1;
+}
+
+int LispyParser::PeekChar() const
+{
+    return mCurChar;
+}
+
+int LispyParser::PeekChar( int index ) const
+{
+    if ( (mCodeTextEnd - mCodeTextPtr) < (index + 1) )
+        return 0;
+
+    return mCodeTextPtr[index];
+}
+
+void LispyParser::NextChar()
+{
+    if ( mCodeTextPtr < mCodeTextEnd )
+    {
+        mCodeTextPtr++;
+    }
+
+    if ( mCodeTextPtr < mCodeTextEnd )
+    {
+        mCurChar = *mCodeTextPtr;
+    }
+    else
+    {
+        mCurChar = 0;
+    }
+}
+
+LispyParser::TokenCode LispyParser::ScanToken()
 {
     SkipWhitespace();
 
@@ -43,38 +83,35 @@ LispyParser::TokenCode LispyParser::NextToken()
     mTokLine = mLine;
     mTokCol = GetColumn();
 
-    if ( mCodeTextPtr >= mCodeTextEnd )
+    if ( PeekChar() == 0 )
     {
         mCurToken = Token_Eof;
     }
-    else if ( *mCodeTextPtr == '(' )
+    else if ( PeekChar() == '(' )
     {
+        NextChar();
         mCurToken = Token_LParen;
-        mCodeTextPtr++;
     }
-    else if ( *mCodeTextPtr == ')' )
+    else if ( PeekChar() == ')' )
     {
+        NextChar();
         mCurToken = Token_RParen;
-        mCodeTextPtr++;
     }
-    else if ( isdigit( *mCodeTextPtr ) )
+    else if ( isdigit( PeekChar() ) )
     {
-        mCurToken = Token_Number;
         ReadNumber();
     }
-    else if ( *mCodeTextPtr == '-' && isdigit( mCodeTextPtr[1] ) )
+    else if ( PeekChar() == '-' && isdigit( PeekChar( 1 ) ) )
     {
-        mCurToken = Token_Number;
         ReadNumber();
     }
-    else if ( IsIdentifierInitial() )
+    else if ( IsIdentifierInitial( PeekChar() ) )
     {
-        mCurToken = Token_Symbol;
         ReadSymbol();
     }
     else
     {
-        ThrowSyntaxError( "Bad character: U+%02X", *mCodeTextPtr );
+        ThrowSyntaxError( "Bad character: U+%02X", PeekChar() );
     }
 
     return mCurToken;
@@ -84,88 +121,85 @@ void LispyParser::SkipWhitespace()
 {
     while ( true )
     {
-        while ( mCodeTextPtr < mCodeTextEnd
-            && isspace( *mCodeTextPtr ) )
+        while ( isspace( PeekChar() ) )
         {
-            if ( *mCodeTextPtr == '\r'
-                || *mCodeTextPtr == '\n' )
+            int c = PeekChar();
+
+            NextChar();
+
+            if ( c == '\r'
+                || c == '\n' )
             {
-                if ( *mCodeTextPtr == '\r'
-                    && (mCodeTextEnd - mCodeTextPtr) >= 2
-                    && mCodeTextPtr[1] == '\n' )
+                if ( c == '\r'
+                    && PeekChar() == '\n' )
                 {
-                    mCodeTextPtr++;
+                    NextChar();
                 }
 
                 mLine++;
                 mLineStart = mCodeTextPtr + 1;
             }
-
-            mCodeTextPtr++;
         }
 
-        if ( mCodeTextPtr == mCodeTextEnd
-            || *mCodeTextPtr != ';' )
+        if ( PeekChar() != ';' )
         {
             break;
         }
 
-        while ( mCodeTextPtr < mCodeTextEnd
-            && *mCodeTextPtr != '\r'
-            && *mCodeTextPtr != '\n' )
+        while ( PeekChar() != '\r'
+            && PeekChar() != '\n' )
         {
-            mCodeTextPtr++;
+            NextChar();
         }
     }
 }
 
-bool LispyParser::IsIdentifierInitial()
+bool LispyParser::IsIdentifierInitial( int c )
 {
-    return (*mCodeTextPtr < sizeof sIdentifierInitialCharMap)
-        && sIdentifierInitialCharMap[*mCodeTextPtr];
+    return (c < sizeof sIdentifierInitialCharMap)
+        && sIdentifierInitialCharMap[c];
 }
 
-bool LispyParser::IsIdentifierCoda()
+bool LispyParser::IsIdentifierCoda( int c )
 {
-    return IsIdentifierInitial() || isdigit( *mCodeTextPtr );
+    return IsIdentifierInitial( c ) || isdigit( c );
 }
 
 void LispyParser::ReadNumber()
 {
     bool negate = false;
 
-    if ( *mCodeTextPtr == '-' )
+    if ( PeekChar() == '-' )
     {
         negate = true;
-        mCodeTextPtr++;
+        NextChar();
     }
 
-    while ( (mCodeTextPtr < mCodeTextEnd) && isdigit( *mCodeTextPtr ) )
+    while ( isdigit( PeekChar() ) )
     {
-        mCurString.append( 1, *mCodeTextPtr );
-        mCodeTextPtr++;
+        mCurString.append( 1, PeekChar() );
+        NextChar();
     }
 
-    if ( (mCodeTextPtr < mCodeTextEnd) && IsIdentifierInitial() )
+    if ( IsIdentifierInitial( PeekChar() ) )
         ThrowSyntaxError( "syntax error : bad number" );
 
     mCurNumber = atoi( mCurString.c_str() );
     if ( negate )
         mCurNumber = -mCurNumber;
+
+    mCurToken = Token_Number;
 }
 
 void LispyParser::ReadSymbol()
 {
-    while ( (mCodeTextPtr < mCodeTextEnd) && IsIdentifierCoda() )
+    while ( IsIdentifierCoda( PeekChar() ) )
     {
-        mCurString.append( 1, *mCodeTextPtr );
-        mCodeTextPtr++;
+        mCurString.append( 1, PeekChar() );
+        NextChar();
     }
-}
 
-int LispyParser::GetColumn()
-{
-    return mCodeTextPtr - mLineStart + 1;
+    mCurToken = Token_Symbol;
 }
 
 Compiler::Slist* LispyParser::Parse()
@@ -173,7 +207,7 @@ Compiler::Slist* LispyParser::Parse()
     std::unique_ptr<Slist> list( new Slist() );
     list->Code = Compiler::Elem_Slist;
 
-    while ( NextToken() != Token_Eof )
+    while ( ScanToken() != Token_Eof )
     {
         if ( mCurToken != Token_LParen )
             ThrowSyntaxError( "syntax error : expected list" );
@@ -193,7 +227,7 @@ Compiler::Slist* LispyParser::ParseSlist()
 
     for ( ; ; )
     {
-        switch ( NextToken() )
+        switch ( ScanToken() )
         {
         case Token_LParen:
             list->Elements.push_back( std::unique_ptr<Slist>( ParseSlist() ) );

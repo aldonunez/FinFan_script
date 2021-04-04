@@ -90,8 +90,8 @@ private:
     void ReadNumber();
     void ReadSymbolOrKeyword();
 
-    bool IsIdentifierInitial( int c );
-    bool IsIdentifierCoda( int c );
+    static bool IsIdentifierInitial( int c );
+    static bool IsIdentifierCoda( int c );
 
     void AssertToken( TokenCode code );
 

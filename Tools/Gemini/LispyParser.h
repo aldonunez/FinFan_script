@@ -18,8 +18,9 @@ class LispyParser
 
     const char*     mCodeTextPtr;
     const char*     mCodeTextEnd;
-    int             mLine;
     const char*     mLineStart;
+    int             mLine;
+    int             mCurChar;
 
     TokenCode       mCurToken;
     std::string     mCurString;
@@ -37,14 +38,17 @@ public:
 private:
     // Scanning
 
+    int GetColumn();
+    int PeekChar() const;
+    int PeekChar( int index ) const;
+    void NextChar();
     void SkipWhitespace();
-    TokenCode NextToken();
+    TokenCode ScanToken();
     void ReadNumber();
     void ReadSymbol();
-    int GetColumn();
 
-    bool IsIdentifierInitial();
-    bool IsIdentifierCoda();
+    static bool IsIdentifierInitial( int c );
+    static bool IsIdentifierCoda( int c );
 
     // Parsing
 
