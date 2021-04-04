@@ -68,6 +68,7 @@ struct CompilerStats
 
 class Compiler
 {
+public:
     class CompilerException : public std::exception
     {
         CompilerErr     mError;
@@ -82,16 +83,6 @@ class Compiler
         {
             return mError;
         }
-    };
-
-    enum TokenCode
-    {
-        Token_Bof,
-        Token_Eof,
-        Token_LParen,
-        Token_RParen,
-        Token_Number,
-        Token_Symbol,
     };
 
     enum ElementCode
@@ -124,6 +115,7 @@ class Compiler
         std::string String;
     };
 
+private:
     struct InstPatch
     {
         InstPatch*  Next;
@@ -278,19 +270,9 @@ class Compiler
     typedef std::unordered_map<std::string, CallGenerator> GeneratorMap;
 
 
-    const char*     mCodeTextPtr;
-    const char*     mCodeTextEnd;
     U8*             mCodeBin;
     U8*             mCodeBinPtr;
     U8*             mCodeBinEnd;
-    int             mLine;
-    const char*     mLineStart;
-
-    TokenCode       mCurToken;
-    std::string     mCurString;
-    int             mCurNumber;
-    int             mTokLine;
-    int             mTokCol;
 
     SymTable        mConstTable;
     SymTable        mGlobalTable;
@@ -315,28 +297,14 @@ class Compiler
     CompilerStats   mStats;
 
 public:
-    Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env, 
-        ICompilerLog* log, int modIndex = 0 );
+    Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex = 0 );
 
-    CompilerErr Compile();
+    CompilerErr Compile( Slist* progTree );
     void GetStats( CompilerStats& stats );
 
+    static void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args );
+
 private:
-    // Scanning
-
-    void SkipWhitespace();
-    TokenCode NextToken();
-    void ReadNumber();
-    void ReadSymbol();
-    int GetColumn();
-
-    // Parsing
-
-    Slist* Parse();
-    Slist* ParseSlist();
-    Number* ParseNumber();
-    Symbol* ParseSymbol();
-
     // Code generation
 
     // Level 1
@@ -410,7 +378,6 @@ private:
     void CalculateStackDepth();
     void CalculateStackDepth( Function* func );
 
-    [[noreturn]] void ThrowSyntaxError( const char* format, ... );
     [[noreturn]] void ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... );
     [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
     [[noreturn]] void ThrowInternalError();

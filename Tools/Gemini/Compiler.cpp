@@ -5,23 +5,16 @@
 #include <cstdarg>
 
 
-Compiler::Compiler( const char* codeText, int codeTextLen, U8* codeBin, int codeBinLen, ICompilerEnv* env,
-    ICompilerLog* log, int modIndex ) :
-    mCodeTextPtr( codeText ),
-    mCodeTextEnd( codeText + codeTextLen ),
+Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex ) :
     mCodeBin( codeBin ),
     mCodeBinPtr( codeBin ),
     mCodeBinEnd( codeBin + codeBinLen ),
-    mLine( 1 ),
-    mLineStart( codeText ),
-    mCurToken( Token_Bof ),
-    mCurNumber( 0 ),
-    mTokLine( 0 ),
-    mTokCol( 0 ),
     mForwards( 0 ),
     mEnv( env ),
     mLog( log ),
     mModIndex( modIndex ),
+    mCurLocalCount(),
+    mMaxLocalCount(),
     mInFunc( false ),
     mCurFunc(),
     mCurExprDepth(),
@@ -55,7 +48,7 @@ Compiler::Compiler( const char* codeText, int codeTextLen, U8* codeBin, int code
     mGeneratorMap.insert( GeneratorMap::value_type( "let", &Compiler::GenerateLet ) );
 }
 
-CompilerErr Compiler::Compile()
+CompilerErr Compiler::Compile( Slist* progTree )
 {
 #if 0
     while ( NextToken() != Token_Eof )
@@ -65,8 +58,6 @@ CompilerErr Compiler::Compile()
 #else
     try
     {
-        std::unique_ptr<Slist> progTree( Parse() );
-
         MakeStdEnv();
 
         mSymStack.push_back( &mConstTable );
@@ -108,198 +99,6 @@ void Compiler::GetStats( CompilerStats& stats )
     }
 
     stats = mStats;
-}
-
-Compiler::TokenCode Compiler::NextToken()
-{
-    SkipWhitespace();
-
-    mCurString.clear();
-    mCurNumber = 0;
-    mTokLine = mLine;
-    mTokCol = GetColumn();
-
-    if ( mCodeTextPtr >= mCodeTextEnd )
-    {
-        mCurToken = Token_Eof;
-    }
-    else if ( *mCodeTextPtr == '(' )
-    {
-        mCurToken = Token_LParen;
-        mCodeTextPtr++;
-    }
-    else if ( *mCodeTextPtr == ')' )
-    {
-        mCurToken = Token_RParen;
-        mCodeTextPtr++;
-    }
-    else if ( isdigit( *mCodeTextPtr ) )
-    {
-        mCurToken = Token_Number;
-        ReadNumber();
-    }
-    else if ( *mCodeTextPtr == '-' && isdigit( mCodeTextPtr[1] ) )
-    {
-        mCurToken = Token_Number;
-        ReadNumber();
-    }
-    else
-    {
-        mCurToken = Token_Symbol;
-        ReadSymbol();
-    }
-
-    return mCurToken;
-}
-
-void Compiler::SkipWhitespace()
-{
-    while ( true )
-    {
-        while ( mCodeTextPtr < mCodeTextEnd
-            && isspace( *mCodeTextPtr ) )
-        {
-            if ( *mCodeTextPtr == '\n' )
-            {
-                mLine++;
-                mLineStart = mCodeTextPtr + 1;
-            }
-
-            mCodeTextPtr++;
-        }
-
-        if ( mCodeTextPtr == mCodeTextEnd
-            || *mCodeTextPtr != ';' )
-        {
-            break;
-        }
-
-        while ( mCodeTextPtr < mCodeTextEnd
-            && *mCodeTextPtr != '\n' )
-        {
-            mCodeTextPtr++;
-        }
-    }
-}
-
-void Compiler::ReadNumber()
-{
-    bool negate = false;
-
-    if ( *mCodeTextPtr == '-' )
-    {
-        negate = true;
-        mCodeTextPtr++;
-    }
-
-    while ( isdigit( *mCodeTextPtr ) )
-    {
-        mCurString.append( 1, *mCodeTextPtr );
-        mCodeTextPtr++;
-    }
-
-    if ( mCodeTextPtr < mCodeTextEnd
-        && !isspace( *mCodeTextPtr )
-        && (*mCodeTextPtr != '(')
-        && (*mCodeTextPtr != ')')
-        && (*mCodeTextPtr != ';') )
-        ThrowSyntaxError( "syntax error : bad number" );
-
-    mCurNumber = atoi( mCurString.c_str() );
-    if ( negate )
-        mCurNumber = -mCurNumber;
-}
-
-void Compiler::ReadSymbol()
-{
-    while ( (*mCodeTextPtr != '(') 
-        && (*mCodeTextPtr != ')')
-        && (*mCodeTextPtr != ';')
-        && !isspace( *mCodeTextPtr ) )
-    {
-        mCurString.append( 1, *mCodeTextPtr );
-        mCodeTextPtr++;
-    }
-}
-
-int Compiler::GetColumn()
-{
-    return mCodeTextPtr - mLineStart + 1;
-}
-
-Compiler::Slist* Compiler::Parse()
-{
-    std::unique_ptr<Slist> list( new Slist() );
-    list->Code = Elem_Slist;
-
-    while ( NextToken() != Token_Eof )
-    {
-        if ( mCurToken != Token_LParen )
-            ThrowSyntaxError( "syntax error : expected list" );
-
-        list->Elements.push_back( std::unique_ptr<Slist>( ParseSlist() ) );
-    }
-
-    return list.release();
-}
-
-Compiler::Slist* Compiler::ParseSlist()
-{
-    std::unique_ptr<Slist> list( new Slist() );
-    list->Code = Elem_Slist;
-    list->Line = mTokLine;
-    list->Column = mTokCol;
-
-    for ( ; ; )
-    {
-        switch ( NextToken() )
-        {
-        case Token_LParen:
-            list->Elements.push_back( std::unique_ptr<Slist>( ParseSlist() ) );
-            break;
-
-        case Token_RParen:
-            goto Done;
-
-        case Token_Number:
-            list->Elements.push_back( std::unique_ptr<Number>( ParseNumber() ) );
-            break;
-
-        case Token_Symbol:
-            list->Elements.push_back( std::unique_ptr<Symbol>( ParseSymbol() ) );
-            break;
-
-        case Token_Eof:
-            ThrowSyntaxError( "syntax error : unexpected end-of-file" );
-            break;
-
-        default:
-            ThrowInternalError();
-        }
-    }
-Done:
-
-    return list.release();
-}
-
-Compiler::Number* Compiler::ParseNumber()
-{
-    Number* number = new Number();
-    number->Code = Elem_Number;
-    number->Value = mCurNumber;
-    number->Line = mTokLine;
-    number->Column = mTokCol;
-    return number;
-}
-
-Compiler::Symbol* Compiler::ParseSymbol()
-{
-    Symbol* symbol = new Symbol();
-    symbol->Code = Elem_Symbol;
-    symbol->String = mCurString;
-    symbol->Line = mTokLine;
-    symbol->Column = mTokCol;
-    return symbol;
 }
 
 void Compiler::Generate( Element* elem )
@@ -1710,14 +1509,6 @@ void Compiler::CalculateStackDepth( Function* func )
     func->TreeStackUsage = func->IndividualStackUsage + maxChildStackUsage;
 }
 
-void Compiler::ThrowSyntaxError( const char* format, ... )
-{
-    va_list args;
-    va_start( args, format );
-    ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
-    va_end( args );
-}
-
 void Compiler::ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... )
 {
     if ( mLog != nullptr )
@@ -1755,7 +1546,7 @@ void Compiler::ThrowInternalError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    ThrowError( CERR_INTERNAL, mLine, GetColumn(), format, args );
+    ThrowError( CERR_INTERNAL, 0, 0, format, args );
     va_end( args );
 }
 
@@ -1780,11 +1571,16 @@ void Compiler::ThrowUnresolvedFuncsError()
 
 void Compiler::Log( LogCategory category, int line, int col, const char* format, va_list args )
 {
-    if ( mLog != nullptr )
+    Log( mLog, category, line, col, format, args );
+}
+
+void Compiler::Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args )
+{
+    if ( log != nullptr )
     {
         char msg[256] = "";
         vsprintf_s( msg, format, args );
-        mLog->Add( category, line, col, msg );
+        log->Add( category, line, col, msg );
     }
 }
 

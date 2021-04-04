@@ -138,7 +138,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
                 "%s(%d)",
                 (CallFlags::GetAutoPop( callFlags ) ? ".POP" : ""),
                 CallFlags::GetCount( callFlags ) );
-    }
+        }
         break;
 
     case OP_PRIM:

@@ -2,6 +2,7 @@
 //
 
 #include "stdafx.h"
+#include "..\Gemini\LispyParser.h"
 #include "..\Gemini\Compiler.h"
 #include "..\Gemini\Machine.h"
 #include "..\Gemini\Disassembler.h"
@@ -234,8 +235,11 @@ int main( int argc, char* argv[] )
     env.AddGlobal( "%2", 2 );
     env.AddGlobal( "%3", 3 );
 
-    Compiler compiler( &codeText.front(), codeTextLen, codeBin, codeBinLen, &env, &log );
-    CompilerErr error = compiler.Compile();
+    LispyParser lispyParser( &codeText.front(), codeTextLen, &log );
+    std::unique_ptr<Compiler::Slist> progTree( lispyParser.Parse() );
+
+    Compiler compiler( codeBin, codeBinLen, &env, &log );
+    CompilerErr error = compiler.Compile( progTree.get() );
 
     if ( error != 0 )
     {

@@ -4,6 +4,7 @@
 #include "stdafx.h"
 #include "Machine.h"
 #include "OpCodes.h"
+#include "LispyParser.h"
 #include "Compiler.h"
 #include "Disassembler.h"
 
@@ -339,14 +340,18 @@ int _tmain(int argc, _TCHAR* argv[])
         U8 bin1[512];
         CompilerEnv env;
         CompilerLog log;
-        Compiler compiler1( progStr1, sizeof progStr1 - 1, bin1, sizeof bin1, &env, &log );
+
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, &log );
+        std::unique_ptr<Compiler::Slist> progTree( lispyParser.Parse() );
+
+        Compiler compiler1( bin1, sizeof bin1, &env, &log );
         Module mod1;
         mod1.CodeBase = bin1;
         env.AddGlobal( "global1", 0 );
         env.AddGlobal( "global2", 1 );
         env.AddGlobal( "global3", 2 );
         env.SetCurrentModule( &mod1 );
-        CompilerErr compilerErr = compiler1.Compile();
+        CompilerErr compilerErr = compiler1.Compile( progTree.get() );
         CompilerStats stats = { 0 };
         compiler1.GetStats( stats );
 
@@ -394,21 +399,29 @@ int _tmain(int argc, _TCHAR* argv[])
         U8 bin1[512];
         U8 bin2[512];
         CompilerEnv env;
-        Compiler compiler1( progStr1, sizeof progStr1 - 1, bin1, sizeof bin1, &env, nullptr );
-        Compiler compiler2( progStr2, sizeof progStr2 - 1, bin2, sizeof bin2, &env, nullptr );
+        Compiler compiler1( bin1, sizeof bin1, &env, nullptr );
+        Compiler compiler2( bin2, sizeof bin2, &env, nullptr );
 
         bool b = false;
         b = env.AddNative( "add", NativeLatent1 );
 
+        std::unique_ptr<Compiler::Slist> progTree;
+
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr );
+        progTree.reset( lispyParser.Parse() );
+
         Module mod1;
         mod1.CodeBase = bin1;
         env.SetCurrentModule( &mod1 );
-        compiler1.Compile();
+        compiler1.Compile( progTree.get() );
+
+        lispyParser = LispyParser( progStr2, sizeof progStr2 - 1, nullptr );
+        progTree.reset( lispyParser.Parse() );
 
         Module mod2;
         mod2.CodeBase = bin2;
         env.SetCurrentModule( &mod2 );
-        compiler2.Compile();
+        compiler2.Compile( progTree.get() );
 
         CELL stack[Machine::MIN_STACK];
         Machine machine;
@@ -438,8 +451,12 @@ int _tmain(int argc, _TCHAR* argv[])
         const char progStr1[] = "(defun b (x y) (let ((c x) (d y)) (- c d))) (defun a () (b 5 (+ 1 1)))";
         U8 bin[1024];
         CompilerEnv env;
-        Compiler compiler( progStr1, sizeof progStr1 - 1, bin, sizeof bin, &env, nullptr );
-        compiler.Compile();
+
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr );
+        std::unique_ptr<Compiler::Slist> progTree( lispyParser.Parse() );
+
+        Compiler compiler( bin, sizeof bin, &env, nullptr );
+        compiler.Compile( progTree.get() );
         CELL stack[Machine::MIN_STACK];
         Machine machine;
         machine.Init( stack, _countof( stack ), nullptr );

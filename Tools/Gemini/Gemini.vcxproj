@@ -87,6 +87,7 @@
     <ClInclude Include="Compiler.h" />
     <ClInclude Include="Disassembler.h" />
     <ClInclude Include="GeminiCommon.h" />
+    <ClInclude Include="LispyParser.h" />
     <ClInclude Include="Machine.h" />
     <ClInclude Include="OpCodes.h" />
     <ClInclude Include="stdafx.h" />
@@ -96,6 +97,7 @@
     <ClCompile Include="Compiler.cpp" />
     <ClCompile Include="Disassembler.cpp" />
     <ClCompile Include="Gemini.cpp" />
+    <ClCompile Include="LispyParser.cpp" />
     <ClCompile Include="Machine.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
