@@ -2,11 +2,16 @@
 //
 
 #include "stdafx.h"
+#include "..\Gemini\AlgolyParser.h"
 #include "..\Gemini\LispyParser.h"
 #include "..\Gemini\Compiler.h"
 #include "..\Gemini\Machine.h"
 #include "..\Gemini\Disassembler.h"
 #include <vector>
+
+
+constexpr char LispyExt[]   = ".geml";
+constexpr char AlgolyExt[]  = ".gema";
 
 
 class CompilerEnv : public ICompilerEnv
@@ -156,6 +161,8 @@ public:
 
 int main( int argc, char* argv[] )
 {
+    const char* filePath = nullptr;
+
     FILE* file = nullptr;
     FILE* outFile = nullptr;
     FILE* indexFile = nullptr;
@@ -168,7 +175,8 @@ int main( int argc, char* argv[] )
         return 1;
     }
 
-    err = fopen_s( &file, argv[1], "rb" );
+    filePath = argv[1];
+    err = fopen_s( &file, filePath, "rb" );
     if ( err != 0 )
     {
         return 1;
@@ -235,8 +243,26 @@ int main( int argc, char* argv[] )
     env.AddGlobal( "%2", 2 );
     env.AddGlobal( "%3", 3 );
 
-    LispyParser lispyParser( &codeText.front(), codeTextLen, &log );
-    std::unique_ptr<Compiler::Slist> progTree( lispyParser.Parse() );
+    std::unique_ptr<Compiler::Slist> progTree;
+    size_t filePathLen = strlen( filePath );
+
+    if ( filePathLen > (sizeof LispyExt - 1)
+        && 0 == _stricmp( LispyExt, &filePath[filePathLen - (sizeof LispyExt - 1)] ) )
+    {
+        LispyParser parser( &codeText.front(), codeTextLen, &log );
+        progTree.reset( parser.Parse() );
+    }
+    else if ( filePathLen > (sizeof AlgolyExt - 1)
+        && 0 == _stricmp( AlgolyExt, &filePath[filePathLen - (sizeof AlgolyExt - 1)] ) )
+    {
+        AlgolyParser parser( &codeText.front(), codeTextLen, &log );
+        progTree.reset( parser.Parse() );
+    }
+    else
+    {
+        fprintf( stderr, "Unrecognized source file type\n" );
+        return 1;
+    }
 
     Compiler compiler( codeBin, codeBinLen, &env, &log );
     CompilerErr error = compiler.Compile( progTree.get() );
@@ -268,7 +294,7 @@ int main( int argc, char* argv[] )
 
     printf( "%d bytes written.\n", stats.CodeBytesWritten );
     printf( "Calls indirectly: %s\n", stats.CallsIndirectly ? "true" : "false" );
-    printf( "Type     Depth   Bytes   Recurses\n" );
+    printf( "Type     Depth   Words   Recurses\n" );
 
     CallStats* callSets[] = { &stats.Static, &stats.Lambda };
     const char* callSetTypes[] = { "Static", "Lambda" };
