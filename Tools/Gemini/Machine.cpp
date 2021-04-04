@@ -5,23 +5,24 @@
 
 /*
 dup
-push <int8>
+push <uint8>
 pop
+not
 
-ldarg, starg <int8>		ldreg, streg <int8> or <int16>	
-ldloc, stloc <int8>			
-ldglo, stglo <int16>			
-ldc.0			
-ldc.1			
-ldc <int32>			
+ldarg, starg <uint8>
+ldloc, stloc <uint8>
+ldmod, stmod <uint8> <uint16>
+ldc.s <int8>
+ldc <int32>
+prim <uint8>
 
-ret <int8>			
-call <int8> <int16>			ldrtn <int16>
-callp <int8> <int8>			
-calln <int8> <int32>			
-			
-b <int8>			
-bfalse, btrue <int8>			
+b <int16>
+bfalse, btrue <int16>
+
+ret
+call <uint8> <uint24>
+calli <uint8>
+callm <uint8> <uint8> <uint24>
 */
 
 
