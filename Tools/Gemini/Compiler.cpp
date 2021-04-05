@@ -46,6 +46,10 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mGeneratorMap.insert( GeneratorMap::value_type( "lambda", &Compiler::GenerateLambda ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "funcall", &Compiler::GenerateFuncall ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "let", &Compiler::GenerateLet ) );
+    mGeneratorMap.insert( GeneratorMap::value_type( "loop", &Compiler::GenerateLoop ) );
+    mGeneratorMap.insert( GeneratorMap::value_type( "do", &Compiler::GenerateDo ) );
+    mGeneratorMap.insert( GeneratorMap::value_type( "break", &Compiler::GenerateBreak ) );
+    mGeneratorMap.insert( GeneratorMap::value_type( "next", &Compiler::GenerateNext ) );
 }
 
 CompilerErr Compiler::Compile( Slist* progTree )
@@ -154,11 +158,18 @@ void Compiler::Generate( Element* elem, const GenConfig& config, GenStatus& stat
 
 void Compiler::GenerateDiscard( Element* elem )
 {
+    GenConfig config{};
+
+    GenerateDiscard( elem, config );
+}
+
+void Compiler::GenerateDiscard( Element* elem, const GenConfig& config )
+{
     if ( elem->Code != Elem_Slist )
         return;
 
     GenStatus status = { Expr_Other };
-    GenerateSlist( (Slist*) elem, GenConfig::Discard(), status );
+    GenerateSlist( (Slist*) elem, config.WithDiscard(), status );
 
     if ( !status.discarded )
     {
@@ -180,17 +191,22 @@ void Compiler::GenerateNumber( Number* number, const GenConfig& config, GenStatu
         return;
     }
 
-    if ( (number->Value >= SCHAR_MIN) && (number->Value <= SCHAR_MAX) )
+    EmitLoadConstant( number->Value );
+}
+
+void Compiler::EmitLoadConstant( int32_t value )
+{
+    if ( (value >= INT8_MIN) && (value <= INT8_MAX) )
     {
         mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = number->Value;
+        mCodeBinPtr[1] = (U8) value;
         mCodeBinPtr += 2;
     }
     else
     {
         *mCodeBinPtr = OP_LDC;
         mCodeBinPtr++;
-        WriteI32( mCodeBinPtr, number->Value );
+        WriteI32( mCodeBinPtr, value );
     }
 
     IncreaseExprDepth();
@@ -866,6 +882,206 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
     DecreaseExprDepth( argCount );
 }
 
+void Compiler::GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    SymTable localTable;
+
+    if ( list->Elements.size() < 8 )
+        ThrowError( CERR_SEMANTICS, list, "'loop' takes 7 or more arguments" );
+
+    MatchSymbol( list->Elements[1].get(), "for" );
+
+    // Variable name
+
+    if ( list->Elements[2]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, list->Elements[2].get(), "Expected variable name" );
+
+    Symbol* localSym = (Symbol*) list->Elements[2].get();
+    Storage* local = AddLocal( localTable, localSym->String, mCurLocalCount );
+
+    mCurLocalCount++;
+    if ( mCurLocalCount > mMaxLocalCount )
+        mMaxLocalCount = mCurLocalCount;
+
+    MatchSymbol( list->Elements[3].get(), "from" );
+
+    if ( list->Elements[5]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, list->Elements[5].get(), "Expected symbol: to or downto" );
+
+    int primitive;
+    int step;
+
+    if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "below" ) )
+    {
+        primitive = PRIM_GT;
+        step = 1;
+    }
+    else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "to" ) )
+    {
+        primitive = PRIM_GE;
+        step = 1;
+    }
+    else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "downto" ) )
+    {
+        primitive = PRIM_LE;
+        step = -1;
+    }
+    else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "above" ) )
+    {
+        primitive = PRIM_LT;
+        step = -1;
+    }
+    else
+    {
+        ThrowError( CERR_SEMANTICS, list->Elements[5].get(), "Expected symbol: to, downto, above, below" );
+    }
+
+    if ( list->Elements[7]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, list->Elements[7].get(), "Expected symbol: do, by" );
+
+    int headerSize = 8;
+    Element* stepExpr = nullptr;
+
+    if ( 0 == strcmp( ((Symbol*) list->Elements[7].get())->String.c_str(), "by" ) )
+    {
+        if ( list->Elements.size() < 10 )
+            ThrowError( CERR_SEMANTICS, list, "'loop' with a step takes 9 or more arguments" );
+
+        stepExpr = list->Elements[8].get();
+        headerSize = 10;
+    }
+
+    MatchSymbol( list->Elements[headerSize - 1].get(), "do" );
+
+    mSymStack.push_back( &localTable );
+
+    PatchChain  bodyChain;
+    PatchChain  testChain;
+    PatchChain  breakChain;
+    PatchChain  nextChain;
+
+    // Beginning expression
+    Generate( list->Elements[4].get() );
+    mCodeBinPtr[0] = OP_DUP;
+    mCodeBinPtr[1] = OP_STLOC;
+    mCodeBinPtr[2] = local->Offset;
+    mCodeBinPtr += 3;
+    IncreaseExprDepth();
+    DecreaseExprDepth();
+
+    // The unconditional jump below leaves one value on the expression stack.
+    // Decrease the depth here, because this value overlaps the first one pushed
+    // for a usual test.
+    DecreaseExprDepth();
+
+    PushPatch( &testChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    U8* bodyPtr = mCodeBinPtr;
+
+    // Body
+    GenerateStatements( list, headerSize, config.WithLoop( &breakChain, &nextChain ), status );
+
+    Patch( &nextChain );
+
+    if ( stepExpr != nullptr )
+        Generate( stepExpr );
+    else
+        EmitLoadConstant( step );
+
+    mCodeBinPtr[0] = OP_LDLOC;
+    mCodeBinPtr[1] = local->Offset;
+    mCodeBinPtr[2] = OP_PRIM;
+    mCodeBinPtr[3] = PRIM_ADD;
+    mCodeBinPtr[4] = OP_DUP;
+    mCodeBinPtr[5] = OP_STLOC;
+    mCodeBinPtr[6] = local->Offset;
+    mCodeBinPtr += 7;
+    IncreaseExprDepth();
+    DecreaseExprDepth();
+    IncreaseExprDepth();
+    DecreaseExprDepth();
+
+    Patch( &testChain );
+
+    // Ending expression
+    Generate( list->Elements[6].get() );
+
+    mCodeBinPtr[0] = OP_PRIM;
+    mCodeBinPtr[1] = primitive;
+    mCodeBinPtr += 2;
+    DecreaseExprDepth();
+
+    PushPatch( &bodyChain );
+    mCodeBinPtr[0] = OP_BTRUE;
+    mCodeBinPtr += BranchInst::Size;
+    DecreaseExprDepth();
+
+    Patch( &bodyChain, bodyPtr );
+    Patch( &breakChain );
+
+    mSymStack.pop_back();
+
+    mCurLocalCount -= localTable.size();
+
+    GenerateNilIfNeeded( config, status );
+}
+
+void Compiler::GenerateDo( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( list->Elements.size() < 2 )
+        ThrowError( CERR_SEMANTICS, list, "'do' takes 1 or more arguments" );
+
+    PatchChain  breakChain;
+    PatchChain  nextChain;
+    PatchChain  trueChain;
+
+    U8* testPtr = mCodeBinPtr;
+
+    // Test expression
+    Generate( list->Elements[1].get(), GenConfig::Expr( &trueChain, &breakChain, false ) );
+
+    ElideTrue( &trueChain, &breakChain );
+    Patch( &trueChain );
+
+    // Body
+    GenerateStatements( list, 2, config.WithLoop( &breakChain, &nextChain ), status );
+
+    PushPatch( &nextChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    Patch( &breakChain );
+    Patch( &nextChain, testPtr );
+
+    GenerateNilIfNeeded( config, status );
+}
+
+void Compiler::GenerateBreak( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( config.breakChain == nullptr )
+        ThrowError( CERR_SEMANTICS, list, "Cannot use break outside of a loop" );
+
+    PushPatch( config.breakChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    status.discarded = true;
+}
+
+void Compiler::GenerateNext( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( config.nextChain == nullptr )
+        ThrowError( CERR_SEMANTICS, list, "Cannot use next outside of a loop" );
+
+    PushPatch( config.nextChain );
+    mCodeBinPtr[0] = OP_B;
+    mCodeBinPtr += BranchInst::Size;
+
+    status.discarded = true;
+}
+
 void Compiler::GenerateNot( Slist* list, const GenConfig& config, GenStatus& status )
 {
     if ( list->Elements.size() != 2 )
@@ -1282,6 +1498,36 @@ void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConf
     }
 }
 
+void Compiler::GenerateStatements( Slist* list, int startIndex, const GenConfig& config, GenStatus& status )
+{
+    for ( size_t i = startIndex; i < list->Elements.size(); i++ )
+    {
+        GenerateDiscard( list->Elements[i].get(), config );
+    }
+}
+
+void Compiler::GenerateNilIfNeeded( const GenConfig& config, GenStatus& status )
+{
+    if ( config.discard )
+    {
+        status.discarded = true;
+    }
+    else
+    {
+        mCodeBinPtr[0] = OP_LDC_S;
+        mCodeBinPtr[1] = 0;
+        mCodeBinPtr += 2;
+
+        IncreaseExprDepth();
+    }
+}
+
+void Compiler::MatchSymbol( Element* elem, const char* name )
+{
+    if ( elem->Code != Elem_Symbol || 0 != strcmp( name, ((Symbol*) elem)->String.c_str() ) )
+        ThrowError( CERR_SEMANTICS, elem, "Expected symbol: %s", name );
+}
+
 bool Compiler::HasLocals( Element* elem )
 {
     if ( elem->Code != Elem_Slist )
@@ -1440,7 +1686,8 @@ void Compiler::CalculateStackDepth()
 
             // Only count parameters of publics, if that's ever a distinction
 
-            int16_t stackUsage = func->TreeStackUsage + func->ArgCount;
+            // Add 1 for the deepest return value in the call tree
+            int16_t stackUsage = func->TreeStackUsage + func->ArgCount + 1;
 
             callStats->MaxCallDepth  = std::max( callStats->MaxCallDepth,  func->CallDepth );
             callStats->MaxStackUsage = std::max( callStats->MaxStackUsage, stackUsage );

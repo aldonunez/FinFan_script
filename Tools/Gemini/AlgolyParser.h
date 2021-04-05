@@ -10,9 +10,6 @@ class AlgolyParser
     template <typename T>
     using Unique = std::unique_ptr<T>;
 
-    // TODO: Change statement break from colon to semicolon,
-    //       and comment from semicolon to pound
-
     enum class TokenCode
     {
         Bof,
@@ -37,17 +34,27 @@ class AlgolyParser
         LE,
         GT,
         GE,
+        Above,
         And,
+        Below,
+        Break,
+        By,
         Def,
+        Do,
+        Downto,
         Else,
         End,
+        For,
         If,
         Lambda,
         Let,
+        Next,
         Not,
         Or,
         Return,
         Then,
+        To,
+        While,
     };
 
     typedef bool (AlgolyParser::*TestOpFunc)();
@@ -79,6 +86,7 @@ private:
 
     int GetColumn();
     int PeekChar() const;
+    int PeekChar( int index ) const;
     void NextChar();
     void CollectChar();
     void SkipWhitespace();
@@ -108,8 +116,14 @@ private:
     Unique<Compiler::Slist> ParseIf();
     Unique<Compiler::Slist> ParseIfClause();
     Unique<Compiler::Slist> ParseElseClause();
+    Unique<Compiler::Slist> ParseFor();
+    Unique<Compiler::Slist> ParseWhile();
+    Unique<Compiler::Slist> ParseBreak();
+    Unique<Compiler::Slist> ParseNext();
 
+    void ParseStatements( Compiler::Slist* container );
     Unique<Compiler::Element> ParseStatement();
+    Unique<Compiler::Element> ParseExprStatement();
     Unique<Compiler::Element> ParseExpr();
     Unique<Compiler::Element> ParseBinaryPart( int level );
     Unique<Compiler::Element> ParseBinary( int level );

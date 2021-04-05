@@ -216,6 +216,8 @@ private:
         PatchChain* falseChain;
         bool invert;
         bool discard;
+        PatchChain* breakChain;
+        PatchChain* nextChain;
 
         static GenConfig Discard()
         {
@@ -250,6 +252,21 @@ private:
         GenConfig WithTrue( PatchChain* chain ) const
         {
             GenConfig config = { chain, falseChain, invert };
+            return config;
+        }
+
+        GenConfig WithLoop( PatchChain* breakChain, PatchChain* nextChain ) const
+        {
+            GenConfig config = *this;
+            config.breakChain = breakChain;
+            config.nextChain = nextChain;
+            return config;
+        }
+
+        GenConfig WithDiscard() const
+        {
+            GenConfig config = *this;
+            config.discard = true;
             return config;
         }
     };
@@ -310,11 +327,14 @@ private:
     void Generate( Element* elem, const GenConfig& config );
     void Generate( Element* elem, const GenConfig& config, GenStatus& status );
     void GenerateDiscard( Element* elem );
+    void GenerateDiscard( Element* elem, const GenConfig& config );
 
     // Level 2 - S-expressions
     void GenerateNumber( Number* number, const GenConfig& config, GenStatus& status );
     void GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatus& status );
     void GenerateSlist( Slist* list, const GenConfig& config, GenStatus& status );
+
+    void EmitLoadConstant( int32_t value );
 
     // Level 3 - functions and special operators
     void GenerateArithmetic( Slist* list, const GenConfig& config, GenStatus& status );
@@ -333,6 +353,10 @@ private:
     void GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLet( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateCall( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateDo( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateBreak( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateNext( Slist* list, const GenConfig& config, GenStatus& status );
 
     void GenerateUnaryPrimitive( Element* elem, const GenConfig& config, GenStatus& status );
     void GenerateBinaryPrimitive( Slist* list, int primitive, const GenConfig& config, GenStatus& status );
@@ -340,6 +364,8 @@ private:
     void GenerateLambdas();
     void GenerateProc( Slist* list, int startIndex, Function* func );
     void GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status );
+    void GenerateStatements( Slist* list, int startIndex, const GenConfig& config, GenStatus& status );
+    void GenerateNilIfNeeded( const GenConfig& config, GenStatus& status );
 
     void GenerateSentinel();
 
@@ -369,6 +395,7 @@ private:
     ConstDecl* AddConst( const std::string& name, int value );
     void MakeStdEnv();
 
+    void MatchSymbol( Element* elem, const char* name );
     bool HasLocals( Element* elem );
 
     void IncreaseExprDepth();

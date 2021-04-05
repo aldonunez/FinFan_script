@@ -40,6 +40,14 @@ int AlgolyParser::PeekChar() const
     return mCurChar;
 }
 
+int AlgolyParser::PeekChar( int index ) const
+{
+    if ( (mCodeTextEnd - mCodeTextPtr) < (index + 1) )
+        return 0;
+
+    return mCodeTextPtr[index];
+}
+
 void AlgolyParser::NextChar()
 {
     if ( mCodeTextPtr < mCodeTextEnd )
@@ -135,7 +143,7 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         break;
 
     case '-':
-        if ( isdigit( PeekChar() ) )
+        if ( isdigit( PeekChar( 1 ) ) )
         {
             ReadNumber();
         }
@@ -324,17 +332,27 @@ void AlgolyParser::ReadSymbolOrKeyword()
 {
     static std::map<std::string, TokenCode> sStrToKeyword
     {
+        { "above",  TokenCode::Above },
         { "and",    TokenCode::And },
+        { "below",  TokenCode::Below },
+        { "break",  TokenCode::Break },
+        { "by",     TokenCode::By },
         { "def",    TokenCode::Def },
+        { "do",     TokenCode::Do },
+        { "downto", TokenCode::Downto },
         { "else",   TokenCode::Else },
         { "end",    TokenCode::End },
+        { "for",    TokenCode::For },
         { "if",     TokenCode::If },
         { "lambda", TokenCode::Lambda },
         { "let",    TokenCode::Let },
+        { "next",   TokenCode::Next },
         { "not",    TokenCode::Not },
         { "or",     TokenCode::Or },
         { "return", TokenCode::Return },
         { "then",   TokenCode::Then },
+        { "to",     TokenCode::To },
+        { "while",  TokenCode::While },
     };
 
     while ( IsIdentifierCoda( PeekChar() ) )
@@ -404,13 +422,10 @@ Unique<Compiler::Slist> AlgolyParser::ParseProc( const char* head, bool hasName 
 
     SkipLineSeparators();
 
-    while ( mCurToken != TokenCode::End )
-    {
-        list->Elements.push_back( ParseStatement() );
-    }
+    ParseStatements( list.get() );
 
     // Read past "end"
-    ScanToken();
+    ScanToken( TokenCode::End );
 
     return list;
 }
@@ -450,14 +465,56 @@ Unique<Compiler::Slist> AlgolyParser::ParseParamList()
     return list;
 }
 
+void AlgolyParser::ParseStatements( Slist* container )
+{
+    while ( mCurToken != TokenCode::End && mCurToken != TokenCode::Else )
+    {
+        container->Elements.push_back( ParseStatement() );
+    }
+}
+
 Unique<Compiler::Element> AlgolyParser::ParseStatement()
 {
-    if ( mCurToken == TokenCode::Let )
-        return ParseLet();
+    std::unique_ptr<Element> elem;
 
-    if ( mCurToken == TokenCode::Return )
-        return ParseReturn();
+    switch ( mCurToken )
+    {
+    case TokenCode::Let:
+        elem = ParseLet();
+        break;
 
+    case TokenCode::Return:
+        elem = ParseReturn();
+        break;
+
+    case TokenCode::For:
+        elem = ParseFor();
+        break;
+
+    case TokenCode::While:
+        elem = ParseWhile();
+        break;
+
+    case TokenCode::Break:
+        elem = ParseBreak();
+        break;
+
+    case TokenCode::Next:
+        elem = ParseNext();
+        break;
+
+    default:
+        elem = ParseExprStatement();
+        break;
+    }
+
+    SkipLineSeparators();
+
+    return elem;
+}
+
+Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
+{
     std::unique_ptr<Element> expr( ParseExpr() );
 
     if ( mCurToken != TokenCode::Eol
@@ -467,8 +524,6 @@ Unique<Compiler::Element> AlgolyParser::ParseStatement()
     {
         ThrowSyntaxError( "Expected end of statement" );
     }
-
-    SkipLineSeparators();
 
     return expr;
 }
@@ -729,8 +784,6 @@ Unique<Compiler::Slist> AlgolyParser::ParseReturn()
     list->Elements.push_back( ParseAsSymbol() );
     list->Elements.push_back( ParseExpr() );
 
-    SkipLineSeparators();
-
     return list;
 }
 
@@ -788,7 +841,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseIfClause()
     ScanToken();
     SkipLineSeparators();
 
-    clause->Elements.push_back( ParseStatement() );
+    ParseStatements( clause.get() );
 
     return clause;
 }
@@ -801,6 +854,83 @@ Unique<Compiler::Slist> AlgolyParser::ParseElseClause()
     clause->Elements.push_back( ParseStatement() );
 
     return clause;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseFor()
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+
+    list->Elements.push_back( MakeSymbol( "loop" ) );
+    list->Elements.push_back( ParseAsSymbol() );
+    list->Elements.push_back( ParseSymbol() );
+
+    ScanToken( TokenCode::Assign );
+    list->Elements.push_back( MakeSymbol( "from" ) );
+    list->Elements.push_back( ParseExpr() );
+
+    if ( mCurToken == TokenCode::Above
+        || mCurToken == TokenCode::Below
+        || mCurToken == TokenCode::Downto
+        || mCurToken == TokenCode::To )
+    {
+        list->Elements.push_back( ParseAsSymbol() );
+    }
+    else
+    {
+        ThrowSyntaxError( "Expected: above, below, downto, to" );
+    }
+
+    list->Elements.push_back( ParseExpr() );
+
+    if ( mCurToken == TokenCode::By )
+    {
+        list->Elements.push_back( ParseAsSymbol() );
+        list->Elements.push_back( ParseExpr() );
+    }
+
+    AssertToken( TokenCode::Do );
+    list->Elements.push_back( ParseAsSymbol() );
+    SkipLineSeparators();
+
+    ParseStatements( list.get() );
+
+    ScanToken( TokenCode::End );
+
+    return list;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseWhile()
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+
+    ScanToken();
+    list->Elements.push_back( MakeSymbol( "do" ) );
+    list->Elements.push_back( ParseExpr() );
+    ScanToken( TokenCode::Do );
+
+    ParseStatements( list.get() );
+
+    ScanToken( TokenCode::End );
+
+    return list;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseBreak()
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+
+    list->Elements.push_back( ParseAsSymbol() );
+
+    return list;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseNext()
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+
+    list->Elements.push_back( ParseAsSymbol() );
+
+    return list;
 }
 
 Unique<Compiler::Number> AlgolyParser::ParseNumber()
