@@ -50,6 +50,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mGeneratorMap.insert( GeneratorMap::value_type( "do", &Compiler::GenerateDo ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "break", &Compiler::GenerateBreak ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "next", &Compiler::GenerateNext ) );
+    mGeneratorMap.insert( GeneratorMap::value_type( "case", &Compiler::GenerateCase ) );
 }
 
 CompilerErr Compiler::Compile( Slist* progTree )
@@ -695,6 +696,9 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     lambda.Patch = mCodeBinPtr;
     mLambdas.push_back( lambda );
 
+    // Add the index of the deferred lambda just linked
+    mLocalLambdas.push_back( mLambdas.size() - 1 );
+
     WriteU32( mCodeBinPtr, 0 );
     IncreaseExprDepth();
 }
@@ -1082,6 +1086,135 @@ void Compiler::GenerateNext( Slist* list, const GenConfig& config, GenStatus& st
     status.discarded = true;
 }
 
+void Compiler::GenerateCase( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( list->Elements.size() < 2 )
+        ThrowError( CERR_SEMANTICS, list, "'case' takes 1 or more arguments" );
+
+    GenerateGeneralCase( list, config, status );
+}
+
+void Compiler::GenerateGeneralCase( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    SymTable localTable;
+    PatchChain exitChain;
+    bool usesTempKeyform = false;
+
+    const GenConfig& statementConfig = config;
+
+    if ( list->Elements[1]->Code == Elem_Slist )
+    {
+        usesTempKeyform = true;
+
+        std::unique_ptr<Symbol> localSym( new Symbol() );
+        localSym->Code = Elem_Symbol;
+        localSym->String = "$testKey";
+        Storage* local = AddLocal( localTable, localSym->String, mCurLocalCount );
+
+        mCurLocalCount++;
+        if ( mCurLocalCount > mMaxLocalCount )
+            mMaxLocalCount = mCurLocalCount;
+
+        mSymStack.push_back( &localTable );
+
+        Generate( list->Elements[1].get() );
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = local->Offset;
+        mCodeBinPtr += 2;
+        DecreaseExprDepth();
+
+        // Replace the keyform expression with the temporary variable
+        list->Elements[1] = std::move( localSym );
+    }
+
+    for ( size_t i = 2; i < list->Elements.size(); i++ )
+    {
+        auto clauseElem = list->Elements[i].get();
+
+        if ( clauseElem->Code != Elem_Slist )
+            ThrowError( CERR_SEMANTICS, clauseElem, "" );
+
+        auto clause = (Slist*) list->Elements[i].get();
+
+        if ( clause->Elements[0]->Code == Elem_Symbol
+            && (((Symbol*) clause->Elements[0].get())->String == "otherwise"
+                || ((Symbol*) clause->Elements[0].get())->String == "true") )
+        {
+            if ( i != list->Elements.size() - 1 )
+                ThrowError( CERR_SEMANTICS, clause, "" );
+
+            GenerateImplicitProgn( clause, 1, statementConfig, status );
+        }
+        else
+        {
+            // If the key is not a list, then make it one, so that there's only one way to iterate.
+
+            if ( clause->Elements[0]->Code != Elem_Slist )
+            {
+                std::unique_ptr<Slist> newList( new Slist() );
+                newList->Code = Elem_Slist;
+                newList->Elements.push_back( std::move( clause->Elements[0] ) );
+                clause->Elements[0] = std::move( newList );
+            }
+
+            PatchChain falseChain;
+            PatchChain trueChain;
+
+            auto keyList = (Slist*) clause->Elements[0].get();
+            int i = 0;
+
+            for ( auto& key : keyList->Elements )
+            {
+                i++;
+
+                if ( key->Code == Elem_Slist )
+                    ThrowError( CERR_SEMANTICS, key.get(), "" );
+
+                Generate( list->Elements[1].get() );
+                Generate( key.get() );
+
+                mCodeBinPtr[0] = OP_PRIM;
+                mCodeBinPtr[1] = PRIM_EQ;
+                mCodeBinPtr += 2;
+                DecreaseExprDepth();
+
+                if ( i == keyList->Elements.size() )
+                {
+                    PushPatch( &falseChain );
+                    mCodeBinPtr[0] = OP_BFALSE;
+                    mCodeBinPtr += BranchInst::Size;
+                    DecreaseExprDepth();
+                }
+                else
+                {
+                    PushPatch( &trueChain );
+                    mCodeBinPtr[0] = OP_BTRUE;
+                    mCodeBinPtr += BranchInst::Size;
+                    DecreaseExprDepth();
+                }
+            }
+
+            Patch( &trueChain );
+
+            GenerateImplicitProgn( clause, 1, statementConfig, status );
+
+            PushPatch( &exitChain );
+            mCodeBinPtr[0] = OP_B;
+            mCodeBinPtr += BranchInst::Size;
+
+            Patch( &falseChain );
+        }
+    }
+
+    Patch( &exitChain );
+
+    if ( usesTempKeyform )
+    {
+        mSymStack.pop_back();
+        mCurLocalCount -= localTable.size();
+    }
+}
+
 void Compiler::GenerateNot( Slist* list, const GenConfig& config, GenStatus& status )
 {
     if ( list->Elements.size() != 2 )
@@ -1424,30 +1557,22 @@ void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
         func->ArgCount++;
     }
 
-    bool hasLocals = false;
+    constexpr uint8_t PushInstSize = 2;
+
+    U8* bodyPtr = mCodeBinPtr;
     U8* pushCountPatch = nullptr;
 
-    for ( size_t i = BodyIndex; i < list->Elements.size(); i++ )
-    {
-        if ( HasLocals( list->Elements[i].get() ) )
-        {
-            hasLocals = true;
-            break;
-        }
-    }
-
-    if ( hasLocals )
-    {
-        *mCodeBinPtr = OP_PUSH;
-        mCodeBinPtr++;
-        pushCountPatch = mCodeBinPtr;
-        mCodeBinPtr++;
-    }
+    // Assume that there are local variables
+    *mCodeBinPtr = OP_PUSH;
+    mCodeBinPtr++;
+    pushCountPatch = mCodeBinPtr;
+    mCodeBinPtr++;
 
     mMaxLocalCount = 0;
     mCurLocalCount = 0;
     mCurExprDepth = 0;
     mMaxExprDepth = 0;
+    mLocalLambdas.clear();
 
     GenStatus status = { Expr_Other };
     GenerateImplicitProgn( list, BodyIndex, GenConfig::Statement(), status );
@@ -1458,8 +1583,22 @@ void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
         mCodeBinPtr += 1;
     }
 
-    if ( hasLocals )
+    if ( mMaxLocalCount > 0 )
+    {
         *pushCountPatch = mMaxLocalCount;
+    }
+    else
+    {
+        // No locals. So, delete the PUSH instruction
+        memmove( bodyPtr, bodyPtr + PushInstSize, (mCodeBinPtr - bodyPtr) - PushInstSize );
+        mCodeBinPtr -= PushInstSize;
+
+        // If local lambda references were generated, then shift them
+        for ( auto index : mLocalLambdas )
+        {
+            mLambdas[index].Patch -= PushInstSize;
+        }
+    }
 
     func->LocalCount = mMaxLocalCount;
     func->ExprDepth = mMaxExprDepth;
@@ -1526,34 +1665,6 @@ void Compiler::MatchSymbol( Element* elem, const char* name )
 {
     if ( elem->Code != Elem_Symbol || 0 != strcmp( name, ((Symbol*) elem)->String.c_str() ) )
         ThrowError( CERR_SEMANTICS, elem, "Expected symbol: %s", name );
-}
-
-bool Compiler::HasLocals( Element* elem )
-{
-    if ( elem->Code != Elem_Slist )
-        return false;
-
-    Slist* list = (Slist*) elem;
-
-    if ( list->Elements.size() == 0 )
-        return false;
-
-    if ( list->Elements[0]->Code == Elem_Symbol )
-    {
-        auto* op = (Symbol*) list->Elements[0].get();
-        if ( op->String == "let" )
-            return true;
-        else if ( op->String == "lambda" )
-            return false;
-    }
-
-    for ( size_t i = 0; i < list->Elements.size(); i++ )
-    {
-        if ( HasLocals( list->Elements[i].get() ) )
-            return true;
-    }
-
-    return false;
 }
 
 void Compiler::GenerateSentinel()

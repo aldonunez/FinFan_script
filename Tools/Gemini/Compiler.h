@@ -100,9 +100,11 @@ public:
         virtual ~Element() { }
     };
 
+    using ElementVector = std::vector<std::unique_ptr<Element>>;
+
     struct Slist : public Element
     {
-        std::vector<std::unique_ptr<Element>> Elements;
+        ElementVector Elements;
     };
 
     struct Number : public Element
@@ -282,6 +284,7 @@ private:
     typedef std::map<std::string, std::unique_ptr<Declaration>> SymTable;
     typedef std::vector<SymTable*> SymStack;
     typedef std::vector<DeferredLambda> LambdaVec;
+    typedef std::vector<int> LambdaRefVec;
 
     typedef void (Compiler::*CallGenerator)( Slist* list, const GenConfig& config, GenStatus& status );
     typedef std::unordered_map<std::string, CallGenerator> GeneratorMap;
@@ -295,6 +298,7 @@ private:
     SymTable        mGlobalTable;
     SymStack        mSymStack;
     LambdaVec       mLambdas;
+    LambdaRefVec    mLocalLambdas;
     int             mCurLocalCount;
     int             mMaxLocalCount;
     int             mForwards;
@@ -357,6 +361,8 @@ private:
     void GenerateDo( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateBreak( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateNext( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateCase( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateGeneralCase( Slist* list, const GenConfig& config, GenStatus& status );
 
     void GenerateUnaryPrimitive( Element* elem, const GenConfig& config, GenStatus& status );
     void GenerateBinaryPrimitive( Slist* list, int primitive, const GenConfig& config, GenStatus& status );
@@ -396,7 +402,6 @@ private:
     void MakeStdEnv();
 
     void MatchSymbol( Element* elem, const char* name );
-    bool HasLocals( Element* elem );
 
     void IncreaseExprDepth();
     void DecreaseExprDepth( int amount = 1 );

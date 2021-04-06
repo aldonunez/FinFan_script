@@ -337,6 +337,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "below",  TokenCode::Below },
         { "break",  TokenCode::Break },
         { "by",     TokenCode::By },
+        { "case",   TokenCode::Case },
         { "def",    TokenCode::Def },
         { "do",     TokenCode::Do },
         { "downto", TokenCode::Downto },
@@ -352,6 +353,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "return", TokenCode::Return },
         { "then",   TokenCode::Then },
         { "to",     TokenCode::To },
+        { "when",   TokenCode::When },
         { "while",  TokenCode::While },
     };
 
@@ -467,7 +469,9 @@ Unique<Compiler::Slist> AlgolyParser::ParseParamList()
 
 void AlgolyParser::ParseStatements( Slist* container )
 {
-    while ( mCurToken != TokenCode::End && mCurToken != TokenCode::Else )
+    while ( mCurToken != TokenCode::End
+        && mCurToken != TokenCode::Else
+        && mCurToken != TokenCode::When )
     {
         container->Elements.push_back( ParseStatement() );
     }
@@ -520,7 +524,8 @@ Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
     if ( mCurToken != TokenCode::Eol
         && mCurToken != TokenCode::Separator
         && mCurToken != TokenCode::End
-        && mCurToken != TokenCode::Else )
+        && mCurToken != TokenCode::Else
+        && mCurToken != TokenCode::When )
     {
         ThrowSyntaxError( "Expected end of statement" );
     }
@@ -530,13 +535,20 @@ Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
 
 Unique<Compiler::Element> AlgolyParser::ParseExpr()
 {
-    if ( mCurToken == TokenCode::Lambda )
+    switch ( mCurToken )
+    {
+    case TokenCode::Lambda:
         return ParseLambda();
 
-    if ( mCurToken == TokenCode::If )
+    case TokenCode::If:
         return ParseIf();
 
-    return ParseBinary( 0 );
+    case TokenCode::Case:
+        return ParseCase();
+
+    default:
+        return ParseBinary( 0 );
+    }
 }
 
 const AlgolyParser::TestOpFunc AlgolyParser::sTestOpFuncs[] =
@@ -913,6 +925,91 @@ Unique<Compiler::Slist> AlgolyParser::ParseWhile()
     ScanToken( TokenCode::End );
 
     return list;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseCase()
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+
+    list->Elements.push_back( ParseAsSymbol() );
+    list->Elements.push_back( ParseExpr() );
+
+    SkipLineSeparators();
+
+    while ( mCurToken == TokenCode::When )
+    {
+        list->Elements.push_back( ParseCaseWhen() );
+    }
+
+    if ( mCurToken == TokenCode::Else )
+    {
+        list->Elements.push_back( ParseCaseElse() );
+    }
+
+    ScanToken( TokenCode::End );
+
+    return list;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseCaseWhen()
+{
+    std::unique_ptr<Slist> clause( MakeSlist() );
+
+    clause->Elements.push_back( MakeSlist() );
+
+    auto keys = (Slist*) clause->Elements[0].get();
+
+    ScanToken();
+
+    bool first = true;
+
+    while ( true )
+    {
+        if ( !first )
+        {
+            ScanToken( TokenCode::Comma );
+            SkipLineEndings();
+        }
+
+        first = false;
+
+        if ( mCurToken == TokenCode::Symbol )
+        {
+            keys->Elements.push_back( ParseSymbol() );
+        }
+        else if ( mCurToken == TokenCode::Number )
+        {
+            keys->Elements.push_back( ParseNumber() );
+        }
+        else
+        {
+            ThrowSyntaxError( "Expected symbol or number" );
+        }
+
+        if ( mCurToken == TokenCode::Then )
+            break;
+    }
+
+    ScanToken();
+    SkipLineSeparators();
+
+    ParseStatements( clause.get() );
+
+    return clause;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseCaseElse()
+{
+    std::unique_ptr<Slist> clause( MakeSlist() );
+
+    clause->Elements.push_back( MakeSymbol( "otherwise" ) );
+
+    ScanToken();
+    SkipLineSeparators();
+
+    ParseStatements( clause.get() );
+
+    return clause;
 }
 
 Unique<Compiler::Slist> AlgolyParser::ParseBreak()

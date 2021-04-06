@@ -39,6 +39,7 @@ class AlgolyParser
         Below,
         Break,
         By,
+        Case,
         Def,
         Do,
         Downto,
@@ -54,6 +55,7 @@ class AlgolyParser
         Return,
         Then,
         To,
+        When,
         While,
     };
 
@@ -120,6 +122,9 @@ private:
     Unique<Compiler::Slist> ParseWhile();
     Unique<Compiler::Slist> ParseBreak();
     Unique<Compiler::Slist> ParseNext();
+    Unique<Compiler::Slist> ParseCase();
+    Unique<Compiler::Slist> ParseCaseWhen();
+    Unique<Compiler::Slist> ParseCaseElse();
 
     void ParseStatements( Compiler::Slist* container );
     Unique<Compiler::Element> ParseStatement();
