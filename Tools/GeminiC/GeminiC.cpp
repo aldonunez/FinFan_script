@@ -238,10 +238,10 @@ int main( int argc, char* argv[] )
     env.AddExternal( "Join", External_Native, 0 );
     env.AddExternal( "PushSong", External_Native, 0 );
 
-    env.AddGlobal( "%0", 0 );
-    env.AddGlobal( "%1", 1 );
-    env.AddGlobal( "%2", 2 );
-    env.AddGlobal( "%3", 3 );
+    env.AddGlobal( "@0", 0 );
+    env.AddGlobal( "@1", 1 );
+    env.AddGlobal( "@2", 2 );
+    env.AddGlobal( "@3", 3 );
 
     std::unique_ptr<Compiler::Slist> progTree;
     size_t filePathLen = strlen( filePath );

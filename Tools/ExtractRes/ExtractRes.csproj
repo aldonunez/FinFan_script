@@ -71,6 +71,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
+    <None Include="Data\ObjEvents.gema">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="Data\ObjEvents.geml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
