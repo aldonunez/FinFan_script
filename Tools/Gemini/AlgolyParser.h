@@ -44,6 +44,7 @@ class AlgolyParser
         Do,
         Downto,
         Else,
+        Elsif,
         End,
         For,
         If,
@@ -106,6 +107,8 @@ private:
     void AssertToken( TokenCode code );
 
     // Parsing
+
+    static bool IsSeparatorKeyword( TokenCode tokenCode );
 
     Unique<Compiler::Slist> ParseFunction();
     Unique<Compiler::Slist> ParseLambda();

@@ -342,6 +342,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "do",     TokenCode::Do },
         { "downto", TokenCode::Downto },
         { "else",   TokenCode::Else },
+        { "elsif",  TokenCode::Elsif },
         { "end",    TokenCode::End },
         { "for",    TokenCode::For },
         { "if",     TokenCode::If },
@@ -372,6 +373,14 @@ void AlgolyParser::ReadSymbolOrKeyword()
     {
         mCurToken = TokenCode::Symbol;
     }
+}
+
+bool AlgolyParser::IsSeparatorKeyword( TokenCode tokenCode )
+{
+    return tokenCode == TokenCode::End
+        || tokenCode == TokenCode::Else
+        || tokenCode == TokenCode::Elsif
+        || tokenCode == TokenCode::When;
 }
 
 Compiler::Slist* AlgolyParser::Parse()
@@ -428,6 +437,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseProc( const char* head, bool hasName 
 
     // Read past "end"
     ScanToken( TokenCode::End );
+    SkipLineEndings();
 
     return list;
 }
@@ -469,9 +479,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseParamList()
 
 void AlgolyParser::ParseStatements( Slist* container )
 {
-    while ( mCurToken != TokenCode::End
-        && mCurToken != TokenCode::Else
-        && mCurToken != TokenCode::When )
+    while ( !IsSeparatorKeyword( mCurToken ) )
     {
         container->Elements.push_back( ParseStatement() );
     }
@@ -523,9 +531,7 @@ Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
 
     if ( mCurToken != TokenCode::Eol
         && mCurToken != TokenCode::Separator
-        && mCurToken != TokenCode::End
-        && mCurToken != TokenCode::Else
-        && mCurToken != TokenCode::When )
+        && !IsSeparatorKeyword( mCurToken ) )
     {
         ThrowSyntaxError( "Expected end of statement" );
     }
@@ -606,7 +612,9 @@ Unique<Compiler::Element> AlgolyParser::ParseBinary( int level )
     std::unique_ptr<Element> first( ParseBinaryPart( level ) );
     TestOpFunc testOpFunc = sTestOpFuncs[level];
 
-    if ( (this->*testOpFunc)() )
+    // Left-associative
+
+    while ( (this->*testOpFunc)() )
     {
         std::unique_ptr<Slist> list = MakeSlist();
 
@@ -620,7 +628,7 @@ Unique<Compiler::Element> AlgolyParser::ParseBinary( int level )
         if ( testOpFunc == &AlgolyParser::IsTokenComparisonOp && IsTokenComparisonOp() )
             ThrowSyntaxError( "Comparisons are binary only" );
 
-        return list;
+        first = std::move( list );
     }
 
     return first;
@@ -803,40 +811,20 @@ Unique<Compiler::Slist> AlgolyParser::ParseIf()
 {
     std::unique_ptr<Slist> list( MakeSlist() );
 
-    mCurString = "cond";
-    list->Elements.push_back( ParseAsSymbol() );
-
+    list->Elements.push_back( MakeSymbol( "cond" ) );
     list->Elements.push_back( ParseIfClause() );
 
-    while ( true )
+    while ( mCurToken == TokenCode::Elsif )
     {
-        if ( mCurToken == TokenCode::Else )
-        {
-            ScanToken();
-            SkipLineEndings();
-
-            if ( mCurToken == TokenCode::If )
-            {
-                ScanToken();
-
-                list->Elements.push_back( ParseIfClause() );
-            }
-            else
-            {
-                list->Elements.push_back( ParseElseClause() );
-            }
-        }
-        else if ( mCurToken == TokenCode::End )
-        {
-            break;
-        }
-        else
-        {
-            ThrowSyntaxError( "Expected else or end" );
-        }
+        list->Elements.push_back( ParseIfClause() );
     }
 
-    ScanToken();
+    if ( mCurToken == TokenCode::Else )
+    {
+        list->Elements.push_back( ParseElseClause() );
+    }
+
+    ScanToken( TokenCode::End );
 
     return list;
 }
@@ -844,6 +832,8 @@ Unique<Compiler::Slist> AlgolyParser::ParseIf()
 Unique<Compiler::Slist> AlgolyParser::ParseIfClause()
 {
     std::unique_ptr<Slist> clause( MakeSlist() );
+
+    ScanToken();
 
     clause->Elements.push_back( ParseExpr() );
 
@@ -862,8 +852,12 @@ Unique<Compiler::Slist> AlgolyParser::ParseElseClause()
 {
     std::unique_ptr<Slist> clause( MakeSlist() );
 
+    ScanToken();
+    SkipLineSeparators();
+
     clause->Elements.push_back( MakeNumber( 1 ) );
-    clause->Elements.push_back( ParseStatement() );
+
+    ParseStatements( clause.get() );
 
     return clause;
 }

@@ -535,10 +535,12 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
             GenStatus clauseStatus = { Expr_Other };
             GenerateImplicitProgn( clauseList, 1, statementConfig, clauseStatus );
 
-            PushPatch( &leaveChain );
-
-            mCodeBinPtr[0] = OP_B;
-            mCodeBinPtr += BranchInst::Size;
+            if ( i < list->Elements.size() - 1 || !config.discard )
+            {
+                PushPatch( &leaveChain );
+                mCodeBinPtr[0] = OP_B;
+                mCodeBinPtr += BranchInst::Size;
+            }
 
             ElideFalse( &trueChain, &falseChain );
             Patch( &falseChain );
