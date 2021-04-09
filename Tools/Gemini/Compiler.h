@@ -358,6 +358,8 @@ private:
     void GenerateLet( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateCall( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateFor( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateSimpleLoop( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateDo( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateBreak( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateNext( Slist* list, const GenConfig& config, GenStatus& status );
@@ -370,7 +372,8 @@ private:
     void GenerateLambdas();
     void GenerateProc( Slist* list, int startIndex, Function* func );
     void GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status );
-    void GenerateStatements( Slist* list, int startIndex, const GenConfig& config, GenStatus& status );
+    void GenerateStatements( Slist* list, size_t startIndex, const GenConfig& config, GenStatus& status );
+    void GenerateStatements( Slist* list, size_t startIndex, size_t endIndex, const GenConfig& config, GenStatus& status );
     void GenerateNilIfNeeded( const GenConfig& config, GenStatus& status );
 
     void GenerateSentinel();

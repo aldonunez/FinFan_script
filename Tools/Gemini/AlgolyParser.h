@@ -50,6 +50,7 @@ class AlgolyParser
         If,
         Lambda,
         Let,
+        Loop,
         Next,
         Not,
         Or,
@@ -122,6 +123,7 @@ private:
     Unique<Compiler::Slist> ParseIfClause();
     Unique<Compiler::Slist> ParseElseClause();
     Unique<Compiler::Slist> ParseFor();
+    Unique<Compiler::Slist> ParseLoop();
     Unique<Compiler::Slist> ParseWhile();
     Unique<Compiler::Slist> ParseBreak();
     Unique<Compiler::Slist> ParseNext();

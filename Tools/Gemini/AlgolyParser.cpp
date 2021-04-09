@@ -348,6 +348,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "if",     TokenCode::If },
         { "lambda", TokenCode::Lambda },
         { "let",    TokenCode::Let },
+        { "loop",   TokenCode::Loop },
         { "next",   TokenCode::Next },
         { "not",    TokenCode::Not },
         { "or",     TokenCode::Or },
@@ -380,7 +381,9 @@ bool AlgolyParser::IsSeparatorKeyword( TokenCode tokenCode )
     return tokenCode == TokenCode::End
         || tokenCode == TokenCode::Else
         || tokenCode == TokenCode::Elsif
-        || tokenCode == TokenCode::When;
+        || tokenCode == TokenCode::When
+        || tokenCode == TokenCode::Do
+        ;
 }
 
 Compiler::Slist* AlgolyParser::Parse()
@@ -501,6 +504,10 @@ Unique<Compiler::Element> AlgolyParser::ParseStatement()
 
     case TokenCode::For:
         elem = ParseFor();
+        break;
+
+    case TokenCode::Loop:
+        elem = ParseLoop();
         break;
 
     case TokenCode::While:
@@ -899,6 +906,31 @@ Unique<Compiler::Slist> AlgolyParser::ParseFor()
     SkipLineSeparators();
 
     ParseStatements( list.get() );
+
+    ScanToken( TokenCode::End );
+
+    return list;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseLoop()
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+
+    ScanToken();
+    SkipLineSeparators();
+
+    list->Elements.push_back( MakeSymbol( "loop" ) );
+    list->Elements.push_back( MakeSymbol( "do" ) );
+    ParseStatements( list.get() );
+
+    if ( mCurToken == TokenCode::Do )
+    {
+        ScanToken();
+        ScanToken( TokenCode::While );
+
+        list->Elements.push_back( MakeSymbol( "while" ) );
+        list->Elements.push_back( ParseExpr() );
+    }
 
     ScanToken( TokenCode::End );
 

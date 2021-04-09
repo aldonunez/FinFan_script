@@ -451,7 +451,8 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
     bool        foundCatchAll = false;
     int         exprDepth = mCurExprDepth;
 
-    GenConfig statementConfig = GenConfig::Statement( config.discard );
+    GenConfig statementConfig = GenConfig::Statement( config.discard )
+        .WithLoop( config.breakChain, config.nextChain );
 
     // TODO: check all the clauses for tail-return. If they all do, then set status.tailRet.
 
@@ -890,6 +891,27 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
 
 void Compiler::GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status )
 {
+    if ( list->Elements.size() < 2 || list->Elements[1]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, list, "Missing for or do keyword" );
+
+    auto symbol = (Symbol*) list->Elements[1].get();
+
+    if ( symbol->String == "for" )
+    {
+        GenerateFor( list, config, status );
+    }
+    else if ( symbol->String == "do" )
+    {
+        GenerateSimpleLoop( list, config, status );
+    }
+    else
+    {
+        ThrowError( CERR_SEMANTICS, symbol, "Missing for or do keyword" );
+    }
+}
+
+void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& status )
+{
     SymTable localTable;
 
     if ( list->Elements.size() < 8 )
@@ -1032,6 +1054,54 @@ void Compiler::GenerateLoop( Slist* list, const GenConfig& config, GenStatus& st
     mCurLocalCount -= localTable.size();
 
     GenerateNilIfNeeded( config, status );
+}
+
+void Compiler::GenerateSimpleLoop( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    size_t whileIndex = 0;
+
+    for ( auto& elem : list->Elements )
+    {
+        if ( elem->Code == Elem_Symbol && ((Symbol*) elem.get())->String == "while" )
+        {
+            if ( (list->Elements.size() - whileIndex) < 2 )
+                ThrowError( CERR_SEMANTICS, elem.get(), "While and its test must come last in loop" );
+            break;
+        }
+
+        whileIndex++;
+    }
+
+    PatchChain  breakChain;
+    PatchChain  nextChain;
+
+    U8* bodyPtr = mCodeBinPtr;
+
+    // Body
+    GenerateStatements( list, 2, whileIndex, config.WithLoop( &breakChain, &nextChain ), status );
+
+    if ( whileIndex == list->Elements.size() )
+    {
+        PushPatch( &nextChain );
+        mCodeBinPtr[0] = OP_B;
+        mCodeBinPtr += BranchInst::Size;
+
+        Patch( &nextChain, bodyPtr );
+    }
+    else
+    {
+        GenStatus exprStatus;
+        PatchChain bodyChain;
+
+        Patch( &nextChain );
+
+        Generate( list->Elements[whileIndex + 1].get(), GenConfig::Expr( &bodyChain, &breakChain, false ), exprStatus );
+        ElideFalse( &bodyChain, &breakChain );
+
+        Patch( &bodyChain, bodyPtr );
+    }
+
+    Patch( &breakChain );
 }
 
 void Compiler::GenerateDo( Slist* list, const GenConfig& config, GenStatus& status )
@@ -1639,9 +1709,14 @@ void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConf
     }
 }
 
-void Compiler::GenerateStatements( Slist* list, int startIndex, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateStatements( Slist* list, size_t startIndex, const GenConfig& config, GenStatus& status )
 {
-    for ( size_t i = startIndex; i < list->Elements.size(); i++ )
+    GenerateStatements( list, startIndex, list->Elements.size(), config, status );
+}
+
+void Compiler::GenerateStatements( Slist* list, size_t startIndex, size_t endIndex, const GenConfig& config, GenStatus& status )
+{
+    for ( size_t i = startIndex; i < endIndex; i++ )
     {
         GenerateDiscard( list->Elements[i].get(), config );
     }
