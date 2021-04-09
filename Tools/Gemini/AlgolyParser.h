@@ -142,6 +142,7 @@ private:
 
     bool IsTokenOrOp();
     bool IsTokenAndOp();
+    bool IsTokenEqualityOp();
     bool IsTokenComparisonOp();
     bool IsTokenAdditiveOp();
     bool IsTokenMultiplicativeOp();

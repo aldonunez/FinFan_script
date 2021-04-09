@@ -568,6 +568,7 @@ const AlgolyParser::TestOpFunc AlgolyParser::sTestOpFuncs[] =
 {
     &AlgolyParser::IsTokenOrOp,
     &AlgolyParser::IsTokenAndOp,
+    &AlgolyParser::IsTokenEqualityOp,
     &AlgolyParser::IsTokenComparisonOp,
     &AlgolyParser::IsTokenAdditiveOp,
     &AlgolyParser::IsTokenMultiplicativeOp,
@@ -583,11 +584,15 @@ bool AlgolyParser::IsTokenAndOp()
     return mCurToken == TokenCode::And;
 }
 
-bool AlgolyParser::IsTokenComparisonOp()
+bool AlgolyParser::IsTokenEqualityOp()
 {
     return mCurToken == TokenCode::EQ
-        || mCurToken == TokenCode::NE
-        || mCurToken == TokenCode::LT
+        || mCurToken == TokenCode::NE;
+}
+
+bool AlgolyParser::IsTokenComparisonOp()
+{
+    return mCurToken == TokenCode::LT
         || mCurToken == TokenCode::LE
         || mCurToken == TokenCode::GT
         || mCurToken == TokenCode::GE;
@@ -696,6 +701,9 @@ Unique<Compiler::Element> AlgolyParser::ParseSingle()
 Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head, bool indirect )
 {
     std::unique_ptr<Slist> list( MakeSlist() );
+
+    if ( head->Code == Compiler::Elem_Number )
+        ThrowSyntaxError( "A number cannot designate a procedure to call" );
 
     if ( indirect )
         list->Elements.push_back( MakeSymbol( "funcall" ) );
