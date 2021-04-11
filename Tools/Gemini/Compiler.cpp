@@ -45,6 +45,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mGeneratorMap.insert( GeneratorMap::value_type( "set", &Compiler::GenerateSet ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "defun", &Compiler::GenerateDefun ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "lambda", &Compiler::GenerateLambda ) );
+    mGeneratorMap.insert( GeneratorMap::value_type( "function", &Compiler::GenerateFunction ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "funcall", &Compiler::GenerateFuncall ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "let", &Compiler::GenerateLet ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "loop", &Compiler::GenerateLoop ) );
@@ -730,6 +731,76 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     mLocalLambdas.push_back( mLambdas.size() - 1 );
 
     WriteU32( mCodeBinPtr, 0 );
+    IncreaseExprDepth();
+}
+
+void Compiler::GenerateFunction( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( list->Elements.size() != 2 || list->Elements[1]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, list, "'function' takes a symbol" );
+
+    if ( config.discard )
+    {
+        status.discarded = true;
+        return;
+    }
+
+    auto op = (Symbol*) list->Elements[1].get();
+    U32 addr = 0;
+
+    SymTable::iterator it = mGlobalTable.find( op->String );
+    if ( it != mGlobalTable.end() )
+    {
+        Function* func = (Function*) it->second.get();
+
+        if ( it->second->Kind == Decl_Func )
+        {
+            addr = func->Address;
+        }
+        else if ( it->second->Kind == Decl_Forward )
+        {
+            PushPatch( &func->Patches );
+        }
+        else
+        {
+            ThrowError( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
+        }
+    }
+    else
+    {
+        ExternalFunc external = { 0 };
+
+        if ( mEnv->FindExternal( op->String, &external ) )
+        {
+            if ( external.Kind == External_Bytecode )
+            {
+                // TODO:
+                ThrowError( CERR_SEMANTICS, list, "Referencing external functions is not supported yet" );
+            }
+            else if ( external.Kind == External_Native )
+            {
+                ThrowError( CERR_SEMANTICS, list, "Cannot reference a native function" );
+            }
+            else
+            {
+                assert( false );
+                ThrowInternalError();
+            }
+        }
+        else
+        {
+            Function* func = AddForward( op->String );
+            PushPatch( &func->Patches );
+            mForwards++;
+        }
+    }
+
+    mCodeBinPtr[0] = OP_LDC;
+    mCodeBinPtr++;
+    WriteU24( mCodeBinPtr, addr );
+    mCodeBinPtr[0] = mModIndex;
+    mCodeBinPtr++;
+
     IncreaseExprDepth();
 }
 
@@ -1561,7 +1632,15 @@ void Compiler::PatchCalls( PatchChain* chain, U32 addr )
 {
     for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
     {
-        StoreU24( &link->Inst[2], addr );
+        int offset = 0;
+
+        switch ( link->Inst[0] )
+        {
+        case OP_CALL:   offset = 2; break;
+        case OP_LDC:    offset = 1; break;
+        }
+
+        StoreU24( &link->Inst[offset], addr );
     }
 }
 
@@ -1617,7 +1696,7 @@ void Compiler::GenerateLambdas()
         int addrWord = CodeAddr::Build( address, mModIndex );
         StoreU32( it->Patch, addrWord );
 
-        char name[256];
+        char name[32];
 
         sprintf_s( name, "$Lambda$%d", i );
         Function* func = AddFunc( name, address );

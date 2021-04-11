@@ -21,6 +21,7 @@ class AlgolyParser
         LParen,
         RParen,
         Comma,
+        Ampersand,
         Assign,
         Plus,
         Minus,
@@ -109,6 +110,7 @@ private:
     // Parsing
 
     static bool IsSeparatorKeyword( TokenCode tokenCode );
+    static bool IsStatementSeparator( TokenCode tokenCode );
 
     Unique<Compiler::Slist> ParseFunction();
     Unique<Compiler::Slist> ParseLambda();

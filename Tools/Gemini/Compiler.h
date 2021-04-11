@@ -355,6 +355,7 @@ private:
     void GenerateSet( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateDefun( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLambda( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateFunction( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLet( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateCall( Slist* list, const GenConfig& config, GenStatus& status );
@@ -407,6 +408,7 @@ private:
 
     void MatchSymbol( Element* elem, const char* name );
 
+    // Stack usage
     void IncreaseExprDepth();
     void DecreaseExprDepth( int amount = 1 );
     void CalculateStackDepth();

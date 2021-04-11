@@ -137,6 +137,11 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         mCurToken = TokenCode::Comma;
         break;
 
+    case '&':
+        NextChar();
+        mCurToken = TokenCode::Ampersand;
+        break;
+
     case '+':
         CollectChar();
         mCurToken = TokenCode::Plus;
@@ -386,6 +391,14 @@ bool AlgolyParser::IsSeparatorKeyword( TokenCode tokenCode )
         ;
 }
 
+bool AlgolyParser::IsStatementSeparator( TokenCode tokenCode )
+{
+    return tokenCode == TokenCode::Eol
+        || tokenCode == TokenCode::Separator
+        || IsSeparatorKeyword( tokenCode )
+        ;
+}
+
 Compiler::Slist* AlgolyParser::Parse()
 {
     std::unique_ptr<Slist> list( MakeSlist() );
@@ -536,9 +549,7 @@ Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
 {
     std::unique_ptr<Element> expr( ParseExpr() );
 
-    if ( mCurToken != TokenCode::Eol
-        && mCurToken != TokenCode::Separator
-        && !IsSeparatorKeyword( mCurToken ) )
+    if ( !IsStatementSeparator( mCurToken ) )
     {
         if ( expr->Code == Compiler::Elem_Symbol )
         {
@@ -683,6 +694,17 @@ Unique<Compiler::Element> AlgolyParser::ParseUnary()
 
         return list;
     }
+    else if ( mCurToken == TokenCode::Ampersand )
+    {
+        std::unique_ptr<Slist> list( MakeSlist() );
+
+        ScanToken();
+
+        list->Elements.push_back( MakeSymbol( "function" ) );
+        list->Elements.push_back( ParseSingle() );
+
+        return list;
+    }
 
     return ParseSingle();
 }
@@ -745,9 +767,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head
     bool first = true;
 
     while ( (parens && mCurToken != TokenCode::RParen)
-        || (!parens && mCurToken != TokenCode::Eol
-            && mCurToken != TokenCode::Separator
-            && !IsSeparatorKeyword( mCurToken )) )
+        || (!parens && !IsStatementSeparator( mCurToken )) )
     {
         if ( !first )
         {
