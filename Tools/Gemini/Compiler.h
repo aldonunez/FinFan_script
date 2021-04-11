@@ -405,6 +405,7 @@ private:
     Function* AddForward( const std::string& name );
     ConstDecl* AddConst( const std::string& name, int value );
     void MakeStdEnv();
+    void CollectFunctionForwards( Slist* program );
 
     void MatchSymbol( Element* elem, const char* name );
 

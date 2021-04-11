@@ -23,36 +23,39 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mCalculatedStats(),
     mStats()
 {
-    mGeneratorMap.insert( GeneratorMap::value_type( "eval*", &Compiler::GenerateEvalStar ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "+", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "*", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "/", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "%", &Compiler::GenerateArithmetic ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "-", &Compiler::GenerateNegate ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "and", &Compiler::GenerateAnd ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "or", &Compiler::GenerateOr ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "not", &Compiler::GenerateNot ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "=", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "<>", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "<", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "<=", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( ">", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( ">=", &Compiler::GenerateComparison ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "return", &Compiler::GenerateReturn ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "if", &Compiler::GenerateIf ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "cond", &Compiler::GenerateCond ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "progn", &Compiler::GenerateProgn ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "set", &Compiler::GenerateSet ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "defun", &Compiler::GenerateDefun ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "lambda", &Compiler::GenerateLambda ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "function", &Compiler::GenerateFunction ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "funcall", &Compiler::GenerateFuncall ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "let", &Compiler::GenerateLet ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "loop", &Compiler::GenerateLoop ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "do", &Compiler::GenerateDo ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "break", &Compiler::GenerateBreak ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "next", &Compiler::GenerateNext ) );
-    mGeneratorMap.insert( GeneratorMap::value_type( "case", &Compiler::GenerateCase ) );
+    mGeneratorMap =
+    {
+        { "eval*", &Compiler::GenerateEvalStar },
+        { "+", &Compiler::GenerateArithmetic },
+        { "*", &Compiler::GenerateArithmetic },
+        { "/", &Compiler::GenerateArithmetic },
+        { "%", &Compiler::GenerateArithmetic },
+        { "-", &Compiler::GenerateNegate },
+        { "and", &Compiler::GenerateAnd },
+        { "or", &Compiler::GenerateOr },
+        { "not", &Compiler::GenerateNot },
+        { "=", &Compiler::GenerateComparison },
+        { "<>", &Compiler::GenerateComparison },
+        { "<", &Compiler::GenerateComparison },
+        { "<=", &Compiler::GenerateComparison },
+        { ">", &Compiler::GenerateComparison },
+        { ">=", &Compiler::GenerateComparison },
+        { "return", &Compiler::GenerateReturn },
+        { "if", &Compiler::GenerateIf },
+        { "cond", &Compiler::GenerateCond },
+        { "progn", &Compiler::GenerateProgn },
+        { "set", &Compiler::GenerateSet },
+        { "defun", &Compiler::GenerateDefun },
+        { "lambda", &Compiler::GenerateLambda },
+        { "function", &Compiler::GenerateFunction },
+        { "funcall", &Compiler::GenerateFuncall },
+        { "let", &Compiler::GenerateLet },
+        { "loop", &Compiler::GenerateLoop },
+        { "do", &Compiler::GenerateDo },
+        { "break", &Compiler::GenerateBreak },
+        { "next", &Compiler::GenerateNext },
+        { "case", &Compiler::GenerateCase },
+    };
 }
 
 CompilerErr Compiler::Compile( Slist* progTree )
@@ -60,6 +63,7 @@ CompilerErr Compiler::Compile( Slist* progTree )
     try
     {
         MakeStdEnv();
+        CollectFunctionForwards( progTree );
 
         mSymStack.push_back( &mConstTable );
         mSymStack.push_back( &mGlobalTable );
@@ -1933,6 +1937,26 @@ void Compiler::MakeStdEnv()
 {
     AddConst( "false", 0 );
     AddConst( "true", 1 );
+}
+
+void Compiler::CollectFunctionForwards( Slist* program )
+{
+    for ( auto& elem : program->Elements )
+    {
+        if ( elem->Code == Elem_Slist )
+        {
+            auto listElem = (Slist*) elem.get();
+
+            if ( listElem->Elements.size() >= 2
+                && listElem->Elements[0]->Code == Elem_Symbol
+                && ((Symbol*) listElem->Elements[0].get())->String == "defun"
+                && listElem->Elements[1]->Code == Elem_Symbol )
+            {
+                Function* func = AddForward( ((Symbol*) listElem->Elements[1].get())->String );
+                mForwards++;
+            }
+        }
+    }
 }
 
 void Compiler::IncreaseExprDepth()
