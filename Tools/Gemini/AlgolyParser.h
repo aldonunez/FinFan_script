@@ -18,7 +18,6 @@ class AlgolyParser
         Separator,
         Number,
         Symbol,
-        Keyword,
         LParen,
         RParen,
         Comma,

@@ -294,7 +294,7 @@ int main( int argc, char* argv[] )
 
     printf( "%d bytes written.\n", stats.CodeBytesWritten );
     printf( "Calls indirectly: %s\n", stats.CallsIndirectly ? "true" : "false" );
-    printf( "Type     Depth   Words   Recurses\n" );
+    printf( "Type     Depth   Cells   Recurses\n" );
 
     CallStats* callSets[] = { &stats.Static, &stats.Lambda };
     const char* callSetTypes[] = { "Static", "Lambda" };
