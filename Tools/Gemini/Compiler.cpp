@@ -23,6 +23,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mCalculatedStats(),
     mStats()
 {
+    mGeneratorMap.insert( GeneratorMap::value_type( "eval*", &Compiler::GenerateEvalStar ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "+", &Compiler::GenerateArithmetic ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "*", &Compiler::GenerateArithmetic ) );
     mGeneratorMap.insert( GeneratorMap::value_type( "/", &Compiler::GenerateArithmetic ) );
@@ -297,6 +298,32 @@ void Compiler::GenerateSlist( Slist* list, const GenConfig& config, GenStatus& s
     else
     {
         ThrowError( CERR_UNSUPPORTED, head, "only symbols are supported at the head of a list" );
+    }
+}
+
+void Compiler::GenerateEvalStar( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( list->Elements.size() != 2 || list->Elements[1]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, list, "eval* takes a symbol" );
+
+    auto symbol = (Symbol*) list->Elements[1].get();
+    auto decl = FindSymbol( symbol->String );
+
+    if ( decl != nullptr )
+    {
+        if ( decl->Kind == Decl_Func || decl->Kind == Decl_Forward )
+        {
+            list->Elements.erase( list->Elements.begin() );
+            GenerateSlist( list, config, status );
+        }
+        else
+        {
+            GenerateSymbol( symbol, config, status );
+        }
+    }
+    else
+    {
+        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
     }
 }
 

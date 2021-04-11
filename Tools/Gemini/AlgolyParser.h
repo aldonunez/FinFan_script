@@ -114,7 +114,7 @@ private:
     Unique<Compiler::Slist> ParseLambda();
     Unique<Compiler::Slist> ParseProc( const char* head, bool hasName );
     Unique<Compiler::Slist> ParseParamList();
-    Unique<Compiler::Slist> ParseCall( std::unique_ptr<Compiler::Element>&& head, bool indirect );
+    Unique<Compiler::Slist> ParseCall( std::unique_ptr<Compiler::Element>&& head, bool indirect, bool parens = true );
     Unique<Compiler::Slist> ParseAssignment( std::unique_ptr<Compiler::Element>&& head );
     Unique<Compiler::Slist> ParseLet();
     Unique<Compiler::Slist> ParseReturn();

@@ -540,7 +540,32 @@ Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
         && mCurToken != TokenCode::Separator
         && !IsSeparatorKeyword( mCurToken ) )
     {
-        ThrowSyntaxError( "Expected end of statement" );
+        if ( expr->Code == Compiler::Elem_Symbol )
+        {
+            // The parsed expression was only a symbol. But there are more tokens.
+            // So, parse them into arguments for a call without parentheses.
+
+            expr = ParseCall( std::move( expr ), false, false );
+        }
+        else
+        {
+            ThrowSyntaxError( "Expected end of statement" );
+        }
+    }
+    else
+    {
+        if ( expr->Code == Compiler::Elem_Symbol )
+        {
+            // The whole statement was a symbol. It can be a variable or a call without
+            // parentheses and arguments. Use eval* to disambiguate them.
+
+            std::unique_ptr<Slist> list( new Slist() );
+
+            list->Elements.push_back( MakeSymbol( "eval*" ) );
+            list->Elements.push_back( std::move( expr ) );
+
+            expr = std::move( list );
+        }
     }
 
     return expr;
@@ -698,7 +723,7 @@ Unique<Compiler::Element> AlgolyParser::ParseSingle()
     return elem;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head, bool indirect )
+Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head, bool indirect, bool parens )
 {
     std::unique_ptr<Slist> list( MakeSlist() );
 
@@ -710,13 +735,19 @@ Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head
 
     list->Elements.push_back( std::move( head ) );
 
-    // Read past left parenthesis
-    ScanToken();
-    SkipLineEndings();
+    if ( parens )
+    {
+        // Read past left parenthesis
+        ScanToken();
+        SkipLineEndings();
+    }
 
     bool first = true;
 
-    while ( mCurToken != TokenCode::RParen )
+    while ( (parens && mCurToken != TokenCode::RParen)
+        || (!parens && mCurToken != TokenCode::Eol
+            && mCurToken != TokenCode::Separator
+            && !IsSeparatorKeyword( mCurToken )) )
     {
         if ( !first )
         {
@@ -732,8 +763,11 @@ Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head
         list->Elements.push_back( ParseExpr() );
     }
 
-    // Read past right parenthesis
-    ScanToken();
+    if ( parens )
+    {
+        // Read past right parenthesis
+        ScanToken();
+    }
 
     return list;
 }

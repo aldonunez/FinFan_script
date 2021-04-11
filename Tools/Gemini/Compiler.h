@@ -337,6 +337,7 @@ private:
     void GenerateNumber( Number* number, const GenConfig& config, GenStatus& status );
     void GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatus& status );
     void GenerateSlist( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateEvalStar( Slist* list, const GenConfig& config, GenStatus& status );
 
     void EmitLoadConstant( int32_t value );
 
