@@ -55,6 +55,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
         { "break", &Compiler::GenerateBreak },
         { "next", &Compiler::GenerateNext },
         { "case", &Compiler::GenerateCase },
+        { "aref", &Compiler::GenerateAref },
     };
 }
 
@@ -618,6 +619,21 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
     {
         *mCodeBinPtr++ = OP_DUP;
         IncreaseExprDepth();
+    }
+
+    if ( list->Elements[1]->Code == Elem_Slist )
+    {
+        auto arrayList = (Slist*) list->Elements[1].get();
+
+        MatchSymbol( arrayList->Elements[0].get(), "aref", "Expected array" );
+
+        GenerateArrayElementRef( arrayList );
+
+        mCodeBinPtr[0] = OP_STOREI;
+        mCodeBinPtr++;
+
+        DecreaseExprDepth( 2 );
+        return;
     }
 
     if ( list->Elements[1]->Code != Elem_Symbol )
@@ -1690,6 +1706,65 @@ void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenCon
     }
 }
 
+void Compiler::GenerateArrayElementRef( Slist* list )
+{
+    if ( list->Elements.size() != 3 || list->Elements[1]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, list->Elements[0].get(),
+            "'aref' supports only one-dimensional named arrays" );
+
+    auto symbol = (Symbol*) list->Elements[1].get();
+    uint32_t addrWord;
+
+    Declaration* decl = FindSymbol( symbol->String );
+
+    if ( decl == nullptr )
+    {
+        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+    }
+    else
+    {
+        switch ( decl->Kind )
+        {
+        case Decl_Global:
+            addrWord = CodeAddr::Build( ((Storage*) decl)->Offset, mModIndex );
+            mCodeBinPtr[0] = OP_LDC;
+            mCodeBinPtr++;
+            WriteU32( mCodeBinPtr, addrWord );
+            break;
+
+        default:
+            ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals" );
+        }
+    }
+
+    IncreaseExprDepth();
+
+    Generate( list->Elements[2].get() );
+
+    mCodeBinPtr[0] = OP_PRIM;
+    mCodeBinPtr[1] = PRIM_ADD;
+    mCodeBinPtr += 2;
+
+    DecreaseExprDepth();
+}
+
+void Compiler::GenerateAref( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( config.discard )
+    {
+        status.discarded = true;
+        return;
+    }
+
+    GenerateArrayElementRef( list );
+
+    mCodeBinPtr[0] = OP_LOADI;
+    mCodeBinPtr++;
+
+    DecreaseExprDepth();
+    IncreaseExprDepth();
+}
+
 void Compiler::GenerateLambdas()
 {
     long i = 0;
@@ -1848,10 +1923,15 @@ void Compiler::GenerateNilIfNeeded( const GenConfig& config, GenStatus& status )
     }
 }
 
-void Compiler::MatchSymbol( Element* elem, const char* name )
+void Compiler::MatchSymbol( Element* elem, const char* name, const char* message )
 {
     if ( elem->Code != Elem_Symbol || 0 != strcmp( name, ((Symbol*) elem)->String.c_str() ) )
-        ThrowError( CERR_SEMANTICS, elem, "Expected symbol: %s", name );
+    {
+        if ( message == nullptr )
+            ThrowError( CERR_SEMANTICS, elem, "Expected symbol: %s", name );
+        else
+            ThrowError( CERR_SEMANTICS, elem, message );
+    }
 }
 
 void Compiler::GenerateSentinel()
@@ -1922,6 +2002,15 @@ Compiler::Storage* Compiler::AddLocal( SymTable& table, const std::string& name,
     local->Offset = offset;
     table.insert( SymTable::value_type( name, local ) );
     return local;
+}
+
+Compiler::Storage* Compiler::AddGlobal( const std::string& name, int offset )
+{
+    auto* global = new Storage();
+    global->Kind = Decl_Global;
+    global->Offset = offset;
+    mGlobalTable.insert( SymTable::value_type( name, global ) );
+    return global;
 }
 
 Compiler::ConstDecl* Compiler::AddConst( const std::string& name, int value )

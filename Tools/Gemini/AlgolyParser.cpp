@@ -142,6 +142,16 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         mCurToken = TokenCode::Ampersand;
         break;
 
+    case '[':
+        NextChar();
+        mCurToken = TokenCode::LBracket;
+        break;
+
+    case ']':
+        NextChar();
+        mCurToken = TokenCode::RBracket;
+        break;
+
     case '+':
         CollectChar();
         mCurToken = TokenCode::Plus;
@@ -733,6 +743,11 @@ Unique<Compiler::Element> AlgolyParser::ParseSingle()
         ThrowSyntaxError( "Expected expression" );
     }
 
+    if ( mCurToken == TokenCode::LBracket )
+    {
+        elem = ParseIndexing( std::move( elem ) );
+    }
+
     if ( mCurToken == TokenCode::LParen )
     {
         return ParseCall( std::move( elem ), indirect );
@@ -805,6 +820,22 @@ Unique<Compiler::Slist> AlgolyParser::ParseAssignment( std::unique_ptr<Compiler:
     SkipLineEndings();
 
     list->Elements.push_back( ParseExpr() );
+
+    return list;
+}
+
+Unique<Compiler::Element> AlgolyParser::ParseIndexing( std::unique_ptr<Compiler::Element>&& head )
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+
+    list->Elements.push_back( MakeSymbol( "aref" ) );
+    list->Elements.push_back( std::move( head ) );
+
+    ScanToken();
+
+    list->Elements.push_back( ParseExpr() );
+
+    ScanToken( TokenCode::RBracket );
 
     return list;
 }

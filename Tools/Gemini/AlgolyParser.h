@@ -22,6 +22,8 @@ class AlgolyParser
         RParen,
         Comma,
         Ampersand,
+        LBracket,
+        RBracket,
         Assign,
         Plus,
         Minus,
@@ -140,6 +142,7 @@ private:
     Unique<Compiler::Element> ParseBinary( int level );
     Unique<Compiler::Element> ParseUnary();
     Unique<Compiler::Element> ParseSingle();
+    Unique<Compiler::Element> ParseIndexing( std::unique_ptr<Compiler::Element>&& head );
 
     bool IsTokenOrOp();
     bool IsTokenAndOp();

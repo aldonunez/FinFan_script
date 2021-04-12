@@ -17,6 +17,8 @@ enum
     OP_STMOD,
     OP_LDC,
     OP_LDC_S,
+    OP_LOADI,
+    OP_STOREI,
     OP_PRIM,
     OP_B,
     OP_BFALSE,

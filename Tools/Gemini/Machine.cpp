@@ -353,6 +353,47 @@ int Machine::Run()
             }
             break;
 
+        case OP_LOADI:
+            {
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
+                U32 addrWord = Pop();
+                U8  iMod = CodeAddr::GetModule( addrWord );
+                U16 addr = CodeAddr::GetAddress( addrWord );
+
+                auto [err, mod] = GetDataModule( iMod );
+                if ( err != ERR_NONE )
+                    return err;
+
+                if ( addr >= mod->DataSize )
+                    return ERR_BAD_ADDRESS;
+
+                Push( mod->DataBase[addr] );
+            }
+            break;
+
+        case OP_STOREI:
+            {
+                if ( WouldUnderflow( 2 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                U32 addrWord = Pop();
+                U32 value = Pop();
+                U8  iMod = CodeAddr::GetModule( addrWord );
+                U16 addr = CodeAddr::GetAddress( addrWord );
+
+                auto [err, mod] = GetDataModule( iMod );
+                if ( err != ERR_NONE )
+                    return err;
+
+                if ( addr >= mod->DataSize )
+                    return ERR_BAD_ADDRESS;
+
+                mod->DataBase[addr] = value;
+            }
+            break;
+
         case OP_PRIM:
             {
                 U8 func = ReadU8( codePtr );

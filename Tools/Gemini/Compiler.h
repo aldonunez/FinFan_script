@@ -338,6 +338,8 @@ private:
     void GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatus& status );
     void GenerateSlist( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateEvalStar( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateAref( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateArrayElementRef( Slist* list );
 
     void EmitLoadConstant( int32_t value );
 
@@ -401,13 +403,14 @@ private:
     Declaration* FindSymbol( const std::string& symbol );
     Storage* AddArg( SymTable& table, const std::string& name, int offset );
     Storage* AddLocal( SymTable& table, const std::string& name, int offset );
+    Storage* AddGlobal( const std::string& name, int offset );
     Function* AddFunc( const std::string& name, int address );
     Function* AddForward( const std::string& name );
     ConstDecl* AddConst( const std::string& name, int value );
     void MakeStdEnv();
     void CollectFunctionForwards( Slist* program );
 
-    void MatchSymbol( Element* elem, const char* name );
+    void MatchSymbol( Element* elem, const char* name, const char* message = nullptr );
 
     // Stack usage
     void IncreaseExprDepth();
