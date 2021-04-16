@@ -926,7 +926,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         else if ( it->second->Kind == Decl_Forward )
         {
             PushPatch( &func->Patches );
-            mLocalAddrRefs.push_back( &func->Patches.Next->Inst );
+            mLocalAddrRefs.push_back( &func->Patches.First->Inst );
         }
         else
         {
@@ -1582,35 +1582,35 @@ void Compiler::PushPatch( PatchChain* chain )
 {
     InstPatch* link = new InstPatch;
     link->Inst = mCodeBinPtr;
-    link->Next = chain->Next;
-    chain->Next = link;
+    link->Next = chain->First;
+    chain->First = link;
 }
 
 void Compiler::PopPatch( PatchChain* chain )
 {
-    assert( chain->Next != nullptr );
+    assert( chain->First != nullptr );
 
-    auto link = chain->Next;
-    chain->Next = chain->Next->Next;
+    auto link = chain->First;
+    chain->First = chain->First->Next;
     delete link;
 }
 
 void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
 {
-    if (   trueChain->Next  == nullptr 
-        || falseChain->Next == nullptr )
+    if (   trueChain->First  == nullptr
+        || falseChain->First == nullptr )
         return;
 
     U8* target = mCodeBinPtr;
-    size_t diff = target - (trueChain->Next->Inst + BranchInst::Size);
+    size_t diff = target - (trueChain->First->Inst + BranchInst::Size);
 
     if ( diff == BranchInst::Size
         && mCodeBinPtr[-BranchInst::Size] == OP_B
-        && &mCodeBinPtr[-BranchInst::Size] == falseChain->Next->Inst
+        && &mCodeBinPtr[-BranchInst::Size] == falseChain->First->Inst
         )
     {
-        falseChain->Next->Inst = trueChain->Next->Inst;
-        trueChain->Next->Inst[0] = InvertJump( trueChain->Next->Inst[0] );
+        falseChain->First->Inst = trueChain->First->Inst;
+        trueChain->First->Inst[0] = InvertJump( trueChain->First->Inst[0] );
 
         // Remove the branch instruction.
         PopPatch( trueChain );
@@ -1620,11 +1620,11 @@ void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
 
 void Compiler::ElideFalse( PatchChain* trueChain, PatchChain* falseChain )
 {
-    if ( falseChain->Next == nullptr )
+    if ( falseChain->First == nullptr )
         return;
 
     U8* target = mCodeBinPtr;
-    size_t diff = target - (falseChain->Next->Inst + BranchInst::Size);
+    size_t diff = target - (falseChain->First->Inst + BranchInst::Size);
 
     if ( diff == 0 )
     {
@@ -1638,7 +1638,7 @@ void Compiler::Patch( PatchChain* chain, U8* targetPtr )
 {
     U8* target = (targetPtr != nullptr) ? targetPtr : mCodeBinPtr;
 
-    for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
+    for ( InstPatch* link = chain->First; link != nullptr; link = link->Next )
     {
         ptrdiff_t diff = target - (link->Inst + BranchInst::Size);
 
@@ -1651,7 +1651,7 @@ void Compiler::Patch( PatchChain* chain, U8* targetPtr )
 
 void Compiler::PatchCalls( PatchChain* chain, U32 addr )
 {
-    for ( InstPatch* link = chain->Next; link != nullptr; link = link->Next )
+    for ( InstPatch* link = chain->First; link != nullptr; link = link->Next )
     {
         int offset = 0;
 

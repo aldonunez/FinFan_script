@@ -126,19 +126,19 @@ private:
 
     struct PatchChain
     {
-        InstPatch*  Next;
+        InstPatch*  First;
 
         PatchChain()
-            :   Next( nullptr )
+            :   First( nullptr )
         {
         }
 
         ~PatchChain()
         {
-            while ( Next != nullptr )
+            while ( First != nullptr )
             {
-                auto link = Next;
-                Next = Next->Next;
+                auto link = First;
+                First = First->Next;
                 delete link;
             }
         }
