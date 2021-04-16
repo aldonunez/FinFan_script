@@ -747,8 +747,8 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     lambda.Patch = mCodeBinPtr;
     mLambdas.push_back( lambda );
 
-    // Add the index of the deferred lambda just linked
-    mLocalLambdas.push_back( mLambdas.size() - 1 );
+    // Add the reference to the deferred lambda just linked
+    mLocalAddrRefs.push_back( &mLambdas.back().Patch );
 
     WriteU32( mCodeBinPtr, 0 );
     IncreaseExprDepth();
@@ -926,6 +926,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         else if ( it->second->Kind == Decl_Forward )
         {
             PushPatch( &func->Patches );
+            mLocalAddrRefs.push_back( &func->Patches.Next->Inst );
         }
         else
         {
@@ -1658,6 +1659,7 @@ void Compiler::PatchCalls( PatchChain* chain, U32 addr )
         {
         case OP_CALL:   offset = 2; break;
         case OP_LDC:    offset = 1; break;
+        default:        assert( false ); break;
         }
 
         StoreU24( &link->Inst[offset], addr );
@@ -1829,7 +1831,7 @@ void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
     mCurLocalCount = 0;
     mCurExprDepth = 0;
     mMaxExprDepth = 0;
-    mLocalLambdas.clear();
+    mLocalAddrRefs.clear();
 
     GenStatus status = { Expr_Other };
     GenerateImplicitProgn( list, BodyIndex, GenConfig::Statement(), status );
@@ -1851,9 +1853,10 @@ void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
         mCodeBinPtr -= PushInstSize;
 
         // If local lambda references were generated, then shift them
-        for ( auto index : mLocalLambdas )
+        // This also includes references to any function
+        for ( auto refPtr : mLocalAddrRefs )
         {
-            mLambdas[index].Patch -= PushInstSize;
+            *refPtr -= PushInstSize;
         }
     }
 

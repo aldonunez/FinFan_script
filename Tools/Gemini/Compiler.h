@@ -284,7 +284,7 @@ private:
     typedef std::map<std::string, std::unique_ptr<Declaration>> SymTable;
     typedef std::vector<SymTable*> SymStack;
     typedef std::vector<DeferredLambda> LambdaVec;
-    typedef std::vector<int> LambdaRefVec;
+    typedef std::vector<U8**> AddrRefVec;
 
     typedef void (Compiler::*CallGenerator)( Slist* list, const GenConfig& config, GenStatus& status );
     typedef std::unordered_map<std::string, CallGenerator> GeneratorMap;
@@ -298,7 +298,7 @@ private:
     SymTable        mGlobalTable;
     SymStack        mSymStack;
     LambdaVec       mLambdas;
-    LambdaRefVec    mLocalLambdas;
+    AddrRefVec      mLocalAddrRefs;
     int             mCurLocalCount;
     int             mMaxLocalCount;
     int             mForwards;
