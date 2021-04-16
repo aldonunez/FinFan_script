@@ -5,6 +5,29 @@
 #include <cstdarg>
 
 
+class LocalScope
+{
+    Compiler::SymTable  mLocalTable;
+    Compiler&           mCompiler;
+
+public:
+    explicit LocalScope( Compiler& compiler ) :
+        mCompiler( compiler )
+    {
+        mCompiler.mSymStack.push_back( &mLocalTable );
+    }
+
+    ~LocalScope()
+    {
+        mCompiler.mCurLocalCount -= mLocalTable.size();
+        mCompiler.mSymStack.pop_back();
+    }
+
+    LocalScope( const LocalScope& ) = delete;
+    LocalScope& operator=( const LocalScope& ) = delete;
+};
+
+
 Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex ) :
     mCodeBin( codeBin ),
     mCodeBinPtr( codeBin ),
@@ -861,7 +884,7 @@ void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& sta
         ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'let' : first argument must be a list" );
 
     Slist* allList = (Slist*) list->Elements[1].get();
-    SymTable localTable;
+    LocalScope localScope( *this );
 
     for ( size_t i = 0; i < allList->Elements.size(); i++ )
     {
@@ -876,11 +899,7 @@ void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& sta
             ThrowError( CERR_SEMANTICS, localList->Elements[0].get(), "'let' : first element of binding pair must be a symbol" );
 
         Symbol* localSym = (Symbol*) localList->Elements[0].get();
-        Storage* local = AddLocal( localTable, localSym->String, mCurLocalCount );
-
-        mCurLocalCount++;
-        if ( mCurLocalCount > mMaxLocalCount )
-            mMaxLocalCount = mCurLocalCount;
+        Storage* local = AddLocal( localSym->String );
 
         if ( localList->Elements.size() > 1 )
         {
@@ -892,13 +911,7 @@ void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& sta
         }
     }
 
-    mSymStack.push_back( &localTable );
-
     GenerateImplicitProgn( list, 2, config, status );
-
-    mSymStack.pop_back();
-
-    mCurLocalCount -= localTable.size();
 }
 
 void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& status )
@@ -1031,7 +1044,7 @@ void Compiler::GenerateLoop( Slist* list, const GenConfig& config, GenStatus& st
 
 void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& status )
 {
-    SymTable localTable;
+    LocalScope localScope( *this );
 
     if ( list->Elements.size() < 8 )
         ThrowError( CERR_SEMANTICS, list, "'loop' takes 7 or more arguments" );
@@ -1044,11 +1057,7 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
         ThrowError( CERR_SEMANTICS, list->Elements[2].get(), "Expected variable name" );
 
     Symbol* localSym = (Symbol*) list->Elements[2].get();
-    Storage* local = AddLocal( localTable, localSym->String, mCurLocalCount );
-
-    mCurLocalCount++;
-    if ( mCurLocalCount > mMaxLocalCount )
-        mMaxLocalCount = mCurLocalCount;
+    Storage* local = AddLocal( localSym->String );
 
     MatchSymbol( list->Elements[3].get(), "from" );
 
@@ -1099,8 +1108,6 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
     }
 
     MatchSymbol( list->Elements[headerSize - 1].get(), "do" );
-
-    mSymStack.push_back( &localTable );
 
     PatchChain  bodyChain;
     PatchChain  testChain;
@@ -1167,10 +1174,6 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
 
     Patch( &bodyChain, bodyPtr );
     Patch( &breakChain );
-
-    mSymStack.pop_back();
-
-    mCurLocalCount -= localTable.size();
 
     GenerateNilIfNeeded( config, status );
 }
@@ -1287,26 +1290,17 @@ void Compiler::GenerateCase( Slist* list, const GenConfig& config, GenStatus& st
 
 void Compiler::GenerateGeneralCase( Slist* list, const GenConfig& config, GenStatus& status )
 {
-    SymTable localTable;
+    LocalScope localScope( *this );
     PatchChain exitChain;
-    bool usesTempKeyform = false;
 
     const GenConfig& statementConfig = config;
 
     if ( list->Elements[1]->Code == Elem_Slist )
     {
-        usesTempKeyform = true;
-
         std::unique_ptr<Symbol> localSym( new Symbol() );
         localSym->Code = Elem_Symbol;
         localSym->String = "$testKey";
-        Storage* local = AddLocal( localTable, localSym->String, mCurLocalCount );
-
-        mCurLocalCount++;
-        if ( mCurLocalCount > mMaxLocalCount )
-            mMaxLocalCount = mCurLocalCount;
-
-        mSymStack.push_back( &localTable );
+        Storage* local = AddLocal( localSym->String );
 
         Generate( list->Elements[1].get() );
         mCodeBinPtr[0] = OP_STLOC;
@@ -1398,12 +1392,6 @@ void Compiler::GenerateGeneralCase( Slist* list, const GenConfig& config, GenSta
     }
 
     Patch( &exitChain );
-
-    if ( usesTempKeyform )
-    {
-        mSymStack.pop_back();
-        mCurLocalCount -= localTable.size();
-    }
 }
 
 void Compiler::GenerateNot( Slist* list, const GenConfig& config, GenStatus& status )
@@ -2004,6 +1992,18 @@ Compiler::Storage* Compiler::AddLocal( SymTable& table, const std::string& name,
     local->Kind = Decl_Local;
     local->Offset = offset;
     table.insert( SymTable::value_type( name, local ) );
+    return local;
+}
+
+Compiler::Storage* Compiler::AddLocal( const std::string& name )
+{
+    auto local = AddLocal( *mSymStack.back(), name, mCurLocalCount );
+
+    mCurLocalCount++;
+
+    if ( mCurLocalCount > mMaxLocalCount )
+        mMaxLocalCount = mCurLocalCount;
+
     return local;
 }
 

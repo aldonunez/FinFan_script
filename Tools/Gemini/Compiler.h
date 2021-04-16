@@ -66,6 +66,9 @@ struct CompilerStats
     CallStats   Static;
 };
 
+class LocalScope;
+
+
 class Compiler
 {
 public:
@@ -118,6 +121,8 @@ public:
     };
 
 private:
+    friend class LocalScope;
+
     struct InstPatch
     {
         InstPatch*  Next;
@@ -403,6 +408,7 @@ private:
     Declaration* FindSymbol( const std::string& symbol );
     Storage* AddArg( SymTable& table, const std::string& name, int offset );
     Storage* AddLocal( SymTable& table, const std::string& name, int offset );
+    Storage* AddLocal( const std::string& name );
     Storage* AddGlobal( const std::string& name, int offset );
     Function* AddFunc( const std::string& name, int address );
     Function* AddForward( const std::string& name );
