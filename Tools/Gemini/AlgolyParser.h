@@ -25,6 +25,8 @@ class AlgolyParser
         LBracket,
         RBracket,
         Assign,
+        Colon,
+        Ellipsis,
         Plus,
         Minus,
         Star,
@@ -59,6 +61,7 @@ class AlgolyParser
         Return,
         Then,
         To,
+        Var,
         When,
         While,
     };
@@ -121,6 +124,7 @@ private:
     Unique<Compiler::Slist> ParseCall( std::unique_ptr<Compiler::Element>&& head, bool indirect, bool parens = true );
     Unique<Compiler::Slist> ParseAssignment( std::unique_ptr<Compiler::Element>&& head );
     Unique<Compiler::Slist> ParseLet();
+    Unique<Compiler::Slist> ParseVar();
     Unique<Compiler::Slist> ParseReturn();
     Unique<Compiler::Slist> ParseIf();
     Unique<Compiler::Slist> ParseIfClause();

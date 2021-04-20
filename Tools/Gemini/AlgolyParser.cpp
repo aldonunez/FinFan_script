@@ -118,7 +118,7 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         }
         else
         {
-            ThrowSyntaxError( "Bad character: U+%02X", ':' );
+            mCurToken = TokenCode::Colon;
         }
         break;
 
@@ -150,6 +150,21 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
     case ']':
         NextChar();
         mCurToken = TokenCode::RBracket;
+        break;
+
+    case '.':
+        NextChar();
+
+        if ( PeekChar() == '.' && PeekChar( 1 ) == '.' )
+        {
+            NextChar();
+            NextChar();
+            mCurToken = TokenCode::Ellipsis;
+        }
+        else
+        {
+            ThrowSyntaxError( "Bad character: U+%02X", '.' );
+        }
         break;
 
     case '+':
@@ -370,6 +385,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "return", TokenCode::Return },
         { "then",   TokenCode::Then },
         { "to",     TokenCode::To },
+        { "var",    TokenCode::Var },
         { "when",   TokenCode::When },
         { "while",  TokenCode::While },
     };
@@ -417,10 +433,18 @@ Compiler::Slist* AlgolyParser::Parse()
 
     while ( mCurToken != TokenCode::Eof )
     {
-        if ( mCurToken != TokenCode::Def )
+        if ( mCurToken == TokenCode::Def )
+        {
+            list->Elements.push_back( ParseFunction() );
+        }
+        else if ( mCurToken == TokenCode::Var )
+        {
+            list->Elements.push_back( ParseVar() );
+        }
+        else
+        {
             ThrowSyntaxError( "syntax error : expected function" );
-
-        list->Elements.push_back( ParseFunction() );
+        }
 
         SkipLineSeparators();
     }
@@ -892,6 +916,75 @@ Unique<Compiler::Slist> AlgolyParser::ParseLet()
     while ( mCurToken != TokenCode::End )
     {
         list->Elements.push_back( ParseStatement() );
+    }
+
+    return list;
+}
+
+Unique<Compiler::Slist> AlgolyParser::ParseVar()
+{
+    std::unique_ptr<Slist> list( MakeSlist() );
+    std::string name;
+
+    list->Elements.push_back( MakeSymbol( "defvar" ) );
+
+    ScanToken();
+
+    if ( mCurToken != TokenCode::Symbol )
+        ThrowSyntaxError( "Expected variable name" );
+
+    name = std::move( mCurString );
+
+    ScanToken();
+
+    if ( mCurToken == TokenCode::Colon )
+    {
+        std::unique_ptr<Slist> headList( MakeSlist() );
+        std::unique_ptr<Slist> initList( MakeSlist() );
+
+        ScanToken();
+        ScanToken( TokenCode::LBracket );
+
+        headList->Elements.push_back( MakeSymbol( name.c_str() ) );
+        headList->Elements.push_back( ParseExpr() );
+
+        ScanToken( TokenCode::RBracket );
+        ScanToken( TokenCode::Assign );
+        SkipLineEndings();
+        ScanToken( TokenCode::LBracket );
+
+        bool first = true;
+
+        while ( mCurToken != TokenCode::RBracket )
+        {
+            if ( mCurToken == TokenCode::Ellipsis )
+            {
+                ScanToken();
+                initList->Elements.push_back( MakeSymbol( "&extra" ) );
+                break;
+            }
+            else if ( !first )
+            {
+                ScanToken( TokenCode::Comma );
+                SkipLineEndings();
+            }
+
+            first = false;
+
+            initList->Elements.push_back( ParseExpr() );
+        }
+
+        ScanToken( TokenCode::RBracket );
+
+        list->Elements.push_back( std::move( headList ) );
+        list->Elements.push_back( std::move( initList ) );
+    }
+    else
+    {
+        ScanToken( TokenCode::Assign );
+
+        list->Elements.push_back( MakeSymbol( name.c_str() ) );
+        list->Elements.push_back( ParseExpr() );
     }
 
     return list;

@@ -79,6 +79,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
         { "next", &Compiler::GenerateNext },
         { "case", &Compiler::GenerateCase },
         { "aref", &Compiler::GenerateAref },
+        { "defvar", &Compiler::GenerateDefvar },
     };
 }
 
@@ -127,6 +128,16 @@ void Compiler::GetStats( CompilerStats& stats )
     }
 
     stats = mStats;
+}
+
+I32* Compiler::GetData()
+{
+    return &mGlobals.front();
+}
+
+size_t Compiler::GetDataSize()
+{
+    return mGlobals.size();
 }
 
 void Compiler::Generate( Element* elem )
@@ -771,7 +782,7 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     mLambdas.push_back( lambda );
 
     // Add the reference to the deferred lambda just linked
-    mLocalAddrRefs.push_back( &mLambdas.back().Patch );
+    mLocalAddrRefs.push_back( { AddrRefKind::Lambda, mLambdas.size() - 1 } );
 
     WriteU32( mCodeBinPtr, 0 );
     IncreaseExprDepth();
@@ -939,7 +950,10 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         else if ( it->second->Kind == Decl_Forward )
         {
             PushPatch( &func->Patches );
-            mLocalAddrRefs.push_back( &func->Patches.First->Inst );
+
+            AddrRef ref = { AddrRefKind::Inst };
+            ref.InstPtr = &func->Patches.First->Inst;
+            mLocalAddrRefs.push_back( ref );
         }
         else
         {
@@ -1755,6 +1769,105 @@ void Compiler::GenerateAref( Slist* list, const GenConfig& config, GenStatus& st
     IncreaseExprDepth();
 }
 
+void Compiler::GenerateDefvar( Slist* list, const GenConfig& config, GenStatus& status )
+{
+    if ( mInFunc )
+        ThrowError( CERR_SEMANTICS, list, "'defvar' must be used outside of a function" );
+
+    if ( list->Elements.size() < 2 || list->Elements.size() > 3 )
+        ThrowError( CERR_SEMANTICS, list, "'defvar' takes 1 or 2 arguments" );
+
+    if ( list->Elements[1]->Code != Elem_Symbol && list->Elements[1]->Code != Elem_Slist )
+        ThrowError( CERR_SEMANTICS, list, "'defvar' takes a name or name and type" );
+
+    if ( list->Elements[1]->Code == Elem_Symbol )
+    {
+        auto global = AddGlobal( ((Symbol*) list->Elements[1].get())->String, 1 );
+
+        if ( list->Elements.size() == 3 )
+        {
+            AddGlobalData( global->Offset, list->Elements[2].get() );
+        }
+    }
+    else if ( list->Elements[1]->Code == Elem_Slist )
+    {
+        auto headList = (Slist*) list->Elements[1].get();
+
+        if ( headList->Elements.size() != 2
+            || headList->Elements[0]->Code != Elem_Symbol )
+            ThrowError( CERR_SEMANTICS, headList, "'defvar' takes a name and array size" );
+
+        I32 size = GetElementValue( headList->Elements[1].get(), "Expected a constant array size" );
+
+        if ( size <= 0 )
+            ThrowError( CERR_SEMANTICS, headList->Elements[1].get(), "Array size must be positive" );
+
+        auto global = AddGlobal( ((Symbol*) headList->Elements[0].get())->String, size );
+
+        if ( list->Elements.size() == 3 )
+        {
+            AddGlobalDataArray( global, list->Elements[2].get(), size );
+        }
+    }
+    else
+    {
+        ThrowError( CERR_SEMANTICS, list, "'defvar' takes a name or name and type" );
+    }
+}
+
+void Compiler::AddGlobalData( U32 offset, Element* valueElem )
+{
+    mGlobals[offset] = GetElementValue( valueElem, "Globals must be initialized with constant data" );
+}
+
+void Compiler::AddGlobalDataArray( Storage* global, Element* valueElem, size_t size )
+{
+    if ( valueElem->Code != Elem_Slist )
+        ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+
+    size_t i = 0;
+    bool foundExtra = false;
+
+    for ( auto& entry : ((Slist*) valueElem)->Elements )
+    {
+        if ( foundExtra )
+            ThrowError( CERR_SEMANTICS, entry.get(), "&extra must be last array initializer" );
+
+        if ( entry->Code == Elem_Symbol && ((Symbol*) entry.get())->String == "&extra" )
+        {
+            foundExtra = true;
+        }
+        else
+        {
+            if ( i == size )
+                ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+
+            AddGlobalData( global->Offset + i, entry.get() );
+            i++;
+        }
+    }
+
+    I32 prevValue = 0;
+    I32 step = 0;
+
+    if ( foundExtra )
+    {
+        if ( i >= 1 )
+            prevValue = mGlobals[global->Offset + i - 1];
+
+        if ( i >= 2 )
+            step = prevValue - mGlobals[global->Offset + i - 2];
+    }
+
+    for ( ; i < size; i++ )
+    {
+        I32 newValue = prevValue + step;
+
+        mGlobals[global->Offset + i] = newValue;
+        prevValue = newValue;
+    }
+}
+
 void Compiler::GenerateLambdas()
 {
     long i = 0;
@@ -1842,9 +1955,25 @@ void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
 
         // If local lambda references were generated, then shift them
         // This also includes references to any function
-        for ( auto refPtr : mLocalAddrRefs )
+        for ( auto ref : mLocalAddrRefs )
         {
-            *refPtr -= PushInstSize;
+            U8** ppInst = nullptr;
+
+            switch ( ref.Kind )
+            {
+            case AddrRefKind::Lambda:
+                ppInst = &mLambdas[ref.LambdaIndex].Patch;
+                break;
+
+            case AddrRefKind::Inst:
+                ppInst = ref.InstPtr;
+                break;
+
+            default:
+                ThrowInternalError();
+            }
+
+            *ppInst -= PushInstSize;
         }
     }
 
@@ -1968,6 +2097,9 @@ Compiler::Storage* Compiler::AddArg( SymTable& table, const std::string& name, i
 
 Compiler::Function* Compiler::AddFunc( const std::string& name, int address )
 {
+    if ( mGlobalTable.find( name ) != mGlobalTable.end() )
+        ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
+
     auto* func = new Function();
     func->Kind = Decl_Func;
     func->Name = name;
@@ -2007,14 +2139,22 @@ Compiler::Storage* Compiler::AddLocal( const std::string& name )
     return local;
 }
 
-Compiler::Storage* Compiler::AddGlobal( const std::string& name, int offset )
+Compiler::Storage* Compiler::AddGlobal( const std::string& name, size_t size )
 {
+    if ( mGlobalTable.find( name ) != mGlobalTable.end() )
+        ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
+
     auto* global = new Storage();
     global->Kind = Decl_Global;
-    global->Offset = offset;
+    global->Offset = mGlobals.size();
     mGlobalTable.insert( SymTable::value_type( name, global ) );
+
+    mGlobals.resize( mGlobals.size() + size, 0 );
+
     return global;
 }
+
+// TODO: split this into standard constants that go in constant table and other constants that go in global table
 
 Compiler::ConstDecl* Compiler::AddConst( const std::string& name, int value )
 {
@@ -2049,6 +2189,40 @@ void Compiler::CollectFunctionForwards( Slist* program )
             }
         }
     }
+}
+
+std::optional<I32> Compiler::GetOptionalElementValue( Element* elem )
+{
+    if ( elem->Code == Elem_Number )
+    {
+        auto number = (Number*) elem;
+        return number->Value;
+    }
+    else if ( elem->Code == Elem_Symbol )
+    {
+        Declaration* decl = FindSymbol( ((Symbol*) elem)->String );
+
+        if ( decl != nullptr && decl->Kind == Decl_Const )
+        {
+            auto constant = (ConstDecl*) decl;
+            return constant->Value;
+        }
+    }
+
+    return std::optional<I32>();
+}
+
+I32 Compiler::GetElementValue( Element* elem, const char* message )
+{
+    auto optValue = GetOptionalElementValue( elem );
+
+    if ( optValue.has_value() )
+        return optValue.value();
+
+    if ( message != nullptr )
+        ThrowError( CERR_SEMANTICS, elem, message );
+    else
+        ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
 }
 
 void Compiler::IncreaseExprDepth()
