@@ -880,6 +880,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseLet()
     do
     {
         std::unique_ptr<Slist> pair( MakeSlist() );
+        std::unique_ptr<Symbol> nameSym;
 
         if ( !first )
         {
@@ -895,13 +896,58 @@ Unique<Compiler::Slist> AlgolyParser::ParseLet()
         if ( mCurToken != TokenCode::Symbol )
             ThrowSyntaxError( "Expected variable name" );
 
-        pair->Elements.push_back( ParseSymbol() );
+        nameSym = ParseSymbol();
 
-        AssertToken( TokenCode::EQ );
-        ScanToken();
-        SkipLineEndings();
+        if ( mCurToken == TokenCode::Colon )
+        {
+            std::unique_ptr<Slist> headList( MakeSlist() );
+            std::unique_ptr<Slist> initList( MakeSlist() );
 
-        pair->Elements.push_back( ParseExpr() );
+            ScanToken();
+            ScanToken( TokenCode::LBracket );
+
+            headList->Elements.push_back( std::move( nameSym ) );
+            headList->Elements.push_back( ParseExpr() );
+
+            ScanToken( TokenCode::RBracket );
+            ScanToken( TokenCode::EQ );
+            SkipLineEndings();
+            ScanToken( TokenCode::LBracket );
+
+            bool firstInit = true;
+
+            while ( mCurToken != TokenCode::RBracket )
+            {
+                if ( mCurToken == TokenCode::Ellipsis )
+                {
+                    ScanToken();
+                    initList->Elements.push_back( MakeSymbol( "&extra" ) );
+                    break;
+                }
+                else if ( !firstInit )
+                {
+                    ScanToken( TokenCode::Comma );
+                    SkipLineEndings();
+                }
+
+                firstInit = false;
+
+                initList->Elements.push_back( ParseExpr() );
+            }
+
+            ScanToken( TokenCode::RBracket );
+
+            pair->Elements.push_back( std::move( headList ) );
+            pair->Elements.push_back( std::move( initList ) );
+        }
+        else
+        {
+            ScanToken( TokenCode::EQ );
+            SkipLineEndings();
+
+            pair->Elements.push_back( std::move( nameSym ) );
+            pair->Elements.push_back( ParseExpr() );
+        }
 
         assignments->Elements.push_back( std::move( pair ) );
 

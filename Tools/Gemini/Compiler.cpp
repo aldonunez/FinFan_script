@@ -918,19 +918,114 @@ void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& sta
 
 void Compiler::GenerateLetBinding( Slist* localList )
 {
-    if ( localList->Elements[0]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, localList->Elements[0].get(), "'let' : first element of binding pair must be a symbol" );
-
-    Symbol* localSym = (Symbol*) localList->Elements[0].get();
-    Storage* local = AddLocal( localSym->String, 1 );
-
-    if ( localList->Elements.size() > 1 )
+    if ( localList->Elements[0]->Code == Elem_Symbol )
     {
-        Generate( localList->Elements[1].get() );
+        Symbol* localSym = (Symbol*) localList->Elements[0].get();
+        Storage* local = AddLocal( localSym->String, 1 );
+
+        if ( localList->Elements.size() == 2 )
+        {
+            Generate( localList->Elements[1].get() );
+            mCodeBinPtr[0] = OP_STLOC;
+            mCodeBinPtr[1] = local->Offset;
+            mCodeBinPtr += 2;
+            DecreaseExprDepth();
+        }
+    }
+    else if ( localList->Elements[0]->Code == Elem_Slist )
+    {
+        auto headList = (Slist*) localList->Elements[0].get();
+
+        if ( headList->Elements.size() != 2
+            || headList->Elements[0]->Code != Elem_Symbol )
+            ThrowError( CERR_SEMANTICS, headList, "'let' binding takes a name and array size" );
+
+        I32 size = GetElementValue( headList->Elements[1].get(), "Expected a constant array size" );
+
+        if ( size <= 0 )
+            ThrowError( CERR_SEMANTICS, headList->Elements[1].get(), "Array size must be positive" );
+
+        auto local = AddLocal( ((Symbol*) headList->Elements[0].get())->String, size );
+
+        if ( localList->Elements.size() == 2 )
+        {
+            AddLocalDataArray( local, localList->Elements[1].get(), size );
+        }
+    }
+    else
+    {
+        ThrowError( CERR_SEMANTICS, localList, "'let' binding takes a name or name and type" );
+    }
+}
+
+// TODO: try to merge this with AddGlobalDataArray. Separate the array processing from the code generation
+
+void Compiler::AddLocalDataArray( Storage* local, Element* valueElem, size_t size )
+{
+    if ( valueElem->Code != Elem_Slist )
+        ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+
+    Element* extraSym = nullptr;
+    Element* lastTwoElems[2] = {};
+    size_t locIndex = local->Offset;
+    size_t i = 0;
+    bool foundExtra = false;
+
+    for ( auto& entry : ((Slist*) valueElem)->Elements )
+    {
+        if ( foundExtra )
+            ThrowError( CERR_SEMANTICS, entry.get(), "&extra must be last array initializer" );
+
+        if ( entry->Code == Elem_Symbol && ((Symbol*) entry.get())->String == "&extra" )
+        {
+            foundExtra = true;
+            extraSym = entry.get();
+        }
+        else
+        {
+            if ( i == size )
+                ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+
+            lastTwoElems[0] = lastTwoElems[1];
+            lastTwoElems[1] = entry.get();
+
+            Generate( entry.get() );
+            mCodeBinPtr[0] = OP_STLOC;
+            mCodeBinPtr[1] = (U8) locIndex;
+            mCodeBinPtr += 2;
+            i++;
+            locIndex--;
+            DecreaseExprDepth();
+        }
+    }
+
+    I32 prevValue = 0;
+    I32 step = 0;
+
+    if ( foundExtra && lastTwoElems[1] != nullptr )
+    {
+        prevValue = GetElementValue( lastTwoElems[1], "Array initializer extrapolation requires a constant" );
+
+        if ( lastTwoElems[0] != nullptr )
+        {
+            auto prevValue2 = GetOptionalElementValue( lastTwoElems[0] );
+            if ( prevValue2.has_value() )
+                step = prevValue - prevValue2.value();
+        }
+    }
+
+    for ( ; i < size; i++ )
+    {
+        I32 newValue = prevValue + step;
+
+        EmitLoadConstant( newValue );
         mCodeBinPtr[0] = OP_STLOC;
-        mCodeBinPtr[1] = local->Offset;
+        mCodeBinPtr[1] = (U8) locIndex;
         mCodeBinPtr += 2;
+        locIndex--;
         DecreaseExprDepth();
+
+        prevValue = newValue;
     }
 }
 
@@ -1749,6 +1844,12 @@ void Compiler::GenerateArrayElementRef( Slist* list )
             WriteU32( mCodeBinPtr, addrWord );
             break;
 
+        case Decl_Local:
+            mCodeBinPtr[0] = OP_LDLOCA;
+            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+            mCodeBinPtr += 2;
+            break;
+
         default:
             ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals" );
         }
@@ -1787,9 +1888,6 @@ void Compiler::GenerateDefvar( Slist* list, const GenConfig& config, GenStatus& 
 
     if ( list->Elements.size() < 2 || list->Elements.size() > 3 )
         ThrowError( CERR_SEMANTICS, list, "'defvar' takes 1 or 2 arguments" );
-
-    if ( list->Elements[1]->Code != Elem_Symbol && list->Elements[1]->Code != Elem_Slist )
-        ThrowError( CERR_SEMANTICS, list, "'defvar' takes a name or name and type" );
 
     if ( list->Elements[1]->Code == Elem_Symbol )
     {
@@ -2140,13 +2238,18 @@ Compiler::Storage* Compiler::AddLocal( SymTable& table, const std::string& name,
 
 Compiler::Storage* Compiler::AddLocal( const std::string& name, size_t size )
 {
-    auto local = AddLocal( *mSymStack.back(), name, mCurLocalCount );
+    assert( size >= 1 );
+
+    auto local = AddLocal( *mSymStack.back(), name, mCurLocalCount + size - 1 );
 
     mCurLocalCount += size;
     mCurLevelLocalCount += size;
 
     if ( mCurLocalCount > mMaxLocalCount )
         mMaxLocalCount = mCurLocalCount;
+
+    if ( mMaxLocalCount > UINT8_MAX )
+        ThrowError( CERR_SEMANTICS, 0, 0, "Local exceeds capacity: %s", name.c_str() );
 
     return local;
 }
@@ -2282,8 +2385,7 @@ void Compiler::CalculateStackDepth()
 
             // Only count parameters of publics, if that's ever a distinction
 
-            // Add 1 for the deepest return value in the call tree
-            int16_t stackUsage = func->TreeStackUsage + func->ArgCount + 1;
+            int16_t stackUsage = func->TreeStackUsage + func->ArgCount;
 
             callStats->MaxCallDepth  = std::max( callStats->MaxCallDepth,  func->CallDepth );
             callStats->MaxStackUsage = std::max( callStats->MaxStackUsage, stackUsage );

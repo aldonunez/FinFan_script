@@ -393,6 +393,8 @@ private:
     void GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLet( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLetBinding( Slist* localList );
+    void AddLocalDataArray( Storage* global, Element* valueElem, size_t size );
+
     void GenerateCall( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateFor( Slist* list, const GenConfig& config, GenStatus& status );
