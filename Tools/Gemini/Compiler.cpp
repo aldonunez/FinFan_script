@@ -1083,22 +1083,22 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
 
     if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "below" ) )
     {
-        primitive = PRIM_GT;
+        primitive = PRIM_LT;
         step = 1;
     }
     else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "to" ) )
     {
-        primitive = PRIM_GE;
+        primitive = PRIM_LE;
         step = 1;
     }
     else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "downto" ) )
     {
-        primitive = PRIM_LE;
+        primitive = PRIM_GE;
         step = -1;
     }
     else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "above" ) )
     {
-        primitive = PRIM_LT;
+        primitive = PRIM_GT;
         step = -1;
     }
     else
@@ -1676,13 +1676,15 @@ void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, G
     }
     else
     {
-        Generate( elem );
-
         mCodeBinPtr[0] = OP_LDC_S;
         mCodeBinPtr[1] = 0;
-        mCodeBinPtr[2] = OP_PRIM;
-        mCodeBinPtr[3] = PRIM_SUB;
-        mCodeBinPtr += 4;
+        mCodeBinPtr += 2;
+
+        Generate( elem );
+
+        mCodeBinPtr[0] = OP_PRIM;
+        mCodeBinPtr[1] = PRIM_SUB;
+        mCodeBinPtr += 2;
 
         IncreaseExprDepth();
         DecreaseExprDepth();
@@ -1693,14 +1695,14 @@ void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenCon
 {
     if ( config.discard )
     {
-        GenerateDiscard( list->Elements[2].get() );
         GenerateDiscard( list->Elements[1].get() );
+        GenerateDiscard( list->Elements[2].get() );
         status.discarded = true;
     }
     else
     {
-        Generate( list->Elements[2].get() );
         Generate( list->Elements[1].get() );
+        Generate( list->Elements[2].get() );
 
         mCodeBinPtr[0] = OP_PRIM;
         mCodeBinPtr[1] = primitive;
@@ -1715,6 +1717,8 @@ void Compiler::GenerateArrayElementRef( Slist* list )
     if ( list->Elements.size() != 3 || list->Elements[1]->Code != Elem_Symbol )
         ThrowError( CERR_SEMANTICS, list->Elements[0].get(),
             "'aref' supports only one-dimensional named arrays" );
+
+    Generate( list->Elements[2].get() );
 
     auto symbol = (Symbol*) list->Elements[1].get();
     uint32_t addrWord;
@@ -1742,8 +1746,6 @@ void Compiler::GenerateArrayElementRef( Slist* list )
     }
 
     IncreaseExprDepth();
-
-    Generate( list->Elements[2].get() );
 
     mCodeBinPtr[0] = OP_PRIM;
     mCodeBinPtr[1] = PRIM_ADD;

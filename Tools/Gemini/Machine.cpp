@@ -634,8 +634,8 @@ int Machine::CallPrimitive( U8 func )
         return ERR_STACK_UNDERFLOW;
 
     CELL result;
-    CELL a = mSP[0];
-    CELL b = mSP[1];
+    CELL a = mSP[1];
+    CELL b = mSP[0];
 
     switch ( func )
     {
