@@ -11,9 +11,12 @@ not
 
 ldarg, starg <uint8>
 ldloc, stloc <uint8>
+ldloca <uint8>
 ldmod, stmod <uint8> <uint16>
-ldc.s <int8>
 ldc <int32>
+ldc.s <int8>
+loadi
+storei
 prim <uint8>
 
 b <int16>
@@ -61,6 +64,10 @@ void Machine::Init( CELL* stack, U16 stackSize, UserContext scriptCtx )
     mStack = stack;
     mStackSize = stackSize;
     mScriptCtx = scriptCtx;
+
+    mStackMod = {};
+    mStackMod.DataBase = stack;
+    mStackMod.DataSize = stackSize;
 
     Reset();
 }
@@ -292,6 +299,22 @@ int Machine::Run()
                     return ERR_STACK_UNDERFLOW;
 
                 mStack[offset] = Pop();
+            }
+            break;
+
+        case OP_LDLOCA:
+            {
+                int index = ReadU8( codePtr );
+                long offset = mFramePtr - 1 - index;
+
+                if ( offset < 0 )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                U32 addrWord = CodeAddr::Build( offset, MODINDEX_STACK );
+                Push( addrWord );
             }
             break;
 
@@ -780,6 +803,10 @@ std::pair<int, const Module*> Machine::GetDataModule( U8 index )
     if ( index == mModIndex )
     {
         mod = mMod;
+    }
+    else if ( index == MODINDEX_STACK )
+    {
+        mod = &mStackMod;
     }
     else
     {

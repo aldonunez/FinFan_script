@@ -324,6 +324,7 @@ private:
     SymStack        mSymStack;
     LambdaVec       mLambdas;
     AddrRefVec      mLocalAddrRefs;
+    int             mCurLevelLocalCount;
     int             mCurLocalCount;
     int             mMaxLocalCount;
     int             mForwards;
@@ -391,6 +392,7 @@ private:
     void GenerateFunction( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLet( Slist* list, const GenConfig& config, GenStatus& status );
+    void GenerateLetBinding( Slist* localList );
     void GenerateCall( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateFor( Slist* list, const GenConfig& config, GenStatus& status );
@@ -434,7 +436,7 @@ private:
     Declaration* FindSymbol( const std::string& symbol );
     Storage* AddArg( SymTable& table, const std::string& name, int offset );
     Storage* AddLocal( SymTable& table, const std::string& name, int offset );
-    Storage* AddLocal( const std::string& name );
+    Storage* AddLocal( const std::string& name, size_t size );
     Storage* AddGlobal( const std::string& name, size_t size );
     Function* AddFunc( const std::string& name, int address );
     Function* AddForward( const std::string& name );

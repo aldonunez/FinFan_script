@@ -13,6 +13,7 @@ enum
     OP_STARG,
     OP_LDLOC,
     OP_STLOC,
+    OP_LDLOCA,
     OP_LDMOD,
     OP_STMOD,
     OP_LDC,
@@ -42,6 +43,7 @@ enum
     OP_SENTINEL = 0xFF
 };
 
+
 enum
 {
     PRIM_ADD,
@@ -56,6 +58,12 @@ enum
     PRIM_GT,
     PRIM_GE,
     PRIM_MAXPRIMITIVE,
+};
+
+
+enum
+{
+    MODINDEX_STACK  = 0xFE,
 };
 
 

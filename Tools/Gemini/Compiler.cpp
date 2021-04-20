@@ -15,11 +15,13 @@ public:
         mCompiler( compiler )
     {
         mCompiler.mSymStack.push_back( &mLocalTable );
+        mCompiler.mCurLevelLocalCount = 0;
     }
 
     ~LocalScope()
     {
-        mCompiler.mCurLocalCount -= mLocalTable.size();
+        mCompiler.mCurLocalCount -= mCompiler.mCurLevelLocalCount;
+        mCompiler.mCurLevelLocalCount = 0;
         mCompiler.mSymStack.pop_back();
     }
 
@@ -36,6 +38,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mEnv( env ),
     mLog( log ),
     mModIndex( modIndex ),
+    mCurLevelLocalCount(),
     mCurLocalCount(),
     mMaxLocalCount(),
     mInFunc( false ),
@@ -906,23 +909,29 @@ void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& sta
 
         if ( localList->Elements.size() != 2 )
             ThrowError( CERR_SEMANTICS, localList, "'let' : binding pair must have 2 elements" );
-        if ( localList->Elements[0]->Code != Elem_Symbol )
-            ThrowError( CERR_SEMANTICS, localList->Elements[0].get(), "'let' : first element of binding pair must be a symbol" );
 
-        Symbol* localSym = (Symbol*) localList->Elements[0].get();
-        Storage* local = AddLocal( localSym->String );
-
-        if ( localList->Elements.size() > 1 )
-        {
-            Generate( localList->Elements[1].get() );
-            mCodeBinPtr[0] = OP_STLOC;
-            mCodeBinPtr[1] = local->Offset;
-            mCodeBinPtr += 2;
-            DecreaseExprDepth();
-        }
+        GenerateLetBinding( localList );
     }
 
     GenerateImplicitProgn( list, 2, config, status );
+}
+
+void Compiler::GenerateLetBinding( Slist* localList )
+{
+    if ( localList->Elements[0]->Code != Elem_Symbol )
+        ThrowError( CERR_SEMANTICS, localList->Elements[0].get(), "'let' : first element of binding pair must be a symbol" );
+
+    Symbol* localSym = (Symbol*) localList->Elements[0].get();
+    Storage* local = AddLocal( localSym->String, 1 );
+
+    if ( localList->Elements.size() > 1 )
+    {
+        Generate( localList->Elements[1].get() );
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = local->Offset;
+        mCodeBinPtr += 2;
+        DecreaseExprDepth();
+    }
 }
 
 void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& status )
@@ -1071,7 +1080,7 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
         ThrowError( CERR_SEMANTICS, list->Elements[2].get(), "Expected variable name" );
 
     Symbol* localSym = (Symbol*) list->Elements[2].get();
-    Storage* local = AddLocal( localSym->String );
+    Storage* local = AddLocal( localSym->String, 1 );
 
     MatchSymbol( list->Elements[3].get(), "from" );
 
@@ -1314,7 +1323,7 @@ void Compiler::GenerateGeneralCase( Slist* list, const GenConfig& config, GenSta
         std::unique_ptr<Symbol> localSym( new Symbol() );
         localSym->Code = Elem_Symbol;
         localSym->String = "$testKey";
-        Storage* local = AddLocal( localSym->String );
+        Storage* local = AddLocal( localSym->String, 1 );
 
         Generate( list->Elements[1].get() );
         mCodeBinPtr[0] = OP_STLOC;
@@ -2129,11 +2138,12 @@ Compiler::Storage* Compiler::AddLocal( SymTable& table, const std::string& name,
     return local;
 }
 
-Compiler::Storage* Compiler::AddLocal( const std::string& name )
+Compiler::Storage* Compiler::AddLocal( const std::string& name, size_t size )
 {
     auto local = AddLocal( *mSymStack.back(), name, mCurLocalCount );
 
-    mCurLocalCount++;
+    mCurLocalCount += size;
+    mCurLevelLocalCount += size;
 
     if ( mCurLocalCount > mMaxLocalCount )
         mMaxLocalCount = mCurLocalCount;

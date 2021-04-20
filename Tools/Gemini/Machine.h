@@ -91,6 +91,7 @@ private:
     U8              mModIndex;
     U32             mPC;
     const Module*   mMod;
+    Module          mStackMod;
 
 public:
     Machine();
