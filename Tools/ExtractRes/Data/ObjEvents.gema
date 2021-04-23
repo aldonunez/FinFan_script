@@ -31,7 +31,7 @@ end
 
 def TalkFight
     SetObjectVisible( @0, false )
-    ShowDialog( @1 )
+    ShowDialog( @1, 0 )
     Fight( @3 )
 end
 
