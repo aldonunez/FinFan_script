@@ -817,6 +817,10 @@ void Compiler::GenerateFunction( Slist* list, const GenConfig& config, GenStatus
         else if ( it->second->Kind == Decl_Forward )
         {
             PushPatch( &func->Patches );
+
+            AddrRef ref = { AddrRefKind::Inst };
+            ref.InstPtr = &func->Patches.First->Inst;
+            mLocalAddrRefs.push_back( ref );
         }
         else
         {
@@ -1342,6 +1346,8 @@ void Compiler::GenerateSimpleLoop( Slist* list, const GenConfig& config, GenStat
     }
 
     Patch( &breakChain );
+
+    GenerateNilIfNeeded( config, status );
 }
 
 void Compiler::GenerateDo( Slist* list, const GenConfig& config, GenStatus& status )

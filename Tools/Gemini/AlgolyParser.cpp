@@ -173,15 +173,8 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         break;
 
     case '-':
-        if ( isdigit( PeekChar( 1 ) ) )
-        {
-            ReadNumber();
-        }
-        else
-        {
-            CollectChar();
-            mCurToken = TokenCode::Minus;
-        }
+        CollectChar();
+        mCurToken = TokenCode::Minus;
         break;
 
     case '*':
@@ -454,7 +447,11 @@ Compiler::Slist* AlgolyParser::Parse()
 
 Unique<Compiler::Slist> AlgolyParser::ParseFunction()
 {
-    return ParseProc( "defun", true );
+    auto proc = ParseProc( "defun", true );
+
+    SkipLineEndings();
+
+    return proc;
 }
 
 Unique<Compiler::Slist> AlgolyParser::ParseLambda()
@@ -487,7 +484,6 @@ Unique<Compiler::Slist> AlgolyParser::ParseProc( const char* head, bool hasName 
 
     // Read past "end"
     ScanToken( TokenCode::End );
-    SkipLineEndings();
 
     return list;
 }
@@ -726,6 +722,12 @@ Unique<Compiler::Element> AlgolyParser::ParseUnary()
         list->Elements.push_back( ParseAsSymbol() );
         list->Elements.push_back( ParseSingle() );
 
+        if ( ((Symbol*) list->Elements[0].get())->String == "-"
+            && list->Elements[1]->Code == Compiler::Elem_Number )
+        {
+            return MakeNumber( -((Number*) list->Elements[1].get())->Value );
+        }
+
         return list;
     }
     else if ( mCurToken == TokenCode::Ampersand )
@@ -735,7 +737,7 @@ Unique<Compiler::Element> AlgolyParser::ParseUnary()
         ScanToken();
 
         list->Elements.push_back( MakeSymbol( "function" ) );
-        list->Elements.push_back( ParseSingle() );
+        list->Elements.push_back( ParseSymbol() );
 
         return list;
     }
@@ -820,6 +822,9 @@ Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head
         first = false;
 
         list->Elements.push_back( ParseExpr() );
+
+        if ( parens )
+            SkipLineEndings();
     }
 
     if ( parens )
