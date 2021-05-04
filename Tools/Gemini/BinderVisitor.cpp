@@ -2,6 +2,7 @@
 #include "BinderVisitor.h"
 #include <cstdarg>
 #include "Compiler.h"
+#include "FolderVisitor.h"
 
 
 class LocalScope
@@ -93,6 +94,11 @@ void BinderVisitor::VisitAddrOfExpr( AddrOfExpr* addrOf )
 void BinderVisitor::VisitArrayTypeRef( ArrayTypeRef* typeRef )
 {
     typeRef->SizeExpr->Accept( this );
+
+    typeRef->Size = GetElementValue( typeRef->SizeExpr.get(), "Expected a constant array size" );
+
+    if ( typeRef->Size <= 0 )
+        mRep.ThrowError( CERR_SEMANTICS, typeRef->SizeExpr.get(), "Array size must be positive" );
 }
 
 void BinderVisitor::VisitAssignmentExpr( AssignmentExpr* assignment )
@@ -238,11 +244,6 @@ void BinderVisitor::VisitLetBinding( VarDecl* varDecl )
     else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
-
-        type->Size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
-
-        if ( type->Size <= 0 )
-            mRep.ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
 
         varDecl->Decl = AddLocal( varDecl->Name, type->Size );
     }
@@ -416,22 +417,13 @@ void BinderVisitor::VisitVarDecl( VarDecl* varDecl )
 
     if ( varDecl->TypeRef == nullptr )
     {
-        auto global = AddGlobal( varDecl->Name, 1 );
-
-        varDecl->Decl = global;
+        varDecl->Decl = AddGlobal( varDecl->Name, 1 );
     }
     else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
-        type->Size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
-
-        if ( type->Size <= 0 )
-            mRep.ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
-
-        auto global = AddGlobal( varDecl->Name, type->Size );
-
-        varDecl->Decl = global;
+        varDecl->Decl = AddGlobal( varDecl->Name, type->Size );
     }
 
     if ( varDecl->Initializer != nullptr )
@@ -466,30 +458,11 @@ void BinderVisitor::BindLambdas()
 }
 
 
-std::optional<I32> BinderVisitor::GetOptionalElementValue( Syntax* elem )
-{
-    if ( elem->Kind == SyntaxKind::Number )
-    {
-        auto number = (NumberExpr*) elem;
-        return number->Value;
-    }
-    else if ( elem->Kind == SyntaxKind::Name )
-    {
-        auto decl = ((NameExpr*) elem)->Decl.get();
-
-        if ( decl != nullptr && decl->Kind == DeclKind::Const )
-        {
-            auto constant = (ConstDecl*) decl;
-            return constant->Value;
-        }
-    }
-
-    return std::optional<I32>();
-}
-
 I32 BinderVisitor::GetElementValue( Syntax* elem, const char* message )
 {
-    auto optValue = GetOptionalElementValue( elem );
+    FolderVisitor folder( mRep.GetLog() );
+
+    auto optValue = folder.Evaluate( elem );
 
     if ( optValue.has_value() )
         return optValue.value();

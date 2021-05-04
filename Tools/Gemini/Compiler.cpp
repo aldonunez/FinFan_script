@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <cstdarg>
 #include "BinderVisitor.h"
+#include "FolderVisitor.h"
 
 
 Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex ) :
@@ -30,13 +31,9 @@ CompilerErr Compiler::Compile( Unit* progTree )
         MakeStdEnv();
         CollectFunctionForwards( progTree );
 
-        BinderVisitor binder( mConstTable, mGlobalTable, mEnv, mRep.GetLog() );
-
-        binder.Bind( progTree );
-
-        mGlobals.resize( binder.GetDataSize() );
-
-        progTree->Accept( this );
+        BindAttributes( progTree );
+        FoldConstants( progTree );
+        GenerateCode( progTree );
 
         GenerateLambdas();
         GenerateSentinel();
@@ -73,6 +70,27 @@ I32* Compiler::GetData()
 size_t Compiler::GetDataSize()
 {
     return mGlobals.size();
+}
+
+void Compiler::BindAttributes( Unit* progTree )
+{
+    BinderVisitor binder( mConstTable, mGlobalTable, mEnv, mRep.GetLog() );
+
+    binder.Bind( progTree );
+
+    mGlobals.resize( binder.GetDataSize() );
+}
+
+void Compiler::FoldConstants( Unit* progTree )
+{
+    FolderVisitor folder( mRep.GetLog() );
+
+    folder.Fold( progTree );
+}
+
+void Compiler::GenerateCode( Unit* progTree )
+{
+    progTree->Accept( this );
 }
 
 void Compiler::VisitUnit( Unit* unit )

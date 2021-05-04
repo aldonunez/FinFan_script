@@ -2,44 +2,20 @@
 
 #include "Syntax.h"
 #include "Compiler.h"
+#include <optional>
 
 
-class BinderVisitor : public IVisitor
+class FolderVisitor : public IVisitor
 {
-    using SymTable = Compiler::SymTable;
-    using SymStack = std::vector<Compiler::SymTable*>;
-
-    // This relies on the syntax nodes sticking around outside of its control.
-    // But since shared_ptr is used, instead of internal ref counts,
-    // this is not robust.
-
-    using LambdaVec = std::vector<LambdaExpr*>;
-
-    friend class LocalScope;
-
-    LambdaVec       mLambdas;
-    SymStack        mSymStack;
-    SymTable        mExtTable;
-    SymTable&       mConstTable;
-    SymTable&       mGlobalTable;
-    ICompilerEnv*   mEnv;
-    Reporter        mRep;
-
-    int             mCurLevelLocalCount;
-    int             mCurLocalCount;
-    int             mMaxLocalCount;
-    int             mGlobalSize;
+    Reporter                mRep;
+    std::optional<int32_t>  mLastValue;
+    bool                    mFoldNodes;
 
 public:
-    BinderVisitor(
-        SymTable& constTable,
-        SymTable& globalTable,
-        ICompilerEnv* env,
-        ICompilerLog* log );
+    FolderVisitor( ICompilerLog* log );
 
-    void Bind( Unit* unit );
-
-    size_t GetDataSize();
+    std::optional<int32_t> Evaluate( Syntax* node );
+    void Fold( Syntax* node );
 
     // IVisitor
     virtual void VisitAddrOfExpr( AddrOfExpr* addrOf ) override;
@@ -70,18 +46,8 @@ public:
     virtual void VisitWhileStatement( WhileStatement* whileStmt ) override;
 
 private:
-    void BindLambdas();
-
     void VisitProc( ProcDecl* procDecl );
     void VisitLetBinding( VarDecl* varDecl );
 
-    I32 GetElementValue( Syntax* elem, const char* message = nullptr );
-
-    // Symbol table
-    std::shared_ptr<Declaration> FindSymbol( const std::string& symbol );
-    std::shared_ptr<Storage> AddArg( const std::string& name );
-    std::shared_ptr<Storage> AddLocal( SymTable& table, const std::string& name, int offset );
-    std::shared_ptr<Storage> AddLocal( const std::string& name, size_t size );
-    std::shared_ptr<Storage> AddGlobal( const std::string& name, size_t size );
-    std::shared_ptr<Function> AddFunc( const std::string& name, int address );
+    void Fold( std::unique_ptr<Syntax>& child );
 };

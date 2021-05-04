@@ -88,6 +88,7 @@
     <ClInclude Include="BinderVisitor.h" />
     <ClInclude Include="Compiler.h" />
     <ClInclude Include="Disassembler.h" />
+    <ClInclude Include="FolderVisitor.h" />
     <ClInclude Include="GeminiCommon.h" />
     <ClInclude Include="LispyParser.h" />
     <ClInclude Include="Machine.h" />
@@ -101,6 +102,7 @@
     <ClCompile Include="BinderVisitor.cpp" />
     <ClCompile Include="Compiler.cpp" />
     <ClCompile Include="Disassembler.cpp" />
+    <ClCompile Include="FolderVisitor.cpp" />
     <ClCompile Include="Gemini.cpp" />
     <ClCompile Include="LispyParser.cpp" />
     <ClCompile Include="Machine.cpp" />

@@ -289,6 +289,10 @@ public:
     size_t GetDataSize();
 
 private:
+    void BindAttributes( Unit* progTree );
+    void FoldConstants( Unit* progTree );
+    void GenerateCode( Unit* progTree );
+
     // Code generation
 
     const GenConfig& Config() const;
