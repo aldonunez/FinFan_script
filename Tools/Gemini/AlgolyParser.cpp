@@ -366,7 +366,6 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "for",    TokenCode::For },
         { "if",     TokenCode::If },
         { "lambda", TokenCode::Lambda },
-        { "let",    TokenCode::Let },
         { "loop",   TokenCode::Loop },
         { "next",   TokenCode::Next },
         { "not",    TokenCode::Not },
@@ -537,7 +536,7 @@ Unique<Syntax> AlgolyParser::ParseStatement()
 
     switch ( mCurToken )
     {
-    case TokenCode::Let:
+    case TokenCode::Var:
         elem = ParseLet();
         break;
 
@@ -877,7 +876,7 @@ Unique<Syntax> AlgolyParser::ParseLet()
 
         first = false;
 
-        auto varDecl = ParseVar( Make<VarDecl>(), TokenCode::EQ );
+        auto varDecl = ParseVar( Make<VarDecl>(), TokenCode::Assign );
 
         letNode->Variables.push_back( std::move( varDecl ) );
 

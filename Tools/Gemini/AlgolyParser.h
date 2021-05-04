@@ -54,7 +54,6 @@ class AlgolyParser
         For,
         If,
         Lambda,
-        Let,
         Loop,
         Next,
         Not,
