@@ -95,7 +95,7 @@ void Compiler::GenerateCode( Unit* progTree )
 
 void Compiler::VisitUnit( Unit* unit )
 {
-    for ( auto& varNode : unit->VarDeclarations )
+    for ( auto& varNode : unit->DataDeclarations )
         Generate( varNode.get() );
 
     for ( auto& funcNode : unit->FuncDeclarations )
@@ -273,7 +273,7 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
             std::unique_ptr<NumberExpr> number( new NumberExpr() );
             number->Line = symbol->Line;
             number->Column = symbol->Column;
-            number->Value = ((ConstDecl*) decl)->Value;
+            number->Value = ((Constant*) decl)->Value;
             VisitNumberExpr( number.get() );
         }
         break;
@@ -415,7 +415,7 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
         {
             auto decl = ((NameExpr*) clause->Condition.get())->Decl.get();
 
-            if ( decl != nullptr && decl->Kind == DeclKind::Const && ((ConstDecl*) decl)->Value != 0 )
+            if ( decl != nullptr && decl->Kind == DeclKind::Const && ((Constant*) decl)->Value != 0 )
                 isConstantTrue = true;
         }
 
@@ -696,7 +696,7 @@ void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenS
     GenerateImplicitProgn( &letStmt->Body, config, status );
 }
 
-void Compiler::GenerateLetBinding( VarDecl* binding )
+void Compiler::GenerateLetBinding( DataDecl* binding )
 {
     if ( binding->TypeRef == nullptr )
     {
@@ -1656,6 +1656,11 @@ void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t si
     }
 }
 
+void Compiler::VisitConstDecl( ConstDecl* constDecl )
+{
+    // Nothing
+}
+
 void Compiler::GenerateLambdas()
 {
     long i = 0;
@@ -1840,9 +1845,9 @@ Function* Compiler::AddForward( const std::string& name )
 
 // TODO: split this into standard constants that go in constant table and other constants that go in global table
 
-ConstDecl* Compiler::AddConst( const std::string& name, int value )
+Constant* Compiler::AddConst( const std::string& name, int value )
 {
-    auto* constant = new ConstDecl();
+    auto* constant = new Constant();
     constant->Kind = DeclKind::Const;
     constant->Value = value;
     mConstTable.insert( SymTable::value_type( name, constant ) );
@@ -1878,7 +1883,7 @@ std::optional<I32> Compiler::GetOptionalElementValue( Syntax* elem )
 
         if ( decl != nullptr && decl->Kind == DeclKind::Const )
         {
-            auto constant = (ConstDecl*) decl;
+            auto constant = (Constant*) decl;
             return constant->Value;
         }
     }

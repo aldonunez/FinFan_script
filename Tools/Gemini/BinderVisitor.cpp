@@ -178,6 +178,36 @@ void BinderVisitor::VisitCondExpr( CondExpr* condExpr )
     }
 }
 
+void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
+{
+    // No need to make the type ref accept this visitor,
+    // because only integer constants are supported
+
+    if ( constDecl->TypeRef == nullptr )
+    {
+        int32_t value = 0;
+
+        if ( constDecl->Initializer != nullptr )
+        {
+            constDecl->Initializer->Accept( this );
+
+            value = GetElementValue( constDecl->Initializer.get(), "Constant initializer is not constant" );
+        }
+        else
+        {
+            mRep.ThrowInternalError( "Missing constant initializer" );
+        }
+
+        std::shared_ptr<Constant> constant = AddConst( constDecl->Name, value );
+
+        constDecl->Decl = constant;
+    }
+    else
+    {
+        mRep.ThrowError( CERR_SEMANTICS, constDecl->TypeRef.get(), "Only integer constants are supported" );
+    }
+}
+
 void BinderVisitor::VisitForStatement( ForStatement* forStmt )
 {
     LocalScope localScope( *this );
@@ -230,7 +260,7 @@ void BinderVisitor::VisitLetStatement( LetStatement* letStmt )
     letStmt->Body.Accept( this );
 }
 
-void BinderVisitor::VisitLetBinding( VarDecl* varDecl )
+void BinderVisitor::VisitLetBinding( DataDecl* varDecl )
 {
     if ( varDecl->TypeRef != nullptr )
     {
@@ -401,7 +431,7 @@ void BinderVisitor::VisitUnaryExpr( UnaryExpr* unary )
 
 void BinderVisitor::VisitUnit( Unit* unit )
 {
-    for ( auto& varNode : unit->VarDeclarations )
+    for ( auto& varNode : unit->DataDeclarations )
         varNode->Accept( this );
 
     for ( auto& funcNode : unit->FuncDeclarations )
@@ -550,4 +580,13 @@ std::shared_ptr<Storage> BinderVisitor::AddGlobal( const std::string& name, size
     mGlobalSize += size;
 
     return global;
+}
+
+std::shared_ptr<Constant> BinderVisitor::AddConst( const std::string& name, int32_t value )
+{
+    std::shared_ptr<Constant> constant( new Constant() );
+    constant->Kind = DeclKind::Const;
+    constant->Value = value;
+    mConstTable.insert( SymTable::value_type( name, constant ) );
+    return constant;
 }

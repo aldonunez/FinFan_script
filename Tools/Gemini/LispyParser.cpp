@@ -304,7 +304,11 @@ Unit* LispyParser::Parse()
         }
         else if ( mCurString == "defvar" )
         {
-            unit->VarDeclarations.push_back( ParseDefvar() );
+            unit->DataDeclarations.push_back( ParseDefvar() );
+        }
+        else if ( mCurString == "defconstant" )
+        {
+            unit->DataDeclarations.push_back( ParseDefconstant() );
         }
         else
         {
@@ -548,7 +552,7 @@ Unique<Syntax> LispyParser::ParseLet()
     while ( mCurToken != TokenCode::RParen )
     {
         ScanLParen();
-        node->Variables.push_back( ParseLetBinding() );
+        node->Variables.push_back( ParseLetBinding( Make<VarDecl>() ) );
     }
 
     ScanRParen();
@@ -559,10 +563,8 @@ Unique<Syntax> LispyParser::ParseLet()
     return node;
 }
 
-Unique<VarDecl> LispyParser::ParseLetBinding()
+Unique<DataDecl> LispyParser::ParseLetBinding( Unique<DataDecl>&& varDecl )
 {
-    auto varDecl = Make<VarDecl>();
-
     if ( mCurToken == TokenCode::Symbol )
     {
         varDecl->Name = std::move( mCurString );
@@ -618,11 +620,18 @@ Unique<VarDecl> LispyParser::ParseLetBinding()
     return varDecl;
 }
 
-Unique<VarDecl> LispyParser::ParseDefvar()
+Unique<DataDecl> LispyParser::ParseDefvar()
 {
     ScanToken();
 
-    return ParseLetBinding();
+    return ParseLetBinding( Make<VarDecl>() );
+}
+
+Unique<DataDecl> LispyParser::ParseDefconstant()
+{
+    ScanToken();
+
+    return ParseLetBinding( Make<ConstDecl>() );
 }
 
 Unique<Syntax> LispyParser::ParseAref()

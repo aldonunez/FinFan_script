@@ -356,6 +356,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "break",  TokenCode::Break },
         { "by",     TokenCode::By },
         { "case",   TokenCode::Case },
+        { "const",  TokenCode::Const },
         { "def",    TokenCode::Def },
         { "do",     TokenCode::Do },
         { "downto", TokenCode::Downto },
@@ -427,7 +428,11 @@ Unit* AlgolyParser::Parse()
         }
         else if ( mCurToken == TokenCode::Var )
         {
-            unit->VarDeclarations.push_back( ParseVar() );
+            unit->DataDeclarations.push_back( ParseVar( Make<VarDecl>(), TokenCode::Assign ) );
+        }
+        else if ( mCurToken == TokenCode::Const )
+        {
+            unit->DataDeclarations.push_back( ParseVar( Make<ConstDecl>(), TokenCode::EQ ) );
         }
         else
         {
@@ -947,10 +952,8 @@ Unique<Syntax> AlgolyParser::ParseLet()
     return letNode;
 }
 
-Unique<VarDecl> AlgolyParser::ParseVar()
+Unique<DataDecl> AlgolyParser::ParseVar( Unique<DataDecl>&& varDecl, TokenCode assignToken )
 {
-    Unique<VarDecl> varDecl = Make<VarDecl>();
-
     ScanToken();
 
     if ( mCurToken != TokenCode::Symbol )
@@ -968,7 +971,7 @@ Unique<VarDecl> AlgolyParser::ParseVar()
         arrayTypeRef->SizeExpr = ParseExpr();
 
         ScanToken( TokenCode::RBracket );
-        ScanToken( TokenCode::Assign );
+        ScanToken( assignToken );
         SkipLineEndings();
         ScanToken( TokenCode::LBracket );
 
@@ -1001,7 +1004,7 @@ Unique<VarDecl> AlgolyParser::ParseVar()
     }
     else
     {
-        ScanToken( TokenCode::Assign );
+        ScanToken( assignToken );
 
         varDecl->Initializer = ParseExpr();
     }

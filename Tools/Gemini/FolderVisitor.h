@@ -27,6 +27,7 @@ public:
     virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol ) override;
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
     virtual void VisitCondExpr( CondExpr* condExpr ) override;
+    virtual void VisitConstDecl( ConstDecl* constDecl ) override;
     virtual void VisitForStatement( ForStatement* forStmt ) override;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
     virtual void VisitInitList( InitList* initList ) override;
@@ -47,7 +48,7 @@ public:
 
 private:
     void VisitProc( ProcDecl* procDecl );
-    void VisitLetBinding( VarDecl* varDecl );
+    void VisitLetBinding( DataDecl* varDecl );
 
     void Fold( std::unique_ptr<Syntax>& child );
 };

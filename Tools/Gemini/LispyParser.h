@@ -80,7 +80,7 @@ private:
     Unique<Syntax> ParseFuncall();
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseLet();
-    Unique<VarDecl> ParseLetBinding();
+    Unique<DataDecl> ParseLetBinding( Unique<DataDecl>&& dataDecl );
     Unique<Syntax> ParseAref();
     Unique<Syntax> ParseSet();
 
@@ -98,7 +98,8 @@ private:
     Unique<Syntax> ParseProgn();
 
     Unique<ProcDecl> ParseProc( bool hasName );
-    Unique<VarDecl> ParseDefvar();
+    Unique<DataDecl> ParseDefvar();
+    Unique<DataDecl> ParseDefconstant();
     Unique<Syntax> ParseGlobalError();
 
     void ParseImplicitProgn( StatementList& container );

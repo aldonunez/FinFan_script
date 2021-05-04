@@ -111,7 +111,7 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
-class VarDecl : public Syntax
+class DataDecl : public Syntax
 {
 public:
     std::shared_ptr<Declaration> Decl;
@@ -120,8 +120,19 @@ public:
     std::unique_ptr<TypeRef> TypeRef;
     std::unique_ptr<Syntax> Initializer;
 
-    virtual void Accept( IVisitor* visitor ) override;
     virtual Declaration* GetDecl() override;
+};
+
+class ConstDecl : public DataDecl
+{
+public:
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class VarDecl : public DataDecl
+{
+public:
+    virtual void Accept( IVisitor* visitor ) override;
 };
 
 class LambdaExpr : public Syntax
@@ -238,7 +249,7 @@ public:
 class LetStatement : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<VarDecl>> Variables;
+    std::vector<std::unique_ptr<DataDecl>> Variables;
     StatementList Body;
 
     virtual void Accept( IVisitor* visitor ) override;
@@ -327,7 +338,7 @@ public:
 class Unit : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<VarDecl>> VarDeclarations;
+    std::vector<std::unique_ptr<DataDecl>> DataDeclarations;
     std::vector<std::unique_ptr<ProcDecl>> FuncDeclarations;
 
     virtual void Accept( IVisitor* visitor ) override;
@@ -350,6 +361,7 @@ public:
     virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol ) = 0;
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) = 0;
     virtual void VisitCondExpr( CondExpr* condExpr ) = 0;
+    virtual void VisitConstDecl( ConstDecl* constDecl ) = 0;
     virtual void VisitForStatement( ForStatement* forStmt ) = 0;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) = 0;
     virtual void VisitInitList( InitList* initList ) = 0;
@@ -392,7 +404,7 @@ struct Declaration
     virtual ~Declaration() { }
 };
 
-struct ConstDecl : public Declaration
+struct Constant : public Declaration
 {
     int Value;
 };

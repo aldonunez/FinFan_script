@@ -51,6 +51,7 @@ public:
     virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol ) override;
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
     virtual void VisitCondExpr( CondExpr* condExpr ) override;
+    virtual void VisitConstDecl( ConstDecl* constDecl ) override;
     virtual void VisitForStatement( ForStatement* forStmt ) override;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
     virtual void VisitInitList( InitList* initList ) override;
@@ -73,7 +74,7 @@ private:
     void BindLambdas();
 
     void VisitProc( ProcDecl* procDecl );
-    void VisitLetBinding( VarDecl* varDecl );
+    void VisitLetBinding( DataDecl* varDecl );
 
     I32 GetElementValue( Syntax* elem, const char* message = nullptr );
 
@@ -84,4 +85,5 @@ private:
     std::shared_ptr<Storage> AddLocal( const std::string& name, size_t size );
     std::shared_ptr<Storage> AddGlobal( const std::string& name, size_t size );
     std::shared_ptr<Function> AddFunc( const std::string& name, int address );
+    std::shared_ptr<Constant> AddConst( const std::string& name, int32_t value );
 };

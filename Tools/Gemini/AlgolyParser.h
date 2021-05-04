@@ -44,6 +44,7 @@ class AlgolyParser
         Break,
         By,
         Case,
+        Const,
         Def,
         Do,
         Downto,
@@ -124,7 +125,7 @@ private:
     Unique<Syntax> ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens = true );
     Unique<Syntax> ParseAssignment( std::unique_ptr<Syntax>&& head );
     Unique<Syntax> ParseLet();
-    Unique<VarDecl> ParseVar();
+    Unique<DataDecl> ParseVar( Unique<DataDecl>&& varDecl, TokenCode assignToken );
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseIf();
     Unique<CondClause> ParseIfClause();

@@ -22,7 +22,7 @@ Declaration* ProcDecl::GetDecl()
     return Decl.get();
 }
 
-Declaration* VarDecl::GetDecl()
+Declaration* DataDecl::GetDecl()
 {
     return Decl.get();
 }
@@ -71,6 +71,11 @@ void CaseExpr::Accept( IVisitor* visitor )
 void CondExpr::Accept( IVisitor* visitor )
 {
     visitor->VisitCondExpr( this );
+}
+
+void ConstDecl::Accept( IVisitor* visitor )
+{
+    visitor->VisitConstDecl( this );
 }
 
 void ForStatement::Accept( IVisitor* visitor )

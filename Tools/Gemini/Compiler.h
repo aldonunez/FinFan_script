@@ -330,7 +330,7 @@ private:
     void GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, GenStatus& status );
     void GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status );
     void GenerateLet( LetStatement* letStmt, const GenConfig& config, GenStatus& status );
-    void GenerateLetBinding( VarDecl* binding );
+    void GenerateLetBinding( DataDecl* binding );
     void AddLocalDataArray( Storage* global, Syntax* valueElem, size_t size );
 
     void GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status );
@@ -373,7 +373,7 @@ private:
 
     // Symbol table
     Function* AddForward( const std::string& name );
-    ConstDecl* AddConst( const std::string& name, int value );
+    Constant* AddConst( const std::string& name, int value );
     void MakeStdEnv();
     void CollectFunctionForwards( Unit* program );
 
@@ -397,6 +397,7 @@ private:
     virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol ) override;
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
     virtual void VisitCondExpr( CondExpr* condExpr ) override;
+    virtual void VisitConstDecl( ConstDecl* constDecl ) override;
     virtual void VisitForStatement( ForStatement* forStmt ) override;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
     virtual void VisitInitList( InitList* initList ) override;

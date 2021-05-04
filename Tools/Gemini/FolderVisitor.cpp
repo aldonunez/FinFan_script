@@ -153,6 +153,13 @@ void FolderVisitor::VisitCondExpr( CondExpr* condExpr )
     mLastValue.reset();
 }
 
+void FolderVisitor::VisitConstDecl( ConstDecl* constDecl )
+{
+    // The initializer was already folded by binder
+
+    mLastValue.reset();
+}
+
 void FolderVisitor::VisitForStatement( ForStatement* forStmt )
 {
     Fold( forStmt->First );
@@ -200,7 +207,7 @@ void FolderVisitor::VisitLetStatement( LetStatement* letStmt )
     mLastValue.reset();
 }
 
-void FolderVisitor::VisitLetBinding( VarDecl* varDecl )
+void FolderVisitor::VisitLetBinding( DataDecl* varDecl )
 {
     if ( varDecl->Initializer != nullptr )
         Fold( varDecl->Initializer );
@@ -220,7 +227,7 @@ void FolderVisitor::VisitNameExpr( NameExpr* nameExpr )
 {
     if ( nameExpr->Decl->Kind == DeclKind::Const )
     {
-        mLastValue = ((ConstDecl*) nameExpr->Decl.get())->Value;
+        mLastValue = ((Constant*) nameExpr->Decl.get())->Value;
     }
     else
     {
@@ -293,7 +300,7 @@ void FolderVisitor::VisitUnaryExpr( UnaryExpr* unary )
 
 void FolderVisitor::VisitUnit( Unit* unit )
 {
-    for ( auto& varNode : unit->VarDeclarations )
+    for ( auto& varNode : unit->DataDeclarations )
         varNode->Accept( this );
 
     for ( auto& funcNode : unit->FuncDeclarations )
