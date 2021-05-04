@@ -90,31 +90,6 @@ public:
         }
     };
 
-    struct Element
-    {
-        SyntaxKind  Code;
-        int         Line;
-        int         Column;
-        virtual ~Element() { }
-    };
-
-    using ElementVector = std::vector<std::unique_ptr<Element>>;
-
-    struct Slist : public Element
-    {
-        ElementVector Elements;
-    };
-
-    struct Number : public Element
-    {
-        int Value;
-    };
-
-    struct Symbol : public Element
-    {
-        std::string String;
-    };
-
 private:
     friend class LocalScope;
 
@@ -144,14 +119,14 @@ private:
         }
     };
 
-    enum DeclKind
+    enum class DeclKind
     {
-        Decl_Const,
-        Decl_Global,
-        Decl_Local,
-        Decl_Arg,
-        Decl_Func,
-        Decl_Forward,
+        Const,
+        Global,
+        Local,
+        Arg,
+        Func,
+        Forward,
     };
 
     struct Declaration
@@ -214,11 +189,11 @@ private:
         };
     };
 
-    enum ExprKind
+    enum class ExprKind
     {
-        Expr_Other,
-        Expr_Logical,
-        Expr_Comparison,
+        Other,
+        Logical,
+        Comparison,
     };
 
     struct GenStatus
@@ -304,9 +279,6 @@ private:
 
     using GlobalVec = std::vector<I32>;
 
-    typedef void (Compiler::*CallGenerator)( Slist* list, const GenConfig& config, GenStatus& status );
-    typedef std::unordered_map<std::string, CallGenerator> GeneratorMap;
-
     struct GenParams
     {
         const GenConfig& config;
@@ -366,7 +338,6 @@ private:
     // Level 2 - S-expressions
     void GenerateNumber( NumberExpr* number, const GenConfig& config, GenStatus& status );
     void GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status );
-    void GenerateSlist( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status );
     void GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status );
     void GenerateArrayElementRef( IndexExpr* indexExpr );
@@ -379,17 +350,12 @@ private:
 
     // Level 3 - functions and special operators
     void GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
-    void GenerateNegate( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateComparison( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
-    void GenerateNot( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateAnd( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
     void GenerateOr( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
     void GenerateReturn( ReturnStatement* retStmt, const GenConfig& config, GenStatus& status );
-    void GenerateIf( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateCond( CondExpr* condExpr, const GenConfig& config, GenStatus& status );
-    void GenerateProgn( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateSet( AssignmentExpr* assignment, const GenConfig& config, GenStatus& status );
-    void GenerateDefun( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateLambda( LambdaExpr* lambdaExpr, const GenConfig& config, GenStatus& status );
     void GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, GenStatus& status );
     void GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status );
@@ -398,7 +364,6 @@ private:
     void AddLocalDataArray( Storage* global, Syntax* valueElem, size_t size );
 
     void GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status );
-    void GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status );
     void GenerateFor( ForStatement* forStmt, const GenConfig& config, GenStatus& status );
     void GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& config, GenStatus& status );
     void GenerateDo( WhileStatement* whileStmt, const GenConfig& config, GenStatus& status );
@@ -413,7 +378,6 @@ private:
     void GenerateLambdas();
     void GenerateProc( ProcDecl* procDecl, Function* func );
     void GenerateImplicitProgn( StatementList* stmtList, const GenConfig& config, GenStatus& status );
-    void GenerateStatements( Slist* list, size_t startIndex, const GenConfig& config, GenStatus& status );
     void GenerateStatements( StatementList* list, const GenConfig& config, GenStatus& status );
     void GenerateNilIfNeeded( const GenConfig& config, GenStatus& status );
 
@@ -448,7 +412,6 @@ private:
     void MakeStdEnv();
     void CollectFunctionForwards( Unit* program );
 
-    void MatchSymbol( Element* elem, const char* name, const char* message = nullptr );
     I32 GetElementValue( Syntax* elem, const char* message = nullptr );
     std::optional<I32> GetOptionalElementValue( Syntax* elem );
 
@@ -458,8 +421,7 @@ private:
     void CalculateStackDepth();
     void CalculateStackDepth( Function* func );
 
-    [[noreturn]] void ThrowErrorSyntax( CompilerErr exceptionCode, Syntax* elem, const char* format, ... );
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... );
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... );
     [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
     [[noreturn]] void ThrowInternalError();
     [[noreturn]] void ThrowInternalError( const char* format, ... );

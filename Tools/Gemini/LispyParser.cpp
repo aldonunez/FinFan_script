@@ -6,10 +6,6 @@
 template <typename T>
 using Unique = std::unique_ptr<T>;
 
-using Number  = Compiler::Number;
-using Symbol  = Compiler::Symbol;
-using Slist   = Compiler::Slist;
-
 
 static const uint8_t sIdentifierInitialCharMap[] =
 {

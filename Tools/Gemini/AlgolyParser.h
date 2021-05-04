@@ -161,7 +161,6 @@ private:
 
     Unique<NumberExpr> ParseNumber();
     Unique<NameExpr> ParseSymbol();
-    Unique<Compiler::Symbol> ParseAsSymbol();
 
     Unique<NumberExpr> WrapNumber();
     Unique<NameExpr> WrapSymbol();
