@@ -34,7 +34,7 @@ class LispyParser
     int             mTokLine;
     int             mTokCol;
 
-    ICompilerLog*   mLog;
+    Reporter        mRep;
     ParserMap       mParserMap;
 
 public:
@@ -106,8 +106,5 @@ private:
     template <typename T, typename... Args>
     std::unique_ptr<T> Make( Args&&... args );
 
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );
-    [[noreturn]] void ThrowInternalError( const char* format, ... );
-    [[noreturn]] void ThrowInternalError();
 };

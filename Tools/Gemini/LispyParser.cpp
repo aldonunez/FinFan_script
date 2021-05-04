@@ -40,7 +40,7 @@ LispyParser::LispyParser( const char* codeText, int codeTextLen, ICompilerLog* l
     mCurNumber( 0 ),
     mTokLine( 0 ),
     mTokCol( 0 ),
-    mLog( log )
+    mRep( log )
 {
     if ( mCodeTextPtr < mCodeTextEnd )
     {
@@ -916,31 +916,12 @@ std::unique_ptr<T> LispyParser::Make( Args&&... args )
     return std::unique_ptr<T>( syntax );
 }
 
-void LispyParser::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
-{
-    ::Log( mLog, LOG_ERROR, line, col, format, args );
-    throw Compiler::CompilerException( exceptionCode );
-}
-
 void LispyParser::ThrowSyntaxError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
+    mRep.ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
     va_end( args );
-}
-
-void LispyParser::ThrowInternalError( const char* format, ... )
-{
-    va_list args;
-    va_start( args, format );
-    ThrowError( CERR_INTERNAL, mLine, GetColumn(), format, args );
-    va_end( args );
-}
-
-void LispyParser::ThrowInternalError()
-{
-    ThrowInternalError( "Internal error" );
 }
 
 

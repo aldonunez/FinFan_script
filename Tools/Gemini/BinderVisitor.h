@@ -23,7 +23,7 @@ class BinderVisitor : public IVisitor
     SymTable&       mConstTable;
     SymTable&       mGlobalTable;
     ICompilerEnv*   mEnv;
-    ICompilerLog*   mLog;
+    Reporter        mRep;
 
     int             mCurLevelLocalCount;
     int             mCurLocalCount;
@@ -85,7 +85,4 @@ private:
     std::shared_ptr<Storage> AddLocal( const std::string& name, size_t size );
     std::shared_ptr<Storage> AddGlobal( const std::string& name, size_t size );
     std::shared_ptr<Function> AddFunc( const std::string& name, int address );
-
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... );
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
 };

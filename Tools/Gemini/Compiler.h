@@ -71,26 +71,44 @@ struct CompilerStats
 
 class LocalScope;
 
+class CompilerException : public std::exception
+{
+    CompilerErr     mError;
+
+public:
+    CompilerException( CompilerErr error )
+        : mError( error )
+    {
+    }
+
+    CompilerErr GetError() const
+    {
+        return mError;
+    }
+};
+
+class Reporter
+{
+    ICompilerLog* mLog;
+
+public:
+    Reporter( ICompilerLog* log );
+
+    ICompilerLog* GetLog();
+
+    void Log( LogCategory category, int line, int col, const char* format, va_list args );
+    void LogWarning( int line, int col, const char* format, ... );
+
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... );
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
+    [[noreturn]] void ThrowInternalError();
+    [[noreturn]] void ThrowInternalError( const char* format, ... );
+};
+
 
 class Compiler : public IVisitor
 {
 public:
-    class CompilerException : public std::exception
-    {
-        CompilerErr     mError;
-
-    public:
-        CompilerException( CompilerErr error )
-            :   mError( error )
-        {
-        }
-
-        CompilerErr GetError() const
-        {
-            return mError;
-        }
-    };
-
     struct InstPatch
     {
         InstPatch*  Next;
@@ -253,7 +271,7 @@ private:
     int16_t         mMaxExprDepth;
 
     ICompilerEnv*   mEnv;
-    ICompilerLog*   mLog;
+    Reporter        mRep;
     int             mModIndex;
 
     std::vector<GenParams> mGenStack;
@@ -364,14 +382,6 @@ private:
     void CalculateStackDepth();
     void CalculateStackDepth( Function* func );
 
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... );
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
-    [[noreturn]] void ThrowInternalError();
-    [[noreturn]] void ThrowInternalError( const char* format, ... );
-
-    void Log( LogCategory category, int line, int col, const char* format, va_list args );
-    void LogWarning( int line, int col, const char* format, ... );
-
 
     // IVisitor
     virtual void VisitAddrOfExpr( AddrOfExpr* addrOf ) override;
@@ -401,6 +411,3 @@ private:
     virtual void VisitVarDecl( VarDecl* varDecl ) override;
     virtual void VisitWhileStatement( WhileStatement* whileStmt ) override;
 };
-
-
-void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args );

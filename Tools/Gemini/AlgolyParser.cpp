@@ -17,7 +17,7 @@ AlgolyParser::AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog*
     mCurNumber( 0 ),
     mTokLine( 0 ),
     mTokCol( 0 ),
-    mLog( log )
+    mRep( log )
 {
     if ( mCodeTextPtr < mCodeTextEnd )
     {
@@ -579,7 +579,7 @@ Unique<Syntax> AlgolyParser::ParseExprStatement()
 
     if ( !IsStatementSeparator( mCurToken ) )
     {
-        if ( expr->Kind == SyntaxKind::Elem_Symbol )
+        if ( expr->Kind == SyntaxKind::Name )
         {
             // The parsed expression was only a symbol. But there are more tokens.
             // So, parse them into arguments for a call without parentheses.
@@ -593,7 +593,7 @@ Unique<Syntax> AlgolyParser::ParseExprStatement()
     }
     else
     {
-        if ( expr->Kind == SyntaxKind::Elem_Symbol )
+        if ( expr->Kind == SyntaxKind::Name )
         {
             // The whole statement was a symbol. It can be a variable or a call without
             // parentheses and arguments. Use eval* to disambiguate them.
@@ -779,7 +779,7 @@ Unique<Syntax> AlgolyParser::ParseCall( std::unique_ptr<Syntax>&& head, bool ind
 {
     auto call = Make<CallExpr>();
 
-    if ( head->Kind == SyntaxKind::Elem_Number )
+    if ( head->Kind == SyntaxKind::Number )
         ThrowSyntaxError( "A number cannot designate a procedure to call" );
 
     call->IsIndirect = indirect;
@@ -1289,7 +1289,7 @@ Unique<NameExpr> AlgolyParser::ParseSymbol()
 std::string AlgolyParser::ParseAsRawSymbol()
 {
     if ( mCurString.size() == 0 )
-        ThrowInternalError();
+        mRep.ThrowInternalError();
 
     std::string symbol = std::move( mCurString );
     ScanToken();
@@ -1309,7 +1309,7 @@ Unique<NameExpr> AlgolyParser::WrapSymbol()
 Unique<NumberExpr> AlgolyParser::MakeNumber( int32_t value )
 {
     NumberExpr* number = new NumberExpr();
-    number->Kind = SyntaxKind::Elem_Number;
+    number->Kind = SyntaxKind::Number;
     number->Value = value;
     number->Line = mTokLine;
     number->Column = mTokCol;
@@ -1319,7 +1319,7 @@ Unique<NumberExpr> AlgolyParser::MakeNumber( int32_t value )
 Unique<NameExpr> AlgolyParser::MakeSymbol( const char* string )
 {
     NameExpr* symbol = new NameExpr();
-    symbol->Kind = SyntaxKind::Elem_Symbol;
+    symbol->Kind = SyntaxKind::Name;
     symbol->String = string;
     symbol->Line = mTokLine;
     symbol->Column = mTokCol;
@@ -1335,29 +1335,10 @@ Unique<T> AlgolyParser::Make()
     return std::unique_ptr<T>( syntax );
 }
 
-void AlgolyParser::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
-{
-    ::Log( mLog, LOG_ERROR, line, col, format, args );
-    throw Compiler::CompilerException( exceptionCode );
-}
-
 void AlgolyParser::ThrowSyntaxError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
+    mRep.ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
     va_end( args );
-}
-
-void AlgolyParser::ThrowInternalError( const char* format, ... )
-{
-    va_list args;
-    va_start( args, format );
-    ThrowError( CERR_INTERNAL, mLine, GetColumn(), format, args );
-    va_end( args );
-}
-
-void AlgolyParser::ThrowInternalError()
-{
-    ThrowInternalError( "Internal error" );
 }

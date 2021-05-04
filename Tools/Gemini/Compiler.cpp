@@ -11,7 +11,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mCodeBinPtr( codeBin ),
     mCodeBinEnd( codeBin + codeBinLen ),
     mEnv( env ),
-    mLog( log ),
+    mRep( log ),
     mModIndex( modIndex ),
     mInFunc( false ),
     mCurFunc(),
@@ -30,7 +30,7 @@ CompilerErr Compiler::Compile( Unit* progTree )
         MakeStdEnv();
         CollectFunctionForwards( progTree );
 
-        BinderVisitor binder( mConstTable, mGlobalTable, mEnv, mLog );
+        BinderVisitor binder( mConstTable, mGlobalTable, mEnv, mRep.GetLog() );
 
         binder.Bind( progTree );
 
@@ -163,7 +163,7 @@ void Compiler::GenerateDiscard( Syntax* elem, const GenConfig& config )
     if ( !status.discarded )
     {
         assert( status.discarded );
-        LogWarning( elem->Line, elem->Column, "Deprecated: POP was emitted." );
+        mRep.LogWarning( elem->Line, elem->Column, "Deprecated: POP was emitted." );
 
         *mCodeBinPtr = OP_POP;
         mCodeBinPtr++;
@@ -247,7 +247,7 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
 
     case DeclKind::Func:
     case DeclKind::Forward:
-        ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
+        mRep.ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
         break;
 
     case DeclKind::Const:
@@ -262,7 +262,7 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
 
     default:
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 }
 
@@ -311,7 +311,7 @@ void Compiler::GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, 
     else
     {
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 
     GenerateBinaryPrimitive( binary, primitive, config, status );
@@ -388,12 +388,12 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
 
         bool isConstantTrue = false;
 
-        if ( clause->Condition->Kind == SyntaxKind::Elem_Number )
+        if ( clause->Condition->Kind == SyntaxKind::Number )
         {
             if ( ((NumberExpr*) clause->Condition.get())->Value != 0 )
                 isConstantTrue = true;
         }
-        else if ( clause->Condition->Kind == SyntaxKind::Elem_Symbol )
+        else if ( clause->Condition->Kind == SyntaxKind::Name )
         {
             auto decl = ((NameExpr*) clause->Condition.get())->Decl.get();
 
@@ -501,7 +501,7 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
         IncreaseExprDepth();
     }
 
-    if ( assignment->Left->Kind != SyntaxKind::Elem_Symbol )
+    if ( assignment->Left->Kind != SyntaxKind::Name )
     {
         auto indexExpr = (IndexExpr*) assignment->Left.get();
 
@@ -540,12 +540,12 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
 
     case DeclKind::Func:
     case DeclKind::Forward:
-        ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
+        mRep.ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
         break;
 
     default:
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 
     DecreaseExprDepth();
@@ -693,7 +693,7 @@ void Compiler::GenerateLetBinding( VarDecl* binding )
             DecreaseExprDepth();
         }
     }
-    else if ( binding->TypeRef->Kind == SyntaxKind::Elem_Slist )
+    else if ( binding->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) binding->TypeRef.get();
 
@@ -706,7 +706,7 @@ void Compiler::GenerateLetBinding( VarDecl* binding )
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, binding, "'let' binding takes a name or name and type" );
+        mRep.ThrowError( CERR_SEMANTICS, binding, "'let' binding takes a name or name and type" );
     }
 }
 
@@ -719,8 +719,8 @@ void Compiler::VisitLetStatement( LetStatement* letStmt )
 
 void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size )
 {
-    if ( valueElem->Kind != SyntaxKind::Elem_Slist )
-        ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+    if ( valueElem->Kind != SyntaxKind::Other )
+        mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
     Syntax* lastTwoElems[2] = {};
     size_t locIndex = local->Offset;
@@ -731,7 +731,7 @@ void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size
     for ( auto& entry : initList->Values )
     {
         if ( i == size )
-            ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+            mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
 
         lastTwoElems[0] = lastTwoElems[1];
         lastTwoElems[1] = entry.get();
@@ -777,8 +777,8 @@ void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size
 
 void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status )
 {
-    if ( call->Head->Kind != SyntaxKind::Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, call, "Direct call requires a named function" );
+    if ( call->Head->Kind != SyntaxKind::Name )
+        mRep.ThrowError( CERR_SEMANTICS, call, "Direct call requires a named function" );
 
     auto op = (NameExpr*) call->Head.get();
 
@@ -794,7 +794,7 @@ void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus&
 
     if ( decl == nullptr )
     {
-        ThrowInternalError( "Call head has no declaration" );
+        mRep.ThrowInternalError( "Call head has no declaration" );
     }
     else if ( decl->Kind == DeclKind::Func )
     {
@@ -846,7 +846,7 @@ void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus&
         else
         {
             assert( false );
-            ThrowInternalError();
+            mRep.ThrowInternalError();
         }
 
         mCodeBinPtr[0] = opCode;
@@ -914,7 +914,7 @@ void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenS
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, forStmt, "Expected symbol: to, downto, above, below" );
+        mRep.ThrowError( CERR_SEMANTICS, forStmt, "Expected symbol: to, downto, above, below" );
     }
 
     PatchChain  bodyChain;
@@ -1067,7 +1067,7 @@ void Compiler::VisitWhileStatement( WhileStatement* whileStmt )
 void Compiler::GenerateBreak( BreakStatement* breakStmt, const GenConfig& config, GenStatus& status )
 {
     if ( config.breakChain == nullptr )
-        ThrowError( CERR_SEMANTICS, breakStmt, "Cannot use break outside of a loop" );
+        mRep.ThrowError( CERR_SEMANTICS, breakStmt, "Cannot use break outside of a loop" );
 
     PushPatch( config.breakChain );
     mCodeBinPtr[0] = OP_B;
@@ -1084,7 +1084,7 @@ void Compiler::VisitBreakStatement( BreakStatement* breakStmt )
 void Compiler::GenerateNext( NextStatement* nextStmt, const GenConfig& config, GenStatus& status )
 {
     if ( config.nextChain == nullptr )
-        ThrowError( CERR_SEMANTICS, nextStmt, "Cannot use next outside of a loop" );
+        mRep.ThrowError( CERR_SEMANTICS, nextStmt, "Cannot use next outside of a loop" );
 
     PushPatch( config.nextChain );
     mCodeBinPtr[0] = OP_B;
@@ -1237,7 +1237,7 @@ void Compiler::GenerateComparison( BinaryExpr* binary, const GenConfig& config, 
     else
     {
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 
     GenerateBinaryPrimitive( binary, config.invert ? negativePrimitive : positivePrimitive, config, status );
@@ -1342,7 +1342,7 @@ U8 Compiler::InvertJump( U8 opCode )
     case OP_BFALSE: return OP_BTRUE;
     default:
         assert( false );
-        ThrowInternalError();
+        mRep.ThrowInternalError();
     }
 }
 
@@ -1425,7 +1425,7 @@ void Compiler::Patch( PatchChain* chain, U8* targetPtr )
         ptrdiff_t diff = target - (link->Inst + BranchInst::Size);
 
         if ( diff < BranchInst::OffsetMin || diff > BranchInst::OffsetMax )
-            ThrowError( CERR_UNSUPPORTED, nullptr, "Branch target is too far." );
+            mRep.ThrowError( CERR_UNSUPPORTED, nullptr, "Branch target is too far." );
 
         BranchInst::StoreOffset( &link->Inst[1], diff );
     }
@@ -1494,8 +1494,8 @@ void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const
 
 void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
 {
-    if ( indexExpr->Head->Kind != SyntaxKind::Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, indexExpr, "Only named arrays can be indexed" );
+    if ( indexExpr->Head->Kind != SyntaxKind::Name )
+        mRep.ThrowError( CERR_SEMANTICS, indexExpr, "Only named arrays can be indexed" );
 
     Generate( indexExpr->Index.get() );
 
@@ -1506,7 +1506,7 @@ void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
 
     if ( decl == nullptr )
     {
-        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
     }
     else
     {
@@ -1526,7 +1526,7 @@ void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
             break;
 
         default:
-            ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals" );
+            mRep.ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals" );
         }
     }
 
@@ -1572,7 +1572,7 @@ void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenSta
             AddGlobalData( global->Offset, varDecl->Initializer.get() );
         }
     }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::Elem_Slist )
+    else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
@@ -1585,7 +1585,7 @@ void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenSta
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, varDecl, "'defvar' takes a name or name and type" );
+        mRep.ThrowError( CERR_SEMANTICS, varDecl, "'defvar' takes a name or name and type" );
     }
 }
 
@@ -1601,8 +1601,8 @@ void Compiler::AddGlobalData( U32 offset, Syntax* valueElem )
 
 void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size )
 {
-    if ( valueElem->Kind != SyntaxKind::Elem_Slist )
-        ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+    if ( valueElem->Kind != SyntaxKind::Other )
+        mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
     size_t i = 0;
 
@@ -1611,7 +1611,7 @@ void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t si
     for ( auto& entry : initList->Values )
     {
         if ( i == size )
-            ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+            mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
 
         AddGlobalData( global->Offset + i, entry.get() );
         i++;
@@ -1718,7 +1718,7 @@ void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
                 break;
 
             default:
-                ThrowInternalError();
+                mRep.ThrowInternalError();
             }
 
             *ppInst -= PushInstSize;
@@ -1849,12 +1849,12 @@ void Compiler::CollectFunctionForwards( Unit* program )
 
 std::optional<I32> Compiler::GetOptionalElementValue( Syntax* elem )
 {
-    if ( elem->Kind == SyntaxKind::Elem_Number )
+    if ( elem->Kind == SyntaxKind::Number )
     {
         auto number = (NumberExpr*) elem;
         return number->Value;
     }
-    else if ( elem->Kind == SyntaxKind::Elem_Symbol )
+    else if ( elem->Kind == SyntaxKind::Name )
     {
         auto decl = ((NameExpr*) elem)->Decl.get();
 
@@ -1876,9 +1876,9 @@ I32 Compiler::GetElementValue( Syntax* elem, const char* message )
         return optValue.value();
 
     if ( message != nullptr )
-        ThrowError( CERR_SEMANTICS, elem, message );
+        mRep.ThrowError( CERR_SEMANTICS, elem, message );
     else
-        ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
+        mRep.ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
 }
 
 void Compiler::IncreaseExprDepth()
@@ -1988,7 +1988,24 @@ void Compiler::CalculateStackDepth( Function* func )
     func->TreeStackUsage = func->IndividualStackUsage + maxChildStackUsage;
 }
 
-void Compiler::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... )
+
+//----------------------------------------------------------------------------
+
+void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args );
+
+
+Reporter::Reporter( ICompilerLog* log ) :
+    mLog( log )
+{
+    assert( log != nullptr );
+}
+
+ICompilerLog* Reporter::GetLog()
+{
+    return mLog;
+}
+
+void Reporter::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... )
 {
     va_list args;
     va_start( args, format );
@@ -2003,18 +2020,18 @@ void Compiler::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* 
     va_end( args );
 }
 
-void Compiler::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
+void Reporter::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
 {
     Log( LOG_ERROR, line, col, format, args );
     throw CompilerException( exceptionCode );
 }
 
-void Compiler::ThrowInternalError()
+void Reporter::ThrowInternalError()
 {
     ThrowInternalError( "Internal error" );
 }
 
-void Compiler::ThrowInternalError( const char* format, ... )
+void Reporter::ThrowInternalError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
@@ -2022,12 +2039,12 @@ void Compiler::ThrowInternalError( const char* format, ... )
     va_end( args );
 }
 
-void Compiler::Log( LogCategory category, int line, int col, const char* format, va_list args )
+void Reporter::Log( LogCategory category, int line, int col, const char* format, va_list args )
 {
     ::Log( mLog, category, line, col, format, args );
 }
 
-void Compiler::LogWarning( int line, int col, const char* format, ... )
+void Reporter::LogWarning( int line, int col, const char* format, ... )
 {
     va_list args;
     va_start( args, format );

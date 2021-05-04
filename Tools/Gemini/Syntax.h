@@ -7,9 +7,9 @@
 
 enum class SyntaxKind
 {
-    Elem_Slist,
-    Elem_Number,
-    Elem_Symbol,
+    Number,
+    Name,
+    Other,
 };
 
 
@@ -23,7 +23,7 @@ struct Declaration;
 class Syntax
 {
 public:
-    SyntaxKind Kind = SyntaxKind::Elem_Slist;
+    SyntaxKind Kind = SyntaxKind::Other;
     int Line = 0;
     int Column = 0;
 
@@ -48,19 +48,19 @@ public:
 
     NameExpr()
     {
-        Kind = SyntaxKind::Elem_Symbol;
+        Kind = SyntaxKind::Name;
     }
 
     NameExpr( const std::string& str ) :
         String( str )
     {
-        Kind = SyntaxKind::Elem_Symbol;
+        Kind = SyntaxKind::Name;
     }
 
     NameExpr( std::string&& str ) :
         String( str )
     {
-        Kind = SyntaxKind::Elem_Symbol;
+        Kind = SyntaxKind::Name;
     }
 
     virtual void Accept( IVisitor* visitor ) override;
@@ -80,7 +80,7 @@ public:
     NumberExpr( int32_t value ) :
         Value( value )
     {
-        Kind = SyntaxKind::Elem_Number;
+        Kind = SyntaxKind::Number;
     }
 
     virtual void Accept( IVisitor* visitor ) override;

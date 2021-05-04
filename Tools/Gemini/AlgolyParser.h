@@ -83,7 +83,7 @@ class AlgolyParser
     int             mTokLine;
     int             mTokCol;
 
-    ICompilerLog*   mLog;
+    Reporter        mRep;
 
 public:
     AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog* log );
@@ -171,8 +171,5 @@ private:
     template <typename T>
     Unique<T> Make();
 
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );
-    [[noreturn]] void ThrowInternalError( const char* format, ... );
-    [[noreturn]] void ThrowInternalError();
 };

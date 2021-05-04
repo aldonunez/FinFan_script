@@ -54,7 +54,7 @@ BinderVisitor::BinderVisitor(
     mConstTable( constTable ),
     mGlobalTable( globalTable ),
     mEnv( env ),
-    mLog( log ),
+    mRep( log ),
     mCurLevelLocalCount(),
     mCurLocalCount(),
     mMaxLocalCount(),
@@ -86,7 +86,7 @@ void BinderVisitor::VisitAddrOfExpr( AddrOfExpr* addrOf )
 
     if ( !IsFunctionDeclaration( addrOf->Inner->Decl->Kind ) )
     {
-        ThrowError( CERR_SEMANTICS, addrOf, "'%s' is not a function", addrOf->Inner->String.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, addrOf, "'%s' is not a function", addrOf->Inner->String.c_str() );
     }
 }
 
@@ -122,12 +122,12 @@ void BinderVisitor::VisitCallExpr( CallExpr* call )
     call->Head->Accept( this );
 
     if ( !call->IsIndirect
-        && (call->Head->Kind != SyntaxKind::Elem_Symbol
+        && (call->Head->Kind != SyntaxKind::Name
             || !IsCallableDeclaration( call->Head->GetDecl()->Kind )) )
     {
         auto nameExpr = (NameExpr*) call->Head.get();
 
-        ThrowError( CERR_SEMANTICS, nameExpr, "'%s' is not a function", nameExpr->String.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, nameExpr, "'%s' is not a function", nameExpr->String.c_str() );
     }
 }
 
@@ -142,7 +142,7 @@ void BinderVisitor::VisitCaseExpr( CaseExpr* caseExpr )
 
     caseExpr->TestKey->Accept( this );
 
-    if ( caseExpr->TestKey->Kind == SyntaxKind::Elem_Slist )
+    if ( caseExpr->TestKey->Kind == SyntaxKind::Other )
     {
         // TODO: remove duplicate string in Compiler
         // TODO: ideally, add the local during code generation
@@ -235,14 +235,14 @@ void BinderVisitor::VisitLetBinding( VarDecl* varDecl )
     {
         varDecl->Decl = AddLocal( varDecl->Name, 1 );
     }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::Elem_Slist )
+    else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
         type->Size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
 
         if ( type->Size <= 0 )
-            ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
+            mRep.ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
 
         varDecl->Decl = AddLocal( varDecl->Name, type->Size );
     }
@@ -295,7 +295,7 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
             }
             else
             {
-                ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
+                mRep.ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
             }
         }
     }
@@ -314,7 +314,7 @@ void BinderVisitor::VisitNumberExpr( NumberExpr* numberExpr )
 void BinderVisitor::VisitParamDecl( ParamDecl* paramDecl )
 {
     if ( paramDecl->TypeRef != nullptr )
-        ThrowError( CERR_UNSUPPORTED, paramDecl->TypeRef.get(), "only simple parameters are supported" );
+        mRep.ThrowError( CERR_UNSUPPORTED, paramDecl->TypeRef.get(), "only simple parameters are supported" );
 
     paramDecl->Decl = AddArg( paramDecl->Name );
 }
@@ -335,11 +335,11 @@ void BinderVisitor::VisitProcDecl( ProcDecl* procDecl )
         }
         else if ( it->second->Kind == DeclKind::Func )
         {
-            ThrowError( CERR_SEMANTICS, procDecl, "the function '%s' is already defined", procDecl->Name.c_str() );
+            mRep.ThrowError( CERR_SEMANTICS, procDecl, "the function '%s' is already defined", procDecl->Name.c_str() );
         }
         else
         {
-            ThrowError( CERR_SEMANTICS, procDecl, "the symbol '%s' is already defined", procDecl->Name.c_str() );
+            mRep.ThrowError( CERR_SEMANTICS, procDecl, "the symbol '%s' is already defined", procDecl->Name.c_str() );
         }
     }
     else
@@ -359,7 +359,7 @@ void BinderVisitor::VisitProc( ProcDecl* procDecl )
     auto func = (Function*) procDecl->Decl.get();
 
     if ( procDecl->Params.size() > ProcDecl::MaxArgs )
-        ThrowError( CERR_SEMANTICS, procDecl, "'%s' has too many arguments. Max is %d",
+        mRep.ThrowError( CERR_SEMANTICS, procDecl, "'%s' has too many arguments. Max is %d",
             procDecl->Name.c_str(), ProcDecl::MaxArgs );
 
     for ( auto& parameter : procDecl->Params )
@@ -373,7 +373,7 @@ void BinderVisitor::VisitProc( ProcDecl* procDecl )
     procDecl->Body.Accept( this );
 
     if ( mMaxLocalCount > ProcDecl::MaxLocals )
-        ThrowError( CERR_SEMANTICS, procDecl, "'%s' has too many locals. Max is %d",
+        mRep.ThrowError( CERR_SEMANTICS, procDecl, "'%s' has too many locals. Max is %d",
             procDecl->Name.c_str(), ProcDecl::MaxLocals );
 
     func->LocalCount = mMaxLocalCount;
@@ -420,14 +420,14 @@ void BinderVisitor::VisitVarDecl( VarDecl* varDecl )
 
         varDecl->Decl = global;
     }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::Elem_Slist )
+    else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
         type->Size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
 
         if ( type->Size <= 0 )
-            ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
+            mRep.ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
 
         auto global = AddGlobal( varDecl->Name, type->Size );
 
@@ -468,12 +468,12 @@ void BinderVisitor::BindLambdas()
 
 std::optional<I32> BinderVisitor::GetOptionalElementValue( Syntax* elem )
 {
-    if ( elem->Kind == SyntaxKind::Elem_Number )
+    if ( elem->Kind == SyntaxKind::Number )
     {
         auto number = (NumberExpr*) elem;
         return number->Value;
     }
-    else if ( elem->Kind == SyntaxKind::Elem_Symbol )
+    else if ( elem->Kind == SyntaxKind::Name )
     {
         auto decl = ((NameExpr*) elem)->Decl.get();
 
@@ -495,9 +495,9 @@ I32 BinderVisitor::GetElementValue( Syntax* elem, const char* message )
         return optValue.value();
 
     if ( message != nullptr )
-        ThrowError( CERR_SEMANTICS, elem, message );
+        mRep.ThrowError( CERR_SEMANTICS, elem, message );
     else
-        ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
+        mRep.ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
 }
 
 
@@ -527,7 +527,7 @@ std::shared_ptr<Storage> BinderVisitor::AddArg( const std::string& name )
 std::shared_ptr<Function> BinderVisitor::AddFunc( const std::string& name, int address )
 {
     if ( mGlobalTable.find( name ) != mGlobalTable.end() )
-        ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
 
     std::shared_ptr<Function> func( new Function() );
     func->Kind = DeclKind::Func;
@@ -559,7 +559,7 @@ std::shared_ptr<Storage> BinderVisitor::AddLocal( const std::string& name, size_
         mMaxLocalCount = mCurLocalCount;
 
     if ( mMaxLocalCount > ProcDecl::MaxLocals )
-        ThrowError( CERR_SEMANTICS, 0, 0, "Local exceeds capacity: %s", name.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, 0, 0, "Local exceeds capacity: %s", name.c_str() );
 
     return local;
 }
@@ -567,7 +567,7 @@ std::shared_ptr<Storage> BinderVisitor::AddLocal( const std::string& name, size_
 std::shared_ptr<Storage> BinderVisitor::AddGlobal( const std::string& name, size_t size )
 {
     if ( mGlobalTable.find( name ) != mGlobalTable.end() )
-        ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
 
     std::shared_ptr<Storage> global( new Storage() );
     global->Kind = DeclKind::Global;
@@ -577,18 +577,4 @@ std::shared_ptr<Storage> BinderVisitor::AddGlobal( const std::string& name, size
     mGlobalSize += size;
 
     return global;
-}
-
-void BinderVisitor::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... )
-{
-    va_list args;
-    va_start( args, format );
-    ThrowError( exceptionCode, elem->Line, elem->Column, format, args );
-    va_end( args );
-}
-
-void BinderVisitor::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
-{
-    ::Log( mLog, LOG_ERROR, line, col, format, args );
-    throw Compiler::CompilerException( exceptionCode );
 }
