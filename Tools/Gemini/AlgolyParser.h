@@ -127,7 +127,7 @@ private:
     Unique<Syntax> ParseLet();
 
     void ParseGlobalVars( Unit* unit );
-    Unique<DataDecl> ParseVar( Unique<DataDecl>&& varDecl, TokenCode assignToken );
+    Unique<DataDecl> ParseVar( Unique<DataDecl>&& newVarDecl, TokenCode assignToken );
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseIf();
     Unique<CondClause> ParseIfClause();

@@ -877,61 +877,7 @@ Unique<Syntax> AlgolyParser::ParseLet()
 
         first = false;
 
-        Unique<VarDecl> varDecl = Make<VarDecl>();
-
-        if ( mCurToken != TokenCode::Symbol )
-            ThrowSyntaxError( "Expected variable name" );
-
-        varDecl->Name = ParseRawSymbol();
-
-        if ( mCurToken == TokenCode::Colon )
-        {
-            auto arrayTypeRef = Make<ArrayTypeRef>();
-
-            ScanToken();
-            ScanToken( TokenCode::LBracket );
-
-            arrayTypeRef->SizeExpr = ParseExpr();
-
-            ScanToken( TokenCode::RBracket );
-            ScanToken( TokenCode::EQ );
-            SkipLineEndings();
-            ScanToken( TokenCode::LBracket );
-
-            auto initList = Make<InitList>();
-            bool firstInit = true;
-
-            while ( mCurToken != TokenCode::RBracket )
-            {
-                if ( mCurToken == TokenCode::Ellipsis )
-                {
-                    ScanToken();
-                    initList->HasExtra = true;
-                    break;
-                }
-                else if ( !firstInit )
-                {
-                    ScanToken( TokenCode::Comma );
-                    SkipLineEndings();
-                }
-
-                firstInit = false;
-
-                initList->Values.push_back( ParseExpr() );
-            }
-
-            ScanToken( TokenCode::RBracket );
-
-            varDecl->TypeRef = std::move( arrayTypeRef );
-            varDecl->Initializer = std::move( initList );
-        }
-        else
-        {
-            ScanToken( TokenCode::EQ );
-            SkipLineEndings();
-
-            varDecl->Initializer = ParseExpr();
-        }
+        auto varDecl = ParseVar( Make<VarDecl>(), TokenCode::EQ );
 
         letNode->Variables.push_back( std::move( varDecl ) );
 
@@ -1038,6 +984,7 @@ Unique<DataDecl> AlgolyParser::ParseVar( Unique<DataDecl>&& varDecl, TokenCode a
     else
     {
         ScanToken( assignToken );
+        SkipLineEndings();
 
         varDecl->Initializer = ParseExpr();
     }

@@ -80,7 +80,7 @@ private:
     Unique<Syntax> ParseFuncall();
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseLet();
-    Unique<DataDecl> ParseLetBinding( Unique<DataDecl>&& dataDecl );
+    Unique<DataDecl> ParseLetBinding( Unique<DataDecl>&& newVarDecl );
     Unique<Syntax> ParseAref();
     Unique<Syntax> ParseSet();
 
