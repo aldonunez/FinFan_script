@@ -6,15 +6,21 @@
 
 class LispyParser
 {
-    enum TokenCode
+    enum class TokenCode
     {
-        Token_Bof,
-        Token_Eof,
-        Token_LParen,
-        Token_RParen,
-        Token_Number,
-        Token_Symbol,
+        Bof,
+        Eof,
+        LParen,
+        RParen,
+        Number,
+        Symbol,
     };
+
+    template <typename T>
+    using Unique = std::unique_ptr<T>;
+
+    using ParseFunc = Unique<Syntax>( LispyParser::* )();
+    using ParserMap = std::map<std::string, ParseFunc>;
 
     const char*     mCodeTextPtr;
     const char*     mCodeTextEnd;
@@ -29,11 +35,12 @@ class LispyParser
     int             mTokCol;
 
     ICompilerLog*   mLog;
+    ParserMap       mParserMap;
 
 public:
     LispyParser( const char* codeText, int codeTextLen, ICompilerLog* log );
 
-    Compiler::Slist* Parse();
+    Unit* Parse();
 
 private:
     // Scanning
@@ -44,6 +51,12 @@ private:
     void NextChar();
     void SkipWhitespace();
     TokenCode ScanToken();
+    TokenCode ScanToken( TokenCode code );
+    TokenCode ScanLParen();
+    TokenCode ScanRParen();
+    std::string ScanSymbol();
+    TokenCode ScanSymbol( const char* str );
+    void AssertToken( TokenCode code );
     void ReadNumber();
     void ReadSymbol();
 
@@ -52,12 +65,49 @@ private:
 
     // Parsing
 
-    Compiler::Slist* ParseSlist();
-    Compiler::Number* ParseNumber();
-    Compiler::Symbol* ParseSymbol();
+    Unique<Syntax> ParseExpression();
+    Unique<NumberExpr> ParseNumber();
+    Unique<NameExpr> ParseSymbol();
 
-    void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
-    void ThrowSyntaxError( const char* format, ... );
-    void ThrowInternalError( const char* format, ... );
-    void ThrowInternalError();
+    Unique<Syntax> ParseBinary();
+    Unique<Syntax> ParseNegate();
+    Unique<Syntax> ParseNot();
+
+    Unique<Syntax> ParseCall();
+    Unique<Syntax> ParseEvalStar();
+    Unique<Syntax> ParseLambda();
+    Unique<Syntax> ParseFunction();
+    Unique<Syntax> ParseFuncall();
+    Unique<Syntax> ParseReturn();
+    Unique<Syntax> ParseLet();
+    Unique<VarDecl> ParseLetBinding();
+    Unique<Syntax> ParseAref();
+    Unique<Syntax> ParseSet();
+
+    Unique<Syntax> ParseIf();
+    Unique<Syntax> ParseCond();
+    Unique<CondClause> ParseCondClause();
+    Unique<Syntax> ParseLoop();
+    Unique<Syntax> ParseLoopFor();
+    Unique<Syntax> ParseLoopDo();
+    Unique<Syntax> ParseDo();
+    Unique<Syntax> ParseBreak();
+    Unique<Syntax> ParseNext();
+    Unique<Syntax> ParseCase();
+    Unique<CaseWhen> ParseCaseWhen();
+    Unique<Syntax> ParseProgn();
+
+    Unique<ProcDecl> ParseProc( bool hasName );
+    Unique<VarDecl> ParseDefvar();
+    Unique<Syntax> ParseGlobalError();
+
+    void ParseImplicitProgn( StatementList& container );
+
+    template <typename T, typename... Args>
+    std::unique_ptr<T> Make( Args&&... args );
+
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
+    [[noreturn]] void ThrowSyntaxError( const char* format, ... );
+    [[noreturn]] void ThrowInternalError( const char* format, ... );
+    [[noreturn]] void ThrowInternalError();
 };

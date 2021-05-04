@@ -88,7 +88,7 @@ class AlgolyParser
 public:
     AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog* log );
 
-    Compiler::Slist* Parse();
+    Unit* Parse();
 
 private:
     // Scanning
@@ -117,36 +117,36 @@ private:
     static bool IsSeparatorKeyword( TokenCode tokenCode );
     static bool IsStatementSeparator( TokenCode tokenCode );
 
-    Unique<Compiler::Slist> ParseFunction();
-    Unique<Compiler::Slist> ParseLambda();
-    Unique<Compiler::Slist> ParseProc( const char* head, bool hasName );
-    Unique<Compiler::Slist> ParseParamList();
-    Unique<Compiler::Slist> ParseCall( std::unique_ptr<Compiler::Element>&& head, bool indirect, bool parens = true );
-    Unique<Compiler::Slist> ParseAssignment( std::unique_ptr<Compiler::Element>&& head );
-    Unique<Compiler::Slist> ParseLet();
-    Unique<Compiler::Slist> ParseVar();
-    Unique<Compiler::Slist> ParseReturn();
-    Unique<Compiler::Slist> ParseIf();
-    Unique<Compiler::Slist> ParseIfClause();
-    Unique<Compiler::Slist> ParseElseClause();
-    Unique<Compiler::Slist> ParseFor();
-    Unique<Compiler::Slist> ParseLoop();
-    Unique<Compiler::Slist> ParseWhile();
-    Unique<Compiler::Slist> ParseBreak();
-    Unique<Compiler::Slist> ParseNext();
-    Unique<Compiler::Slist> ParseCase();
-    Unique<Compiler::Slist> ParseCaseWhen();
-    Unique<Compiler::Slist> ParseCaseElse();
+    Unique<ProcDecl> ParseFunction();
+    Unique<LambdaExpr> ParseLambda();
+    Unique<ProcDecl> ParseProc( bool hasName );
+    std::vector<std::unique_ptr<ParamDecl>> ParseParamList();
+    Unique<Syntax> ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens = true );
+    Unique<Syntax> ParseAssignment( std::unique_ptr<Syntax>&& head );
+    Unique<Syntax> ParseLet();
+    Unique<VarDecl> ParseVar();
+    Unique<Syntax> ParseReturn();
+    Unique<Syntax> ParseIf();
+    Unique<CondClause> ParseIfClause();
+    Unique<CondClause> ParseElseClause();
+    Unique<Syntax> ParseFor();
+    Unique<Syntax> ParseLoop();
+    Unique<Syntax> ParseWhile();
+    Unique<Syntax> ParseBreak();
+    Unique<Syntax> ParseNext();
+    Unique<Syntax> ParseCase();
+    Unique<CaseWhen> ParseCaseWhen();
+    Unique<CaseElse> ParseCaseElse();
 
-    void ParseStatements( Compiler::Slist* container );
-    Unique<Compiler::Element> ParseStatement();
-    Unique<Compiler::Element> ParseExprStatement();
-    Unique<Compiler::Element> ParseExpr();
-    Unique<Compiler::Element> ParseBinaryPart( int level );
-    Unique<Compiler::Element> ParseBinary( int level );
-    Unique<Compiler::Element> ParseUnary();
-    Unique<Compiler::Element> ParseSingle();
-    Unique<Compiler::Element> ParseIndexing( std::unique_ptr<Compiler::Element>&& head );
+    void ParseStatements( StatementList& cotainer );
+    Unique<Syntax> ParseStatement();
+    Unique<Syntax> ParseExprStatement();
+    Unique<Syntax> ParseExpr();
+    Unique<Syntax> ParseBinaryPart( int level );
+    Unique<Syntax> ParseBinary( int level );
+    Unique<Syntax> ParseUnary();
+    Unique<Syntax> ParseSingle();
+    Unique<Syntax> ParseIndexing( std::unique_ptr<Syntax>&& head );
 
     bool IsTokenOrOp();
     bool IsTokenAndOp();
@@ -155,16 +155,22 @@ private:
     bool IsTokenAdditiveOp();
     bool IsTokenMultiplicativeOp();
 
-    Unique<Compiler::Number> ParseNumber();
-    Unique<Compiler::Symbol> ParseSymbol();
+    I32 ParseRawNumber();
+    std::string ParseRawSymbol();
+    std::string ParseAsRawSymbol();
+
+    Unique<NumberExpr> ParseNumber();
+    Unique<NameExpr> ParseSymbol();
     Unique<Compiler::Symbol> ParseAsSymbol();
 
-    Unique<Compiler::Number> WrapNumber();
-    Unique<Compiler::Symbol> WrapSymbol();
+    Unique<NumberExpr> WrapNumber();
+    Unique<NameExpr> WrapSymbol();
 
-    Unique<Compiler::Number> MakeNumber( int32_t value );
-    Unique<Compiler::Symbol> MakeSymbol( const char* string );
-    Unique<Compiler::Slist>  MakeSlist();
+    Unique<NumberExpr> MakeNumber( int32_t value );
+    Unique<NameExpr> MakeSymbol( const char* string );
+
+    template <typename T>
+    Unique<T> Make();
 
     [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );

@@ -3,6 +3,9 @@
 #include <stdarg.h>
 
 
+template <typename T>
+using Unique = std::unique_ptr<T>;
+
 using Number  = Compiler::Number;
 using Symbol  = Compiler::Symbol;
 using Slist   = Compiler::Slist;
@@ -20,6 +23,16 @@ static const uint8_t sIdentifierInitialCharMap[] =
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0,
 };
 
+const char* gTokenNames[] =
+{
+    "",
+    "End-of-file",
+    "LParen",
+    "RParen",
+    "Number",
+    "Symbol",
+};
+
 
 LispyParser::LispyParser( const char* codeText, int codeTextLen, ICompilerLog* log ) :
     mCodeTextPtr( codeText ),
@@ -27,7 +40,7 @@ LispyParser::LispyParser( const char* codeText, int codeTextLen, ICompilerLog* l
     mLineStart( codeText ),
     mLine( 1 ),
     mCurChar( 0 ),
-    mCurToken( Token_Bof ),
+    mCurToken( TokenCode::Bof ),
     mCurNumber( 0 ),
     mTokLine( 0 ),
     mTokCol( 0 ),
@@ -37,6 +50,42 @@ LispyParser::LispyParser( const char* codeText, int codeTextLen, ICompilerLog* l
     {
         mCurChar = *mCodeTextPtr;
     }
+
+    mParserMap =
+    {
+        { "+", &LispyParser::ParseBinary },
+        { "*", &LispyParser::ParseBinary },
+        { "/", &LispyParser::ParseBinary },
+        { "%", &LispyParser::ParseBinary },
+        { "-", &LispyParser::ParseNegate },
+        { "=",  &LispyParser::ParseBinary},
+        { "<>", &LispyParser::ParseBinary },
+        { "<",  &LispyParser::ParseBinary },
+        { "<=", &LispyParser::ParseBinary },
+        { ">",  &LispyParser::ParseBinary },
+        { ">=", &LispyParser::ParseBinary },
+        { "and", &LispyParser::ParseBinary },
+        { "or",  &LispyParser::ParseBinary },
+        { "not", &LispyParser::ParseNot },
+        { "eval*", &LispyParser::ParseEvalStar },
+        { "lambda", &LispyParser::ParseLambda },
+        { "function", &LispyParser::ParseFunction },
+        { "funcall", &LispyParser::ParseFuncall },
+        { "return", &LispyParser::ParseReturn },
+        { "let", &LispyParser::ParseLet },
+        { "defvar", &LispyParser::ParseGlobalError },
+        { "aref", &LispyParser::ParseAref },
+        { "set", &LispyParser::ParseSet },
+        { "if", &LispyParser::ParseIf },
+        { "cond", &LispyParser::ParseCond },
+        { "loop", &LispyParser::ParseLoop },
+        { "do", &LispyParser::ParseDo },
+        { "break", &LispyParser::ParseBreak },
+        { "next", &LispyParser::ParseNext },
+        { "case", &LispyParser::ParseCase },
+        { "progn", &LispyParser::ParseProgn },
+        { "defun", &LispyParser::ParseGlobalError },
+    };
 }
 
 int LispyParser::GetColumn()
@@ -85,17 +134,17 @@ LispyParser::TokenCode LispyParser::ScanToken()
 
     if ( PeekChar() == 0 )
     {
-        mCurToken = Token_Eof;
+        mCurToken = TokenCode::Eof;
     }
     else if ( PeekChar() == '(' )
     {
         NextChar();
-        mCurToken = Token_LParen;
+        mCurToken = TokenCode::LParen;
     }
     else if ( PeekChar() == ')' )
     {
         NextChar();
-        mCurToken = Token_RParen;
+        mCurToken = TokenCode::RParen;
     }
     else if ( isdigit( PeekChar() ) )
     {
@@ -115,6 +164,46 @@ LispyParser::TokenCode LispyParser::ScanToken()
     }
 
     return mCurToken;
+}
+
+LispyParser::TokenCode LispyParser::ScanToken( TokenCode code )
+{
+    AssertToken( code );
+    return ScanToken();
+}
+
+LispyParser::TokenCode LispyParser::ScanLParen()
+{
+    return ScanToken( TokenCode::LParen );
+}
+
+LispyParser::TokenCode LispyParser::ScanRParen()
+{
+    return ScanToken( TokenCode::RParen );
+}
+
+std::string LispyParser::ScanSymbol()
+{
+    if ( mCurToken != TokenCode::Symbol )
+        ThrowSyntaxError( "syntax error : expected symbol" );
+
+    std::string symbol = std::move( mCurString );
+    ScanToken();
+    return symbol;
+}
+
+LispyParser::TokenCode LispyParser::ScanSymbol( const char* str )
+{
+    if ( mCurToken != TokenCode::Symbol || mCurString != str )
+        ThrowSyntaxError( "syntax error : expected symbol '%s'", str );
+
+    return ScanToken();
+}
+
+void LispyParser::AssertToken( TokenCode code )
+{
+    if ( mCurToken != code )
+        ThrowSyntaxError( "syntax error : expected %s", gTokenNames[(int) code] );
 }
 
 void LispyParser::SkipWhitespace()
@@ -188,7 +277,7 @@ void LispyParser::ReadNumber()
     if ( negate )
         mCurNumber = -mCurNumber;
 
-    mCurToken = Token_Number;
+    mCurToken = TokenCode::Number;
 }
 
 void LispyParser::ReadSymbol()
@@ -199,82 +288,636 @@ void LispyParser::ReadSymbol()
         NextChar();
     }
 
-    mCurToken = Token_Symbol;
+    mCurToken = TokenCode::Symbol;
 }
 
-Compiler::Slist* LispyParser::Parse()
+Unit* LispyParser::Parse()
 {
-    std::unique_ptr<Slist> list( new Slist() );
-    list->Code = Compiler::Elem_Slist;
+    auto unit = Make<Unit>();
 
-    while ( ScanToken() != Token_Eof )
+    ScanToken();
+
+    while ( mCurToken != TokenCode::Eof )
     {
-        if ( mCurToken != Token_LParen )
-            ThrowSyntaxError( "syntax error : expected list" );
+        ScanLParen();
+        AssertToken( TokenCode::Symbol );
 
-        list->Elements.push_back( std::unique_ptr<Slist>( ParseSlist() ) );
-    }
-
-    return list.release();
-}
-
-Compiler::Slist* LispyParser::ParseSlist()
-{
-    std::unique_ptr<Slist> list( new Slist() );
-    list->Code = Compiler::Elem_Slist;
-    list->Line = mTokLine;
-    list->Column = mTokCol;
-
-    for ( ; ; )
-    {
-        switch ( ScanToken() )
+        if ( mCurString == "defun" )
         {
-        case Token_LParen:
-            list->Elements.push_back( std::unique_ptr<Slist>( ParseSlist() ) );
-            break;
-
-        case Token_RParen:
-            goto Done;
-
-        case Token_Number:
-            list->Elements.push_back( std::unique_ptr<Number>( ParseNumber() ) );
-            break;
-
-        case Token_Symbol:
-            list->Elements.push_back( std::unique_ptr<Symbol>( ParseSymbol() ) );
-            break;
-
-        case Token_Eof:
-            ThrowSyntaxError( "syntax error : unexpected end-of-file" );
-            break;
-
-        default:
-            ThrowInternalError();
+            unit->FuncDeclarations.push_back( ParseProc( true ) );
+        }
+        else if ( mCurString == "defvar" )
+        {
+            unit->VarDeclarations.push_back( ParseDefvar() );
+        }
+        else
+        {
+            ThrowSyntaxError( "'%s' is not valid at global scope", mCurString.c_str() );
         }
     }
-Done:
 
-    return list.release();
+    return unit.release();
 }
 
-Compiler::Number* LispyParser::ParseNumber()
+Unique<ProcDecl> LispyParser::ParseProc( bool hasName )
 {
-    Number* number = new Number();
-    number->Code = Compiler::Elem_Number;
-    number->Value = mCurNumber;
-    number->Line = mTokLine;
-    number->Column = mTokCol;
-    return number;
+    auto proc = Make<ProcDecl>();
+
+    ScanToken();
+
+    if ( hasName )
+        proc->Name = ScanSymbol();
+
+    ScanLParen();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        auto parameter = Make<ParamDecl>();
+
+        parameter->Name = ScanSymbol();
+
+        proc->Params.push_back( std::move( parameter ) );
+    }
+
+    ScanToken();
+
+    ParseImplicitProgn( proc->Body );
+
+    ScanRParen();
+
+    return proc;
 }
 
-Compiler::Symbol* LispyParser::ParseSymbol()
+Unique<Syntax> LispyParser::ParseGlobalError()
 {
-    Symbol* symbol = new Symbol();
-    symbol->Code = Compiler::Elem_Symbol;
-    symbol->String = mCurString;
-    symbol->Line = mTokLine;
-    symbol->Column = mTokCol;
-    return symbol;
+    ThrowSyntaxError( "'%s' is only allowed at global scope", mCurString.c_str() );
+}
+
+Unique<Syntax> LispyParser::ParseExpression()
+{
+    if ( mCurToken == TokenCode::Number )
+    {
+        return ParseNumber();
+    }
+    else if ( mCurToken == TokenCode::Symbol )
+    {
+        return ParseSymbol();
+    }
+    else if ( mCurToken == TokenCode::LParen )
+    {
+        ScanToken();
+        AssertToken( TokenCode::Symbol );
+
+        if ( auto it = mParserMap.find( mCurString );
+            it != mParserMap.end() )
+        {
+            return (this->*it->second)();
+        }
+        else
+        {
+            return ParseCall();
+        }
+    }
+
+    ThrowSyntaxError( "Expected number, symbol, or '('" );
+}
+
+Unique<NumberExpr> LispyParser::ParseNumber()
+{
+    auto node = Make<NumberExpr>( mCurNumber );
+    ScanToken();
+    return node;
+}
+
+Unique<NameExpr> LispyParser::ParseSymbol()
+{
+    auto node = Make<NameExpr>( std::move( mCurString ) );
+    ScanToken();
+    return node;
+}
+
+Unique<Syntax> LispyParser::ParseBinary()
+{
+    auto node = Make<BinaryExpr>();
+
+    node->Op = ScanSymbol();
+    node->Left = ParseExpression();
+    node->Right = ParseExpression();
+
+    ScanRParen();
+
+    return node;
+}
+
+Unique<Syntax> LispyParser::ParseNegate()
+{
+    Unique<Syntax> node;
+
+    std::string op = ScanSymbol();
+
+    auto first = ParseExpression();
+
+    if ( mCurToken == TokenCode::RParen )
+    {
+        auto unary = Make<UnaryExpr>();
+
+        unary->Op = std::move( op );
+        unary->Inner = std::move( first );
+
+        node = std::move( unary );
+    }
+    else
+    {
+        auto binary = Make<BinaryExpr>();
+
+        binary->Op = std::move( op );
+        binary->Left = std::move( first );
+        binary->Right = ParseExpression();
+
+        node = std::move( binary );
+    }
+
+    ScanRParen();
+
+    return node;
+}
+
+Unique<Syntax> LispyParser::ParseNot()
+{
+    auto node = Make<UnaryExpr>();
+
+    ScanToken();
+
+    node->Op = "not";
+    node->Inner = ParseExpression();
+
+    ScanRParen();
+
+    return node;
+}
+
+Unique<Syntax> LispyParser::ParseCall()
+{
+    auto call = Make<CallExpr>();
+
+    call->IsIndirect = false;
+    call->Head = ParseSymbol();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        call->Arguments.push_back( ParseExpression() );
+    }
+
+    ScanToken();
+
+    return call;
+}
+
+Unique<Syntax> LispyParser::ParseEvalStar()
+{
+    auto node = Make<CallOrSymbolExpr>();
+
+    ScanToken();
+
+    node->Symbol = ParseSymbol();
+
+    ScanRParen();
+
+    return node;
+}
+
+Unique<Syntax> LispyParser::ParseLambda()
+{
+    auto lambdaExpr = Make<LambdaExpr>();
+
+    // Delegate the rest of the parsing to ParseProc
+
+    lambdaExpr->Proc = ParseProc( false );
+
+    return lambdaExpr;
+}
+
+Unique<Syntax> LispyParser::ParseFunction()
+{
+    auto addrOf = Make<AddrOfExpr>();
+
+    ScanToken();
+
+    addrOf->Inner = ParseSymbol();
+
+    ScanRParen();
+
+    return addrOf;
+}
+
+Unique<Syntax> LispyParser::ParseFuncall()
+{
+    auto call = Make<CallExpr>();
+
+    ScanToken();
+
+    call->IsIndirect = true;
+    call->Head = ParseExpression();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        call->Arguments.push_back( ParseExpression() );
+    }
+
+    ScanToken();
+
+    return call;
+}
+
+Unique<Syntax> LispyParser::ParseReturn()
+{
+    auto node = Make<ReturnStatement>();
+
+    ScanToken();
+
+    node->Inner = ParseExpression();
+
+    ScanRParen();
+
+    return node;
+}
+
+Unique<Syntax> LispyParser::ParseLet()
+{
+    auto node = Make<LetStatement>();
+
+    ScanToken();
+    ScanLParen();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        ScanLParen();
+        node->Variables.push_back( ParseLetBinding() );
+    }
+
+    ScanRParen();
+
+    ParseImplicitProgn( node->Body );
+    ScanRParen();
+
+    return node;
+}
+
+Unique<VarDecl> LispyParser::ParseLetBinding()
+{
+    auto varDecl = Make<VarDecl>();
+
+    if ( mCurToken == TokenCode::Symbol )
+    {
+        varDecl->Name = std::move( mCurString );
+        ScanToken();
+
+        if ( mCurToken != TokenCode::RParen )
+        {
+            varDecl->Initializer = ParseExpression();
+        }
+    }
+    else if ( mCurToken == TokenCode::LParen )
+    {
+        auto type = Make<ArrayTypeRef>();
+
+        ScanToken();
+
+        varDecl->Name = ScanSymbol();
+        type->SizeExpr = ParseExpression();
+        varDecl->TypeRef = std::move( type );
+
+        ScanRParen();
+        ScanLParen();
+
+        if ( mCurToken != TokenCode::RParen )
+        {
+            auto initList = Make<InitList>();
+
+            while ( mCurToken != TokenCode::RParen )
+            {
+                if ( mCurToken == TokenCode::Symbol && mCurString == "&extra" )
+                {
+                    initList->HasExtra = true;
+                    ScanToken();
+                }
+                else
+                {
+                    initList->Values.push_back( ParseExpression() );
+                }
+            }
+
+            ScanRParen();
+
+            varDecl->Initializer = std::move( initList );
+        }
+    }
+    else
+    {
+        ThrowSyntaxError( "Expected name or name and type" );
+    }
+
+    ScanRParen();
+
+    return varDecl;
+}
+
+Unique<VarDecl> LispyParser::ParseDefvar()
+{
+    ScanToken();
+
+    return ParseLetBinding();
+}
+
+Unique<Syntax> LispyParser::ParseAref()
+{
+    auto indexExpr = Make<IndexExpr>();
+
+    ScanToken();
+
+    indexExpr->Head = ParseExpression();
+    indexExpr->Index = ParseExpression();
+
+    ScanRParen();
+
+    return indexExpr;
+}
+
+Unique<Syntax> LispyParser::ParseSet()
+{
+    auto assignment = Make<AssignmentExpr>();
+
+    ScanToken();
+
+    assignment->Left = ParseExpression();
+    assignment->Right = ParseExpression();
+
+    ScanRParen();
+
+    return assignment;
+}
+
+Unique<Syntax> LispyParser::ParseIf()
+{
+    auto condExpr = Make<CondExpr>();
+    Unique<CondClause> consequence( new CondClause() );
+
+    ScanToken();
+
+    consequence->Condition = ParseExpression();
+    consequence->Body.Statements.push_back( ParseExpression() );
+    condExpr->Clauses.push_back( std::move( consequence ) );
+
+    if ( mCurToken != TokenCode::RParen )
+    {
+        Unique<CondClause> alternative( new CondClause() );
+
+        alternative->Condition = Make<NumberExpr>( 1 );
+        alternative->Body.Statements.push_back( ParseExpression() );
+        condExpr->Clauses.push_back( std::move( alternative ) );
+    }
+
+    ScanRParen();
+
+    return condExpr;
+}
+
+Unique<Syntax> LispyParser::ParseCond()
+{
+    auto condExpr = Make<CondExpr>();
+
+    ScanToken();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        condExpr->Clauses.push_back( ParseCondClause() );
+    }
+
+    ScanRParen();
+
+    return condExpr;
+}
+
+Unique<CondClause> LispyParser::ParseCondClause()
+{
+    Unique<CondClause> clause( new CondClause() );
+
+    ScanLParen();
+
+    clause->Condition = ParseExpression();
+    ParseImplicitProgn( clause->Body );
+
+    ScanRParen();
+
+    return clause;
+}
+
+Unique<Syntax> LispyParser::ParseLoop()
+{
+    ScanToken();
+    AssertToken( TokenCode::Symbol );
+
+    if ( mCurString == "for" )
+    {
+        return ParseLoopFor();
+    }
+    else if ( mCurString == "do" )
+    {
+        return ParseLoopDo();
+    }
+    else
+    {
+        ThrowSyntaxError( "Missing for or do keyword" );
+    }
+}
+
+Unique<Syntax> LispyParser::ParseLoopFor()
+{
+    auto forStmt = Make<ForStatement>();
+
+    ScanToken();
+
+    forStmt->IndexName = ScanSymbol();
+
+    ScanSymbol( "from" );
+
+    forStmt->First = ParseExpression();
+
+    AssertToken( TokenCode::Symbol );
+    if ( mCurString != "above"
+        && mCurString != "below"
+        && mCurString != "downto"
+        && mCurString != "to" )
+        ThrowSyntaxError( "Expected symbol: above, below, downto, to" );
+
+    forStmt->Comparison = ScanSymbol();
+
+    forStmt->Last = ParseExpression();
+
+    AssertToken( TokenCode::Symbol );
+    if ( mCurString == "by" )
+    {
+        ScanToken();
+        forStmt->Step = ParseExpression();
+    }
+
+    ScanSymbol( "do" );
+
+    ParseImplicitProgn( forStmt->Body );
+
+    ScanRParen();
+
+    return forStmt;
+}
+
+Unique<Syntax> LispyParser::ParseLoopDo()
+{
+    auto loopStmt = Make<LoopStatement>();
+
+    ScanToken();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        if ( mCurToken == TokenCode::Symbol && mCurString == "while" )
+        {
+            ScanToken();
+            loopStmt->Condition = ParseExpression();
+            AssertToken( TokenCode::RParen );
+        }
+        else
+        {
+            loopStmt->Body.Statements.push_back( ParseExpression() );
+        }
+    }
+
+    ScanToken();
+
+    return loopStmt;
+}
+
+Unique<Syntax> LispyParser::ParseDo()
+{
+    auto whileStmt = Make<WhileStatement>();
+
+    ScanToken();
+
+    whileStmt->Condition = ParseExpression();
+
+    ParseImplicitProgn( whileStmt->Body );
+
+    ScanRParen();
+
+    return whileStmt;
+}
+
+Unique<Syntax> LispyParser::ParseBreak()
+{
+    auto breakStmt = Make<BreakStatement>();
+
+    ScanToken();
+    ScanRParen();
+
+    return breakStmt;
+}
+
+Unique<Syntax> LispyParser::ParseNext()
+{
+    auto nextStmt = Make<NextStatement>();
+
+    ScanToken();
+    ScanRParen();
+
+    return nextStmt;
+}
+
+Unique<Syntax> LispyParser::ParseCase()
+{
+    auto caseExpr = Make<CaseExpr>();
+
+    ScanToken();
+
+    caseExpr->TestKey = ParseExpression();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        ScanLParen();
+
+        if ( mCurToken == TokenCode::Symbol
+            && (mCurString == "otherwise" || mCurString == "true") )
+        {
+            Unique<CaseElse> caseElse( new CaseElse() );
+
+            ScanToken();
+            ParseImplicitProgn( caseElse->Body );
+            ScanRParen();
+
+            caseExpr->Fallback = std::move( caseElse );
+        }
+        else
+        {
+            caseExpr->Clauses.push_back( ParseCaseWhen() );
+        }
+    }
+
+    ScanRParen();
+
+    return caseExpr;
+}
+
+Unique<CaseWhen> LispyParser::ParseCaseWhen()
+{
+    Unique<CaseWhen> caseWhen( new CaseWhen() );
+
+    if ( mCurToken == TokenCode::LParen )
+    {
+        ScanToken();
+
+        do
+        {
+            caseWhen->Keys.push_back( ParseExpression() );
+        } while ( mCurToken != TokenCode::RParen );
+
+        ScanToken();
+    }
+    else
+    {
+        caseWhen->Keys.push_back( ParseExpression() );
+    }
+
+    ParseImplicitProgn( caseWhen->Body );
+    ScanRParen();
+
+    return caseWhen;
+}
+
+Unique<Syntax> LispyParser::ParseProgn()
+{
+    auto node = Make<LetStatement>();
+
+    ScanToken();
+
+    ParseImplicitProgn( node->Body );
+
+    ScanRParen();
+
+    return node;
+}
+
+void LispyParser::ParseImplicitProgn( StatementList& container )
+{
+    while ( mCurToken != TokenCode::RParen )
+    {
+        container.Statements.push_back( ParseExpression() );
+    }
+}
+
+template <typename T, typename... Args>
+std::unique_ptr<T> LispyParser::Make( Args&&... args )
+{
+    T* syntax = new T( std::forward<Args>( args )... );
+    syntax->Line = mTokLine;
+    syntax->Column = mTokCol;
+    return std::unique_ptr<T>( syntax );
 }
 
 void LispyParser::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )

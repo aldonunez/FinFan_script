@@ -49,44 +49,9 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mCalculatedStats(),
     mStats()
 {
-    mGeneratorMap =
-    {
-        { "eval*", &Compiler::GenerateEvalStar },
-        { "+", &Compiler::GenerateArithmetic },
-        { "*", &Compiler::GenerateArithmetic },
-        { "/", &Compiler::GenerateArithmetic },
-        { "%", &Compiler::GenerateArithmetic },
-        { "-", &Compiler::GenerateNegate },
-        { "and", &Compiler::GenerateAnd },
-        { "or", &Compiler::GenerateOr },
-        { "not", &Compiler::GenerateNot },
-        { "=", &Compiler::GenerateComparison },
-        { "<>", &Compiler::GenerateComparison },
-        { "<", &Compiler::GenerateComparison },
-        { "<=", &Compiler::GenerateComparison },
-        { ">", &Compiler::GenerateComparison },
-        { ">=", &Compiler::GenerateComparison },
-        { "return", &Compiler::GenerateReturn },
-        { "if", &Compiler::GenerateIf },
-        { "cond", &Compiler::GenerateCond },
-        { "progn", &Compiler::GenerateProgn },
-        { "set", &Compiler::GenerateSet },
-        { "defun", &Compiler::GenerateDefun },
-        { "lambda", &Compiler::GenerateLambda },
-        { "function", &Compiler::GenerateFunction },
-        { "funcall", &Compiler::GenerateFuncall },
-        { "let", &Compiler::GenerateLet },
-        { "loop", &Compiler::GenerateLoop },
-        { "do", &Compiler::GenerateDo },
-        { "break", &Compiler::GenerateBreak },
-        { "next", &Compiler::GenerateNext },
-        { "case", &Compiler::GenerateCase },
-        { "aref", &Compiler::GenerateAref },
-        { "defvar", &Compiler::GenerateDefvar },
-    };
 }
 
-CompilerErr Compiler::Compile( Slist* progTree )
+CompilerErr Compiler::Compile( Unit* progTree )
 {
     try
     {
@@ -96,8 +61,7 @@ CompilerErr Compiler::Compile( Slist* progTree )
         mSymStack.push_back( &mConstTable );
         mSymStack.push_back( &mGlobalTable );
 
-        for ( auto it = progTree->Elements.begin(); it != progTree->Elements.end(); it++ )
-            Generate( it->get() );
+        progTree->Accept( this );
 
         GenerateLambdas();
 
@@ -143,37 +107,46 @@ size_t Compiler::GetDataSize()
     return mGlobals.size();
 }
 
-void Compiler::Generate( Element* elem )
+void Compiler::VisitUnit( Unit* unit )
+{
+    for ( auto& varNode : unit->VarDeclarations )
+        Generate( varNode.get() );
+
+    for ( auto& funcNode : unit->FuncDeclarations )
+        funcNode->Accept( this );
+}
+
+void Compiler::VisitArrayTypeRef( ArrayTypeRef* typeRef )
+{
+}
+
+void Compiler::VisitInitList( InitList* initList )
+{
+}
+
+void Compiler::VisitParamDecl( ParamDecl* paramDecl )
+{
+}
+
+void Compiler::Generate( Syntax* elem )
 {
     GenStatus status = { Expr_Other };
     Generate( elem, GenConfig::Statement(), status );
 }
 
-void Compiler::Generate( Element* elem, const GenConfig& config )
+void Compiler::Generate( Syntax* elem, const GenConfig& config )
 {
     GenStatus status = { Expr_Other };
     Generate( elem, config, status );
 }
 
-void Compiler::Generate( Element* elem, const GenConfig& config, GenStatus& status )
+void Compiler::Generate( Syntax* node, const GenConfig& config, GenStatus& status )
 {
-    if ( elem->Code == Elem_Number )
-    {
-        GenerateNumber( (Number*) elem, config, status );
-    }
-    else if ( elem->Code == Elem_Symbol )
-    {
-        GenerateSymbol( (Symbol*) elem, config, status );
-    }
-    else if ( elem->Code == Elem_Slist )
-    {
-        GenerateSlist( (Slist*) elem, config, status );
-    }
-    else
-    {
-        assert( false );
-        ThrowInternalError();
-    }
+    mGenStack.push_back( { config, status } );
+
+    node->Accept( this );
+
+    mGenStack.pop_back();
 
     if ( status.kind != Expr_Logical )
     {
@@ -201,20 +174,23 @@ void Compiler::Generate( Element* elem, const GenConfig& config, GenStatus& stat
     }
 }
 
-void Compiler::GenerateDiscard( Element* elem )
+void Compiler::GenerateDiscard( Syntax* elem )
 {
     GenConfig config{};
 
     GenerateDiscard( elem, config );
 }
 
-void Compiler::GenerateDiscard( Element* elem, const GenConfig& config )
+void Compiler::GenerateDiscard( Syntax* elem, const GenConfig& config )
 {
-    if ( elem->Code != Elem_Slist )
-        return;
-
+    GenConfig configDiscard = config.WithDiscard();
     GenStatus status = { Expr_Other };
-    GenerateSlist( (Slist*) elem, config.WithDiscard(), status );
+
+    mGenStack.push_back( { configDiscard, status } );
+
+    elem->Accept( this );
+
+    mGenStack.pop_back();
 
     if ( !status.discarded )
     {
@@ -228,7 +204,12 @@ void Compiler::GenerateDiscard( Element* elem, const GenConfig& config )
     }
 }
 
-void Compiler::GenerateNumber( Number* number, const GenConfig& config, GenStatus& status )
+void Compiler::VisitNumberExpr( NumberExpr* numberExpr )
+{
+    GenerateNumber( numberExpr, Config(), Status() );
+}
+
+void Compiler::GenerateNumber( NumberExpr* number, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -257,7 +238,12 @@ void Compiler::EmitLoadConstant( int32_t value )
     IncreaseExprDepth();
 }
 
-void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatus& status )
+void Compiler::VisitNameExpr( NameExpr* nameExpr )
+{
+    GenerateSymbol( nameExpr, Config(), Status() );
+}
+
+void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -294,17 +280,16 @@ void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatu
 
         case Decl_Func:
         case Decl_Forward:
-            ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
+            ThrowErrorSyntax( CERR_SEMANTICS, symbol, "functions don't have values" );
             break;
 
         case Decl_Const:
             {
-                Number number;
-                number.Code = Elem_Number;
-                number.Column = symbol->Column;
-                number.Line = symbol->Line;
-                number.Value = ((ConstDecl*) decl)->Value;
-                GenerateNumber( &number, config, status );
+                std::unique_ptr<NumberExpr> number( new NumberExpr() );
+                number->Line = symbol->Line;
+                number->Column = symbol->Column;
+                number->Value = ((ConstDecl*) decl)->Value;
+                VisitNumberExpr( number.get() );
             }
             break;
 
@@ -315,9 +300,11 @@ void Compiler::GenerateSymbol( Symbol* symbol, const GenConfig& config, GenStatu
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        ThrowErrorSyntax( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
     }
 }
+
+#if 0
 
 void Compiler::GenerateSlist( Slist* list, const GenConfig& config, GenStatus& status )
 {
@@ -344,49 +331,55 @@ void Compiler::GenerateSlist( Slist* list, const GenConfig& config, GenStatus& s
     }
 }
 
-void Compiler::GenerateEvalStar( Slist* list, const GenConfig& config, GenStatus& status )
-{
-    if ( list->Elements.size() != 2 || list->Elements[1]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list, "eval* takes a symbol" );
+#endif
 
-    auto symbol = (Symbol*) list->Elements[1].get();
+void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status )
+{
+    auto& symbol = callOrSymbol->Symbol;
     auto decl = FindSymbol( symbol->String );
 
     if ( decl != nullptr )
     {
         if ( decl->Kind == Decl_Func || decl->Kind == Decl_Forward )
         {
-            list->Elements.erase( list->Elements.begin() );
-            GenerateSlist( list, config, status );
+            std::unique_ptr<CallExpr> call( new CallExpr() );
+            std::unique_ptr<NameExpr> nameExpr( new NameExpr() );
+
+            nameExpr->String = symbol->String;
+            call->Head = std::move( nameExpr );
+
+            GenerateCall( call.get(), config, status );
         }
         else
         {
-            GenerateSymbol( symbol, config, status );
+            GenerateSymbol( symbol.get(), config, status );
         }
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        ThrowErrorSyntax( CERR_SEMANTICS, symbol.get(), "symbol not found '%s'", symbol->String.c_str() );
     }
 }
 
-void Compiler::GenerateArithmetic( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol )
 {
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "arithmetic functions take 2 or more operands" );
-    if ( list->Elements.size() > 3 )
-        ThrowError( CERR_UNSUPPORTED, list, "arithmetic functions with more than 2 operands are unsupported" );
+    GenerateEvalStar( callOrSymbol, Config(), Status() );
+}
 
-    auto op = (Symbol*) list->Elements[0].get();
+void Compiler::GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
+{
+    auto& op = binary->Op;
     int primitive;
 
-    if ( op->String == "+" )
+    if ( op == "+" )
         primitive = PRIM_ADD;
-    else if ( op->String == "*" )
+    else if ( op == "-" )
+        primitive = PRIM_SUB;
+    else if ( op == "*" )
         primitive = PRIM_MUL;
-    else if ( op->String == "/" )
+    else if ( op == "/" )
         primitive = PRIM_DIV;
-    else if ( op->String == "%" )
+    else if ( op == "%" )
         primitive = PRIM_MOD;
     else
     {
@@ -394,8 +387,32 @@ void Compiler::GenerateArithmetic( Slist* list, const GenConfig& config, GenStat
         ThrowInternalError();
     }
 
-    GenerateBinaryPrimitive( list, primitive, config, status );
+    GenerateBinaryPrimitive( binary, primitive, config, status );
 }
+
+void Compiler::VisitBinaryExpr( BinaryExpr* binary )
+{
+    if ( binary->Op[0] == '='
+        || binary->Op[0] == '<'
+        || binary->Op[0] == '>' )
+    {
+        GenerateComparison( binary, Config(), Status() );
+    }
+    else if ( binary->Op == "and" )
+    {
+        GenerateAnd( binary, Config(), Status() );
+    }
+    else if ( binary->Op == "or" )
+    {
+        GenerateOr( binary, Config(), Status() );
+    }
+    else
+    {
+        GenerateArithmetic( binary, Config(), Status() );
+    }
+}
+
+#if 0
 
 void Compiler::GenerateNegate( Slist* list, const GenConfig& config, GenStatus& status )
 {
@@ -417,14 +434,13 @@ void Compiler::GenerateNegate( Slist* list, const GenConfig& config, GenStatus& 
     }
 }
 
-void Compiler::GenerateReturn( Slist* list, const GenConfig& config, GenStatus& status )
-{
-    if ( list->Elements.size() > 2 )
-        ThrowError( CERR_UNSUPPORTED, list, "returning more than 1 value is unsupported" );
+#endif
 
-    if ( list->Elements.size() == 2 )
+void Compiler::GenerateReturn( ReturnStatement* retStmt, const GenConfig& config, GenStatus& status )
+{
+    if ( retStmt->Inner != nullptr )
     {
-        Generate( list->Elements[1].get() );
+        Generate( retStmt->Inner.get() );
     }
     else
     {
@@ -441,6 +457,13 @@ void Compiler::GenerateReturn( Slist* list, const GenConfig& config, GenStatus& 
     status.discarded = true;
     status.tailRet = true;
 }
+
+void Compiler::VisitReturnStatement( ReturnStatement* retStmt )
+{
+    GenerateReturn( retStmt, Config(), Status() );
+}
+
+#if 0
 
 void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& status )
 {
@@ -515,7 +538,9 @@ void Compiler::GenerateIf( Slist* list, const GenConfig& config, GenStatus& stat
     //       This doesn't apply, if there's only one branch.
 }
 
-void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& status )
+#endif
+
+void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenStatus& status )
 {
     PatchChain  leaveChain;
     bool        foundCatchAll = false;
@@ -526,38 +551,32 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
 
     // TODO: check all the clauses for tail-return. If they all do, then set status.tailRet.
 
-    for ( size_t i = 1; i < list->Elements.size(); i++ )
+    for ( int i = 0; i < (int) condExpr->Clauses.size(); i++ )
     {
         // Restore the expression depth, so that it doesn't accumulate
         mCurExprDepth = exprDepth;
 
-        auto clause = list->Elements[i].get();
-        if ( clause->Code != Elem_Slist )
-            ThrowError( CERR_SEMANTICS, clause, "each clause of COND must be a list" );
-
-        auto clauseList = (Slist*) clause;
-        if ( clauseList->Elements.size() < 1 )
-            ThrowError( CERR_SEMANTICS, clause, "each clause of COND must have at least one argument" );
+        auto clause = condExpr->Clauses[i].get();
 
         // TODO: make the check more general.
 
         bool isConstantTrue = false;
 
-        if ( clauseList->Elements[0].get()->Code == Elem_Number )
+        if ( clause->Condition->Kind == SyntaxKind::Elem_Number )
         {
-            if ( ((Number*) clauseList->Elements[0].get())->Value != 0 )
+            if ( ((NumberExpr*) clause->Condition.get())->Value != 0 )
                 isConstantTrue = true;
         }
-        else if ( clauseList->Elements[0].get()->Code == Elem_Symbol )
+        else if ( clause->Condition->Kind == SyntaxKind::Elem_Symbol )
         {
-            auto decl = FindSymbol( ((Symbol*) clauseList->Elements[0].get())->String );
+            auto decl = FindSymbol( ((NameExpr*) clause->Condition.get())->String );
             if ( decl != nullptr && decl->Kind == Decl_Const && ((ConstDecl*) decl)->Value != 0 )
                 isConstantTrue = true;
         }
 
         if ( isConstantTrue )
         {
-            if ( clauseList->Elements.size() == 1 )
+            if ( clause->Body.Statements.size() == 0 )
             {
                 if ( !config.discard )
                 {
@@ -570,15 +589,15 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
             else
             {
                 GenStatus clauseStatus = { Expr_Other };
-                GenerateImplicitProgn( clauseList, 1, statementConfig, clauseStatus );
+                GenerateImplicitProgn( &clause->Body, statementConfig, clauseStatus );
             }
             foundCatchAll = true;
             break;
         }
 
-        if ( clauseList->Elements.size() == 1 )
+        if ( clause->Body.Statements.size() == 0 )
         {
-            Generate( clauseList->Elements[0].get() );
+            Generate( clause->Condition.get() );
 
             if ( !config.discard )
             {
@@ -598,15 +617,15 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
             PatchChain  trueChain;
             PatchChain  falseChain;
 
-            Generate( clauseList->Elements[0].get(), GenConfig::Expr( &trueChain, &falseChain, false ) );
+            Generate( clause->Condition.get(), GenConfig::Expr( &trueChain, &falseChain, false ) );
             ElideTrue( &trueChain, &falseChain );
             Patch( &trueChain );
 
             // True
             GenStatus clauseStatus = { Expr_Other };
-            GenerateImplicitProgn( clauseList, 1, statementConfig, clauseStatus );
+            GenerateImplicitProgn( &clause->Body, statementConfig, clauseStatus );
 
-            if ( i < list->Elements.size() - 1 || !config.discard )
+            if ( i < (int) condExpr->Clauses.size() - 1 || !config.discard )
             {
                 PushPatch( &leaveChain );
                 mCodeBinPtr[0] = OP_B;
@@ -635,18 +654,24 @@ void Compiler::GenerateCond( Slist* list, const GenConfig& config, GenStatus& st
         status.discarded = true;
 }
 
+void Compiler::VisitCondExpr( CondExpr* condExpr )
+{
+    GenerateCond( condExpr, Config(), Status() );
+}
+
+#if 0
+
 void Compiler::GenerateProgn( Slist* list, const GenConfig& config, GenStatus& status )
 {
     GenerateImplicitProgn( list, 1, config, status );
 }
 
-void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& status )
-{
-    if ( list->Elements.size() != 3 )
-        ThrowError( CERR_SEMANTICS, list, "'set' takes 2 arguments" );
+#endif
 
+void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config, GenStatus& status )
+{
     // Value
-    Generate( list->Elements[2].get() );
+    Generate( assignment->Right.get() );
 
     if ( config.discard )
     {
@@ -658,13 +683,11 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
         IncreaseExprDepth();
     }
 
-    if ( list->Elements[1]->Code == Elem_Slist )
+    if ( assignment->Left->Kind != SyntaxKind::Elem_Symbol )
     {
-        auto arrayList = (Slist*) list->Elements[1].get();
+        auto indexExpr = (IndexExpr*) assignment->Left.get();
 
-        MatchSymbol( arrayList->Elements[0].get(), "aref", "Expected array" );
-
-        GenerateArrayElementRef( arrayList );
+        GenerateArrayElementRef( indexExpr );
 
         mCodeBinPtr[0] = OP_STOREI;
         mCodeBinPtr++;
@@ -673,10 +696,7 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
         return;
     }
 
-    if ( list->Elements[1]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'set' : first argument must be a symbol" );
-
-    auto targetSym = (Symbol*) list->Elements[1].get();
+    auto targetSym = (NameExpr*) assignment->Left.get();
     auto decl = FindSymbol( targetSym->String );
     if ( decl != nullptr )
     {
@@ -703,7 +723,7 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
 
         case Decl_Func:
         case Decl_Forward:
-            ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
+            ThrowErrorSyntax( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
             break;
 
         default:
@@ -715,25 +735,23 @@ void Compiler::GenerateSet( Slist* list, const GenConfig& config, GenStatus& sta
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, targetSym, "symbol not found '%s'", targetSym->String.c_str() );
+        ThrowErrorSyntax( CERR_SEMANTICS, targetSym, "symbol not found '%s'", targetSym->String.c_str() );
     }
 }
 
-void Compiler::GenerateDefun( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitAssignmentExpr( AssignmentExpr* assignment )
+{
+    GenerateSet( assignment, Config(), Status() );
+}
+
+void Compiler::VisitProcDecl( ProcDecl* procDecl )
 {
     if ( mInFunc )
-        ThrowError( CERR_SEMANTICS, list, "a function can't be defined inside another" );
+        ThrowErrorSyntax( CERR_SEMANTICS, procDecl, "a function can't be defined inside another" );
 
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "'defun' takes 2 or more arguments" );
-
-    if ( list->Elements[1]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'defun' first argument must be a name" );
-
-    Symbol* funcSym = (Symbol*) list->Elements[1].get();
     U32 addr = (mCodeBinPtr - mCodeBin);
 
-    SymTable::iterator it = mGlobalTable.find( funcSym->String );
+    SymTable::iterator it = mGlobalTable.find( procDecl->Name );
     Function* func = nullptr;
 
     if ( it != mGlobalTable.end() )
@@ -748,28 +766,25 @@ void Compiler::GenerateDefun( Slist* list, const GenConfig& config, GenStatus& s
         }
         else if ( it->second->Kind == Decl_Func )
         {
-            ThrowError( CERR_SEMANTICS, funcSym, "the function '%s' is already defined", funcSym->String.c_str() );
+            ThrowErrorSyntax( CERR_SEMANTICS, procDecl, "the function '%s' is already defined", procDecl->Name.c_str() );
         }
         else
         {
-            ThrowError( CERR_SEMANTICS, funcSym, "the symbol '%s' is already defined", funcSym->String.c_str() );
+            ThrowErrorSyntax( CERR_SEMANTICS, procDecl, "the symbol '%s' is already defined", procDecl->Name.c_str() );
         }
     }
     else
     {
-        func = AddFunc( funcSym->String, addr );
+        func = AddFunc( procDecl->Name, addr );
     }
 
-    mEnv->AddExternal( funcSym->String, External_Bytecode, func->Address );
+    mEnv->AddExternal( procDecl->Name, External_Bytecode, func->Address );
 
-    GenerateProc( list, 2, func );
+    GenerateProc( procDecl, func );
 }
 
-void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateLambda( LambdaExpr* lambdaExpr, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'lambda' takes 1 or more arguments" );
-
     if ( config.discard )
     {
         status.discarded = true;
@@ -780,7 +795,7 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     mCodeBinPtr++;
 
     DeferredLambda lambda = { 0 };
-    lambda.Definition = list;
+    lambda.Definition = lambdaExpr->Proc.get();
     lambda.Patch = mCodeBinPtr;
     mLambdas.push_back( lambda );
 
@@ -791,18 +806,20 @@ void Compiler::GenerateLambda( Slist* list, const GenConfig& config, GenStatus& 
     IncreaseExprDepth();
 }
 
-void Compiler::GenerateFunction( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitLambdaExpr( LambdaExpr* lambdaExpr )
 {
-    if ( list->Elements.size() != 2 || list->Elements[1]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list, "'function' takes a symbol" );
+    GenerateLambda( lambdaExpr, Config(), Status() );
+}
 
+void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, GenStatus& status )
+{
     if ( config.discard )
     {
         status.discarded = true;
         return;
     }
 
-    auto op = (Symbol*) list->Elements[1].get();
+    auto op = addrOf->Inner.get();
     U32 addr = 0;
 
     SymTable::iterator it = mGlobalTable.find( op->String );
@@ -824,7 +841,7 @@ void Compiler::GenerateFunction( Slist* list, const GenConfig& config, GenStatus
         }
         else
         {
-            ThrowError( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
+            ThrowErrorSyntax( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
         }
     }
     else
@@ -836,11 +853,11 @@ void Compiler::GenerateFunction( Slist* list, const GenConfig& config, GenStatus
             if ( external.Kind == External_Bytecode )
             {
                 // TODO:
-                ThrowError( CERR_SEMANTICS, list, "Referencing external functions is not supported yet" );
+                ThrowErrorSyntax( CERR_SEMANTICS, addrOf, "Referencing external functions is not supported yet" );
             }
             else if ( external.Kind == External_Native )
             {
-                ThrowError( CERR_SEMANTICS, list, "Cannot reference a native function" );
+                ThrowErrorSyntax( CERR_SEMANTICS, addrOf, "Cannot reference a native function" );
             }
             else
             {
@@ -865,17 +882,21 @@ void Compiler::GenerateFunction( Slist* list, const GenConfig& config, GenStatus
     IncreaseExprDepth();
 }
 
-void Compiler::GenerateFuncall( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitAddrOfExpr( AddrOfExpr* addrOf )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'funcall' takes 1 or more arguments" );
+    GenerateFunction( addrOf, Config(), Status() );
+}
 
-    for ( size_t i = list->Elements.size() - 1; i > 0; i-- )
+void Compiler::GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status )
+{
+    for ( int i = call->Arguments.size() - 1; i >= 0; i-- )
     {
-        Generate( list->Elements[i].get() );
+        Generate( call->Arguments[i].get() );
     }
 
-    int argCount = list->Elements.size() - 2;
+    Generate( call->Head.get() );
+
+    int argCount = call->Arguments.size();
 
     mCodeBinPtr[0] = OP_CALLI;
     mCodeBinPtr[1] = CallFlags::Build( argCount, config.discard );
@@ -894,119 +915,94 @@ void Compiler::GenerateFuncall( Slist* list, const GenConfig& config, GenStatus&
         mCurFunc->CallsIndirectly = true;
 }
 
-void Compiler::GenerateLet( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'let' takes 1 or more arguments" );
-    if ( list->Elements[1]->Code != Elem_Slist )
-        ThrowError( CERR_SEMANTICS, list->Elements[1].get(), "'let' : first argument must be a list" );
-
-    Slist* allList = (Slist*) list->Elements[1].get();
     LocalScope localScope( *this );
 
-    for ( size_t i = 0; i < allList->Elements.size(); i++ )
+    for ( auto& binding : letStmt->Variables )
     {
-        if ( allList->Elements[i]->Code != Elem_Slist )
-            ThrowError( CERR_SEMANTICS, allList->Elements[i].get(), "'let' : element %d of binding list must be a list", i+1 );
-
-        Slist* localList = (Slist*) allList->Elements[i].get();
-
-        if ( localList->Elements.size() != 2 )
-            ThrowError( CERR_SEMANTICS, localList, "'let' : binding pair must have 2 elements" );
-
-        GenerateLetBinding( localList );
+        GenerateLetBinding( binding.get() );
     }
 
-    GenerateImplicitProgn( list, 2, config, status );
+    GenerateImplicitProgn( &letStmt->Body, config, status );
 }
 
-void Compiler::GenerateLetBinding( Slist* localList )
+void Compiler::GenerateLetBinding( VarDecl* binding )
 {
-    if ( localList->Elements[0]->Code == Elem_Symbol )
+    if ( binding->TypeRef == nullptr )
     {
-        Symbol* localSym = (Symbol*) localList->Elements[0].get();
-        Storage* local = AddLocal( localSym->String, 1 );
+        Storage* local = AddLocal( binding->Name, 1 );
 
-        if ( localList->Elements.size() == 2 )
+        if ( binding->Initializer != nullptr )
         {
-            Generate( localList->Elements[1].get() );
+            Generate( binding->Initializer.get() );
             mCodeBinPtr[0] = OP_STLOC;
             mCodeBinPtr[1] = local->Offset;
             mCodeBinPtr += 2;
             DecreaseExprDepth();
         }
     }
-    else if ( localList->Elements[0]->Code == Elem_Slist )
+    else if ( binding->TypeRef->Kind == SyntaxKind::Elem_Slist )
     {
-        auto headList = (Slist*) localList->Elements[0].get();
+        auto type = (ArrayTypeRef*) binding->TypeRef.get();
 
-        if ( headList->Elements.size() != 2
-            || headList->Elements[0]->Code != Elem_Symbol )
-            ThrowError( CERR_SEMANTICS, headList, "'let' binding takes a name and array size" );
-
-        I32 size = GetElementValue( headList->Elements[1].get(), "Expected a constant array size" );
+        I32 size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
 
         if ( size <= 0 )
-            ThrowError( CERR_SEMANTICS, headList->Elements[1].get(), "Array size must be positive" );
+            ThrowErrorSyntax( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
 
-        auto local = AddLocal( ((Symbol*) headList->Elements[0].get())->String, size );
+        auto local = AddLocal( binding->Name, size );
 
-        if ( localList->Elements.size() == 2 )
+        if ( binding->Initializer != nullptr )
         {
-            AddLocalDataArray( local, localList->Elements[1].get(), size );
+            AddLocalDataArray( local, binding->Initializer.get(), size );
         }
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, localList, "'let' binding takes a name or name and type" );
+        ThrowErrorSyntax( CERR_SEMANTICS, binding, "'let' binding takes a name or name and type" );
     }
+}
+
+void Compiler::VisitLetStatement( LetStatement* letStmt )
+{
+    GenerateLet( letStmt, Config(), Status() );
 }
 
 // TODO: try to merge this with AddGlobalDataArray. Separate the array processing from the code generation
 
-void Compiler::AddLocalDataArray( Storage* local, Element* valueElem, size_t size )
+void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size )
 {
-    if ( valueElem->Code != Elem_Slist )
-        ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+    if ( valueElem->Kind != SyntaxKind::Elem_Slist )
+        ThrowErrorSyntax( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
-    Element* extraSym = nullptr;
-    Element* lastTwoElems[2] = {};
+    Syntax* lastTwoElems[2] = {};
     size_t locIndex = local->Offset;
     size_t i = 0;
-    bool foundExtra = false;
 
-    for ( auto& entry : ((Slist*) valueElem)->Elements )
+    auto initList = (InitList*) valueElem;
+
+    for ( auto& entry : initList->Values )
     {
-        if ( foundExtra )
-            ThrowError( CERR_SEMANTICS, entry.get(), "&extra must be last array initializer" );
+        if ( i == size )
+            ThrowErrorSyntax( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
 
-        if ( entry->Code == Elem_Symbol && ((Symbol*) entry.get())->String == "&extra" )
-        {
-            foundExtra = true;
-            extraSym = entry.get();
-        }
-        else
-        {
-            if ( i == size )
-                ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+        lastTwoElems[0] = lastTwoElems[1];
+        lastTwoElems[1] = entry.get();
 
-            lastTwoElems[0] = lastTwoElems[1];
-            lastTwoElems[1] = entry.get();
-
-            Generate( entry.get() );
-            mCodeBinPtr[0] = OP_STLOC;
-            mCodeBinPtr[1] = (U8) locIndex;
-            mCodeBinPtr += 2;
-            i++;
-            locIndex--;
-            DecreaseExprDepth();
-        }
+        Generate( entry.get() );
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = (U8) locIndex;
+        mCodeBinPtr += 2;
+        i++;
+        locIndex--;
+        DecreaseExprDepth();
     }
 
     I32 prevValue = 0;
     I32 step = 0;
 
-    if ( foundExtra && lastTwoElems[1] != nullptr )
+    if ( initList->HasExtra && lastTwoElems[1] != nullptr )
     {
         prevValue = GetElementValue( lastTwoElems[1], "Array initializer extrapolation requires a constant" );
 
@@ -1033,16 +1029,19 @@ void Compiler::AddLocalDataArray( Storage* local, Element* valueElem, size_t siz
     }
 }
 
-void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status )
 {
-    auto op = (Symbol*) list->Elements[0].get();
+    if ( call->Head->Kind != SyntaxKind::Elem_Symbol )
+        ThrowErrorSyntax( CERR_SEMANTICS, call, "Direct call requires a named function" );
 
-    for ( size_t i = list->Elements.size() - 1; i > 0; i-- )
+    auto op = (NameExpr*) call->Head.get();
+
+    for ( int i = call->Arguments.size() - 1; i >= 0; i-- )
     {
-        Generate( list->Elements[i].get() );
+        Generate( call->Arguments[i].get() );
     }
 
-    int argCount = list->Elements.size() - 1;
+    int argCount = call->Arguments.size();
     U8 callFlags = CallFlags::Build( argCount, config.discard );
 
     SymTable::iterator it = mGlobalTable.find( op->String );
@@ -1065,7 +1064,7 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
         }
         else
         {
-            ThrowError( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
+            ThrowErrorSyntax( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
         }
 
         mCodeBinPtr[0] = OP_CALL;
@@ -1143,6 +1142,16 @@ void Compiler::GenerateCall( Slist* list, const GenConfig& config, GenStatus& st
     DecreaseExprDepth( argCount );
 }
 
+void Compiler::VisitCallExpr( CallExpr* call )
+{
+    if ( call->IsIndirect )
+        GenerateFuncall( call, Config(), Status() );
+    else
+        GenerateCall( call, Config(), Status() );
+}
+
+#if 0
+
 void Compiler::GenerateLoop( Slist* list, const GenConfig& config, GenStatus& status )
 {
     if ( list->Elements.size() < 2 || list->Elements[1]->Code != Elem_Symbol )
@@ -1164,72 +1173,43 @@ void Compiler::GenerateLoop( Slist* list, const GenConfig& config, GenStatus& st
     }
 }
 
-void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& status )
+#endif
+
+void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenStatus& status )
 {
     LocalScope localScope( *this );
 
-    if ( list->Elements.size() < 8 )
-        ThrowError( CERR_SEMANTICS, list, "'loop' takes 7 or more arguments" );
-
-    MatchSymbol( list->Elements[1].get(), "for" );
-
     // Variable name
 
-    if ( list->Elements[2]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[2].get(), "Expected variable name" );
-
-    Symbol* localSym = (Symbol*) list->Elements[2].get();
-    Storage* local = AddLocal( localSym->String, 1 );
-
-    MatchSymbol( list->Elements[3].get(), "from" );
-
-    if ( list->Elements[5]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[5].get(), "Expected symbol: to or downto" );
+    Storage* local = AddLocal( forStmt->IndexName, 1 );
 
     int primitive;
     int step;
 
-    if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "below" ) )
+    if ( 0 == strcmp( forStmt->Comparison.c_str(), "below" ) )
     {
         primitive = PRIM_LT;
         step = 1;
     }
-    else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "to" ) )
+    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "to" ) )
     {
         primitive = PRIM_LE;
         step = 1;
     }
-    else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "downto" ) )
+    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "downto" ) )
     {
         primitive = PRIM_GE;
         step = -1;
     }
-    else if ( 0 == strcmp( ((Symbol*) list->Elements[5].get())->String.c_str(), "above" ) )
+    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "above" ) )
     {
         primitive = PRIM_GT;
         step = -1;
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, list->Elements[5].get(), "Expected symbol: to, downto, above, below" );
+        ThrowErrorSyntax( CERR_SEMANTICS, forStmt, "Expected symbol: to, downto, above, below" );
     }
-
-    if ( list->Elements[7]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[7].get(), "Expected symbol: do, by" );
-
-    int headerSize = 8;
-    Element* stepExpr = nullptr;
-
-    if ( 0 == strcmp( ((Symbol*) list->Elements[7].get())->String.c_str(), "by" ) )
-    {
-        if ( list->Elements.size() < 10 )
-            ThrowError( CERR_SEMANTICS, list, "'loop' with a step takes 9 or more arguments" );
-
-        stepExpr = list->Elements[8].get();
-        headerSize = 10;
-    }
-
-    MatchSymbol( list->Elements[headerSize - 1].get(), "do" );
 
     PatchChain  bodyChain;
     PatchChain  testChain;
@@ -1237,7 +1217,7 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
     PatchChain  nextChain;
 
     // Beginning expression
-    Generate( list->Elements[4].get() );
+    Generate( forStmt->First.get() );
     mCodeBinPtr[0] = OP_DUP;
     mCodeBinPtr[1] = OP_STLOC;
     mCodeBinPtr[2] = local->Offset;
@@ -1257,12 +1237,12 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
     U8* bodyPtr = mCodeBinPtr;
 
     // Body
-    GenerateStatements( list, headerSize, config.WithLoop( &breakChain, &nextChain ), status );
+    GenerateStatements( &forStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
 
     Patch( &nextChain );
 
-    if ( stepExpr != nullptr )
-        Generate( stepExpr );
+    if ( forStmt->Step != nullptr )
+        Generate( forStmt->Step.get() );
     else
         EmitLoadConstant( step );
 
@@ -1282,7 +1262,7 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
     Patch( &testChain );
 
     // Ending expression
-    Generate( list->Elements[6].get() );
+    Generate( forStmt->Last.get() );
 
     mCodeBinPtr[0] = OP_PRIM;
     mCodeBinPtr[1] = primitive;
@@ -1300,31 +1280,22 @@ void Compiler::GenerateFor( Slist* list, const GenConfig& config, GenStatus& sta
     GenerateNilIfNeeded( config, status );
 }
 
-void Compiler::GenerateSimpleLoop( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitForStatement( ForStatement* forStmt )
 {
-    size_t whileIndex = 0;
+    GenerateFor( forStmt, Config(), Status() );
+}
 
-    for ( auto& elem : list->Elements )
-    {
-        if ( elem->Code == Elem_Symbol && ((Symbol*) elem.get())->String == "while" )
-        {
-            if ( (list->Elements.size() - whileIndex) < 2 )
-                ThrowError( CERR_SEMANTICS, elem.get(), "While and its test must come last in loop" );
-            break;
-        }
-
-        whileIndex++;
-    }
-
+void Compiler::GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& config, GenStatus& status )
+{
     PatchChain  breakChain;
     PatchChain  nextChain;
 
     U8* bodyPtr = mCodeBinPtr;
 
     // Body
-    GenerateStatements( list, 2, whileIndex, config.WithLoop( &breakChain, &nextChain ), status );
+    GenerateStatements( &loopStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
 
-    if ( whileIndex == list->Elements.size() )
+    if ( loopStmt->Condition == nullptr )
     {
         PushPatch( &nextChain );
         mCodeBinPtr[0] = OP_B;
@@ -1339,7 +1310,7 @@ void Compiler::GenerateSimpleLoop( Slist* list, const GenConfig& config, GenStat
 
         Patch( &nextChain );
 
-        Generate( list->Elements[whileIndex + 1].get(), GenConfig::Expr( &bodyChain, &breakChain, false ), exprStatus );
+        Generate( loopStmt->Condition.get(), GenConfig::Expr( &bodyChain, &breakChain, false ), exprStatus );
         ElideFalse( &bodyChain, &breakChain );
 
         Patch( &bodyChain, bodyPtr );
@@ -1350,11 +1321,13 @@ void Compiler::GenerateSimpleLoop( Slist* list, const GenConfig& config, GenStat
     GenerateNilIfNeeded( config, status );
 }
 
-void Compiler::GenerateDo( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitLoopStatement( LoopStatement* loopStmt )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'do' takes 1 or more arguments" );
+    GenerateSimpleLoop( loopStmt, Config(), Status() );
+}
 
+void Compiler::GenerateDo( WhileStatement* whileStmt, const GenConfig& config, GenStatus& status )
+{
     PatchChain  breakChain;
     PatchChain  nextChain;
     PatchChain  trueChain;
@@ -1362,13 +1335,13 @@ void Compiler::GenerateDo( Slist* list, const GenConfig& config, GenStatus& stat
     U8* testPtr = mCodeBinPtr;
 
     // Test expression
-    Generate( list->Elements[1].get(), GenConfig::Expr( &trueChain, &breakChain, false ) );
+    Generate( whileStmt->Condition.get(), GenConfig::Expr( &trueChain, &breakChain, false ) );
 
     ElideTrue( &trueChain, &breakChain );
     Patch( &trueChain );
 
     // Body
-    GenerateStatements( list, 2, config.WithLoop( &breakChain, &nextChain ), status );
+    GenerateStatements( &whileStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
 
     PushPatch( &nextChain );
     mCodeBinPtr[0] = OP_B;
@@ -1380,10 +1353,15 @@ void Compiler::GenerateDo( Slist* list, const GenConfig& config, GenStatus& stat
     GenerateNilIfNeeded( config, status );
 }
 
-void Compiler::GenerateBreak( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitWhileStatement( WhileStatement* whileStmt )
+{
+    GenerateDo( whileStmt, Config(), Status() );
+}
+
+void Compiler::GenerateBreak( BreakStatement* breakStmt, const GenConfig& config, GenStatus& status )
 {
     if ( config.breakChain == nullptr )
-        ThrowError( CERR_SEMANTICS, list, "Cannot use break outside of a loop" );
+        ThrowErrorSyntax( CERR_SEMANTICS, breakStmt, "Cannot use break outside of a loop" );
 
     PushPatch( config.breakChain );
     mCodeBinPtr[0] = OP_B;
@@ -1392,10 +1370,15 @@ void Compiler::GenerateBreak( Slist* list, const GenConfig& config, GenStatus& s
     status.discarded = true;
 }
 
-void Compiler::GenerateNext( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitBreakStatement( BreakStatement* breakStmt )
+{
+    GenerateBreak( breakStmt, Config(), Status() );
+}
+
+void Compiler::GenerateNext( NextStatement* nextStmt, const GenConfig& config, GenStatus& status )
 {
     if ( config.nextChain == nullptr )
-        ThrowError( CERR_SEMANTICS, list, "Cannot use next outside of a loop" );
+        ThrowErrorSyntax( CERR_SEMANTICS, nextStmt, "Cannot use next outside of a loop" );
 
     PushPatch( config.nextChain );
     mCodeBinPtr[0] = OP_B;
@@ -1404,164 +1387,143 @@ void Compiler::GenerateNext( Slist* list, const GenConfig& config, GenStatus& st
     status.discarded = true;
 }
 
-void Compiler::GenerateCase( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitNextStatement( NextStatement* nextStmt )
 {
-    if ( list->Elements.size() < 2 )
-        ThrowError( CERR_SEMANTICS, list, "'case' takes 1 or more arguments" );
-
-    GenerateGeneralCase( list, config, status );
+    GenerateNext( nextStmt, Config(), Status() );
 }
 
-void Compiler::GenerateGeneralCase( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
+{
+    GenerateGeneralCase( caseExpr, config, status );
+}
+
+void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
 {
     LocalScope localScope( *this );
     PatchChain exitChain;
 
     const GenConfig& statementConfig = config;
 
-    if ( list->Elements[1]->Code == Elem_Slist )
+    if ( caseExpr->TestKey->Kind == SyntaxKind::Elem_Slist )
     {
-        std::unique_ptr<Symbol> localSym( new Symbol() );
-        localSym->Code = Elem_Symbol;
+        std::unique_ptr<NameExpr> localSym( new NameExpr() );
         localSym->String = "$testKey";
         Storage* local = AddLocal( localSym->String, 1 );
 
-        Generate( list->Elements[1].get() );
+        Generate( caseExpr->TestKey.get() );
         mCodeBinPtr[0] = OP_STLOC;
         mCodeBinPtr[1] = local->Offset;
         mCodeBinPtr += 2;
         DecreaseExprDepth();
 
         // Replace the keyform expression with the temporary variable
-        list->Elements[1] = std::move( localSym );
+        caseExpr->TestKey = std::move( localSym );
     }
 
-    for ( size_t i = 2; i < list->Elements.size(); i++ )
+    for ( auto& clause : caseExpr->Clauses )
     {
-        auto clauseElem = list->Elements[i].get();
+        PatchChain falseChain;
+        PatchChain trueChain;
 
-        if ( clauseElem->Code != Elem_Slist )
-            ThrowError( CERR_SEMANTICS, clauseElem, "" );
+        int i = 0;
 
-        auto clause = (Slist*) list->Elements[i].get();
-
-        if ( clause->Elements[0]->Code == Elem_Symbol
-            && (((Symbol*) clause->Elements[0].get())->String == "otherwise"
-                || ((Symbol*) clause->Elements[0].get())->String == "true") )
+        for ( auto& key : clause->Keys )
         {
-            if ( i != list->Elements.size() - 1 )
-                ThrowError( CERR_SEMANTICS, clause, "" );
+            i++;
 
-            GenerateImplicitProgn( clause, 1, statementConfig, status );
-        }
-        else
-        {
-            // If the key is not a list, then make it one, so that there's only one way to iterate.
+            Generate( caseExpr->TestKey.get() );
+            Generate( key.get() );
 
-            if ( clause->Elements[0]->Code != Elem_Slist )
+            mCodeBinPtr[0] = OP_PRIM;
+            mCodeBinPtr[1] = PRIM_EQ;
+            mCodeBinPtr += 2;
+            DecreaseExprDepth();
+
+            if ( i == clause->Keys.size() )
             {
-                std::unique_ptr<Slist> newList( new Slist() );
-                newList->Code = Elem_Slist;
-                newList->Elements.push_back( std::move( clause->Elements[0] ) );
-                clause->Elements[0] = std::move( newList );
-            }
-
-            PatchChain falseChain;
-            PatchChain trueChain;
-
-            auto keyList = (Slist*) clause->Elements[0].get();
-            int i = 0;
-
-            for ( auto& key : keyList->Elements )
-            {
-                i++;
-
-                if ( key->Code == Elem_Slist )
-                    ThrowError( CERR_SEMANTICS, key.get(), "" );
-
-                Generate( list->Elements[1].get() );
-                Generate( key.get() );
-
-                mCodeBinPtr[0] = OP_PRIM;
-                mCodeBinPtr[1] = PRIM_EQ;
-                mCodeBinPtr += 2;
+                PushPatch( &falseChain );
+                mCodeBinPtr[0] = OP_BFALSE;
+                mCodeBinPtr += BranchInst::Size;
                 DecreaseExprDepth();
-
-                if ( i == keyList->Elements.size() )
-                {
-                    PushPatch( &falseChain );
-                    mCodeBinPtr[0] = OP_BFALSE;
-                    mCodeBinPtr += BranchInst::Size;
-                    DecreaseExprDepth();
-                }
-                else
-                {
-                    PushPatch( &trueChain );
-                    mCodeBinPtr[0] = OP_BTRUE;
-                    mCodeBinPtr += BranchInst::Size;
-                    DecreaseExprDepth();
-                }
             }
-
-            Patch( &trueChain );
-
-            GenerateImplicitProgn( clause, 1, statementConfig, status );
-
-            PushPatch( &exitChain );
-            mCodeBinPtr[0] = OP_B;
-            mCodeBinPtr += BranchInst::Size;
-
-            Patch( &falseChain );
+            else
+            {
+                PushPatch( &trueChain );
+                mCodeBinPtr[0] = OP_BTRUE;
+                mCodeBinPtr += BranchInst::Size;
+                DecreaseExprDepth();
+            }
         }
+
+        Patch( &trueChain );
+
+        GenerateImplicitProgn( &clause->Body, statementConfig, status );
+
+        PushPatch( &exitChain );
+        mCodeBinPtr[0] = OP_B;
+        mCodeBinPtr += BranchInst::Size;
+
+        Patch( &falseChain );
+    }
+
+    if ( caseExpr->Fallback != nullptr )
+    {
+        GenerateImplicitProgn( &caseExpr->Fallback->Body, statementConfig, status );
     }
 
     Patch( &exitChain );
 }
 
-void Compiler::GenerateNot( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitCaseExpr( CaseExpr* caseExpr )
 {
-    if ( list->Elements.size() != 2 )
-        ThrowError( CERR_SEMANTICS, list, "'not' takes 1 argument" );
-
-    Generate( list->Elements[1].get(), config.Invert(), status );
-    status.kind = Expr_Logical;
+    GenerateCase( caseExpr, Config(), Status() );
 }
 
-void Compiler::GenerateComparison( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitUnaryExpr( UnaryExpr* unary )
 {
-    if ( list->Elements.size() != 3 )
-        ThrowError( CERR_SEMANTICS, list, "comparison operators take 2 operands" );
+    if ( unary->Op == "not" )
+    {
+        Generate( unary->Inner.get(), Config().Invert(), Status() );
+        Status().kind = Expr_Logical;
+    }
+    else if ( unary->Op == "-" )
+    {
+        GenerateUnaryPrimitive( unary->Inner.get(), Config(), Status() );
+    }
+}
 
-    auto op = (Symbol*) list->Elements[0].get();
+void Compiler::GenerateComparison( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
+{
+    auto& op = binary->Op;
     int positivePrimitive;
     int negativePrimitive;
 
-    if ( op->String == "=" )
+    if ( op == "=" )
     {
         positivePrimitive = PRIM_EQ;
         negativePrimitive = PRIM_NE;
     }
-    else if ( op->String == "<>" )
+    else if ( op == "<>" )
     {
         positivePrimitive = PRIM_NE;
         negativePrimitive = PRIM_EQ;
     }
-    else if ( op->String == "<" )
+    else if ( op == "<" )
     {
         positivePrimitive = PRIM_LT;
         negativePrimitive = PRIM_GE;
     }
-    else if ( op->String == "<=" )
+    else if ( op == "<=" )
     {
         positivePrimitive = PRIM_LE;
         negativePrimitive = PRIM_GT;
     }
-    else if ( op->String == ">" )
+    else if ( op == ">" )
     {
         positivePrimitive = PRIM_GT;
         negativePrimitive = PRIM_LE;
     }
-    else if ( op->String == ">=" )
+    else if ( op == ">=" )
     {
         positivePrimitive = PRIM_GE;
         negativePrimitive = PRIM_LT;
@@ -1572,63 +1534,51 @@ void Compiler::GenerateComparison( Slist* list, const GenConfig& config, GenStat
         ThrowInternalError();
     }
 
-    GenerateBinaryPrimitive( list, config.invert ? negativePrimitive : positivePrimitive, config, status );
+    GenerateBinaryPrimitive( binary, config.invert ? negativePrimitive : positivePrimitive, config, status );
     status.kind = Expr_Comparison;
 }
 
-void Compiler::GenerateAnd( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateAnd( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "'and' takes 2 or more operands" );
-
     ConjSpec spec = { &Compiler::GenerateAndClause, &Compiler::GenerateOrClause };
-    GenerateConj( &spec, list, config );
+    GenerateConj( &spec, binary, config );
     status.kind = Expr_Logical;
 
     if ( config.discard )
         status.discarded = true;
 }
 
-void Compiler::GenerateOr( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateOr( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
 {
-    if ( list->Elements.size() < 3 )
-        ThrowError( CERR_SEMANTICS, list, "'or' takes 2 or more operands" );
-
     ConjSpec spec = { &Compiler::GenerateOrClause, &Compiler::GenerateAndClause };
-    GenerateConj( &spec, list, config );
+    GenerateConj( &spec, binary, config );
     status.kind = Expr_Logical;
 
     if ( config.discard )
         status.discarded = true;
 }
 
-void Compiler::GenerateConj( ConjSpec* spec, Slist* list, const GenConfig& config )
+void Compiler::GenerateConj( ConjSpec* spec, BinaryExpr* binary, const GenConfig& config )
 {
     if ( config.trueChain == nullptr )
     {
-        Atomize( spec, list, config.invert, config.discard );
+        Atomize( spec, binary, config.invert, config.discard );
         return;
     }
 
-    for ( size_t i = 1; i < list->Elements.size() - 1; i++ )
+    if ( config.invert )
     {
-        if ( config.invert )
-        {
-            (this->*(spec->NegativeGenerator))( list->Elements[i].get(), config );
-        }
-        else
-        {
-            (this->*(spec->PositiveGenerator))( list->Elements[i].get(), config );
-        }
+        (this->*(spec->NegativeGenerator))( binary->Left.get(), config );
+    }
+    else
+    {
+        (this->*(spec->PositiveGenerator))( binary->Left.get(), config );
     }
 
-    if ( list->Elements.size() > 1 )
-    {
-        Generate( list->Elements.back().get(), config );
-    }
+    Generate( binary->Right.get(), config );
 }
 
-void Compiler::GenerateAndClause( Element* elem, const GenConfig& config )
+void Compiler::GenerateAndClause( Syntax* elem, const GenConfig& config )
 {
     PatchChain  newTrueChain;
     Generate( elem, config.WithTrue( &newTrueChain ) );
@@ -1636,7 +1586,7 @@ void Compiler::GenerateAndClause( Element* elem, const GenConfig& config )
     Patch( &newTrueChain );
 }
 
-void Compiler::GenerateOrClause( Element* elem, const GenConfig& config )
+void Compiler::GenerateOrClause( Syntax* elem, const GenConfig& config )
 {
     PatchChain  newFalseChain;
     Generate( elem, config.WithFalse( &newFalseChain ) );
@@ -1644,12 +1594,12 @@ void Compiler::GenerateOrClause( Element* elem, const GenConfig& config )
     Patch( &newFalseChain );
 }
 
-void Compiler::Atomize( ConjSpec* spec, Slist* list, bool invert, bool discard )
+void Compiler::Atomize( ConjSpec* spec, BinaryExpr* binary, bool invert, bool discard )
 {
     PatchChain  trueChain;
     PatchChain  falseChain;
 
-    GenerateConj( spec, list, GenConfig::Expr( &trueChain, &falseChain, invert ) );
+    GenerateConj( spec, binary, GenConfig::Expr( &trueChain, &falseChain, invert ) );
 
     ElideTrue( &trueChain, &falseChain );
 
@@ -1778,7 +1728,7 @@ void Compiler::PatchCalls( PatchChain* chain, U32 addr )
     }
 }
 
-void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateUnaryPrimitive( Syntax* elem, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -1801,18 +1751,18 @@ void Compiler::GenerateUnaryPrimitive( Element* elem, const GenConfig& config, G
     }
 }
 
-void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
-        GenerateDiscard( list->Elements[1].get() );
-        GenerateDiscard( list->Elements[2].get() );
+        GenerateDiscard( binary->Left.get() );
+        GenerateDiscard( binary->Right.get() );
         status.discarded = true;
     }
     else
     {
-        Generate( list->Elements[1].get() );
-        Generate( list->Elements[2].get() );
+        Generate( binary->Left.get() );
+        Generate( binary->Right.get() );
 
         mCodeBinPtr[0] = OP_PRIM;
         mCodeBinPtr[1] = primitive;
@@ -1822,22 +1772,21 @@ void Compiler::GenerateBinaryPrimitive( Slist* list, int primitive, const GenCon
     }
 }
 
-void Compiler::GenerateArrayElementRef( Slist* list )
+void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
 {
-    if ( list->Elements.size() != 3 || list->Elements[1]->Code != Elem_Symbol )
-        ThrowError( CERR_SEMANTICS, list->Elements[0].get(),
-            "'aref' supports only one-dimensional named arrays" );
+    if ( indexExpr->Head->Kind != SyntaxKind::Elem_Symbol )
+        ThrowErrorSyntax( CERR_SEMANTICS, indexExpr, "Only named arrays can be indexed" );
 
-    Generate( list->Elements[2].get() );
+    Generate( indexExpr->Index.get() );
 
-    auto symbol = (Symbol*) list->Elements[1].get();
+    auto symbol = (NameExpr*) indexExpr->Head.get();
     uint32_t addrWord;
 
     Declaration* decl = FindSymbol( symbol->String );
 
     if ( decl == nullptr )
     {
-        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        ThrowErrorSyntax( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
     }
     else
     {
@@ -1857,7 +1806,7 @@ void Compiler::GenerateArrayElementRef( Slist* list )
             break;
 
         default:
-            ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals" );
+            ThrowErrorSyntax( CERR_SEMANTICS, symbol, "'aref' supports only globals" );
         }
     }
 
@@ -1870,7 +1819,7 @@ void Compiler::GenerateArrayElementRef( Slist* list )
     DecreaseExprDepth();
 }
 
-void Compiler::GenerateAref( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -1878,7 +1827,7 @@ void Compiler::GenerateAref( Slist* list, const GenConfig& config, GenStatus& st
         return;
     }
 
-    GenerateArrayElementRef( list );
+    GenerateArrayElementRef( indexExpr );
 
     mCodeBinPtr[0] = OP_LOADI;
     mCodeBinPtr++;
@@ -1887,85 +1836,79 @@ void Compiler::GenerateAref( Slist* list, const GenConfig& config, GenStatus& st
     IncreaseExprDepth();
 }
 
-void Compiler::GenerateDefvar( Slist* list, const GenConfig& config, GenStatus& status )
+void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
+{
+    GenerateAref( indexExpr, Config(), Status() );
+}
+
+void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )
 {
     if ( mInFunc )
-        ThrowError( CERR_SEMANTICS, list, "'defvar' must be used outside of a function" );
+        ThrowErrorSyntax( CERR_SEMANTICS, varDecl, "'defvar' must be used outside of a function" );
 
-    if ( list->Elements.size() < 2 || list->Elements.size() > 3 )
-        ThrowError( CERR_SEMANTICS, list, "'defvar' takes 1 or 2 arguments" );
-
-    if ( list->Elements[1]->Code == Elem_Symbol )
+    if ( varDecl->TypeRef == nullptr )
     {
-        auto global = AddGlobal( ((Symbol*) list->Elements[1].get())->String, 1 );
+        auto global = AddGlobal( varDecl->Name, 1 );
 
-        if ( list->Elements.size() == 3 )
+        if ( varDecl->Initializer != nullptr )
         {
-            AddGlobalData( global->Offset, list->Elements[2].get() );
+            AddGlobalData( global->Offset, varDecl->Initializer.get() );
         }
     }
-    else if ( list->Elements[1]->Code == Elem_Slist )
+    else if ( varDecl->TypeRef->Kind == SyntaxKind::Elem_Slist )
     {
-        auto headList = (Slist*) list->Elements[1].get();
+        auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
-        if ( headList->Elements.size() != 2
-            || headList->Elements[0]->Code != Elem_Symbol )
-            ThrowError( CERR_SEMANTICS, headList, "'defvar' takes a name and array size" );
-
-        I32 size = GetElementValue( headList->Elements[1].get(), "Expected a constant array size" );
+        I32 size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
 
         if ( size <= 0 )
-            ThrowError( CERR_SEMANTICS, headList->Elements[1].get(), "Array size must be positive" );
+            ThrowErrorSyntax( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
 
-        auto global = AddGlobal( ((Symbol*) headList->Elements[0].get())->String, size );
+        auto global = AddGlobal( varDecl->Name, size );
 
-        if ( list->Elements.size() == 3 )
+        if ( varDecl->Initializer != nullptr )
         {
-            AddGlobalDataArray( global, list->Elements[2].get(), size );
+            AddGlobalDataArray( global, varDecl->Initializer.get(), size );
         }
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, list, "'defvar' takes a name or name and type" );
+        ThrowErrorSyntax( CERR_SEMANTICS, varDecl, "'defvar' takes a name or name and type" );
     }
 }
 
-void Compiler::AddGlobalData( U32 offset, Element* valueElem )
+void Compiler::VisitVarDecl( VarDecl* varDecl )
+{
+    GenerateDefvar( varDecl, Config(), Status() );
+}
+
+void Compiler::AddGlobalData( U32 offset, Syntax* valueElem )
 {
     mGlobals[offset] = GetElementValue( valueElem, "Globals must be initialized with constant data" );
 }
 
-void Compiler::AddGlobalDataArray( Storage* global, Element* valueElem, size_t size )
+void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size )
 {
-    if ( valueElem->Code != Elem_Slist )
-        ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+    if ( valueElem->Kind != SyntaxKind::Elem_Slist )
+        ThrowErrorSyntax( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
     size_t i = 0;
-    bool foundExtra = false;
 
-    for ( auto& entry : ((Slist*) valueElem)->Elements )
+    auto initList = (InitList*) valueElem;
+
+    for ( auto& entry : initList->Values )
     {
-        if ( foundExtra )
-            ThrowError( CERR_SEMANTICS, entry.get(), "&extra must be last array initializer" );
+        if ( i == size )
+            ThrowErrorSyntax( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
 
-        if ( entry->Code == Elem_Symbol && ((Symbol*) entry.get())->String == "&extra" )
-        {
-            foundExtra = true;
-        }
-        else
-        {
-            if ( i == size )
-                ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
-
-            AddGlobalData( global->Offset + i, entry.get() );
-            i++;
-        }
+        AddGlobalData( global->Offset + i, entry.get() );
+        i++;
     }
 
     I32 prevValue = 0;
     I32 step = 0;
 
-    if ( foundExtra )
+    if ( initList->HasExtra )
     {
         if ( i >= 1 )
             prevValue = mGlobals[global->Offset + i - 1];
@@ -1998,36 +1941,25 @@ void Compiler::GenerateLambdas()
         sprintf_s( name, "$Lambda$%d", i );
         Function* func = AddFunc( name, address );
 
-        GenerateProc( it->Definition, 1, func );
+        GenerateProc( it->Definition, func );
     }
 }
 
-void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
+void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
 {
-    assert( (size_t) startIndex < list->Elements.size() );
-
     mInFunc = true;
     mCurFunc = func;
-
-    const size_t ArgsIndex = startIndex;
-    const size_t BodyIndex = startIndex + 1;
 
     SymTable argTable;
 
     mSymStack.push_back( &argTable );
 
-    if ( list->Elements[ArgsIndex]->Code != Elem_Slist )
-        ThrowError( CERR_SEMANTICS, list->Elements[ArgsIndex].get(), "function parameter list is missing" );
-
-    Slist* arglist = (Slist*) list->Elements[ArgsIndex].get();
-
-    for ( size_t i = 0; i < arglist->Elements.size(); i++ )
+    for ( auto& parameter : procDecl->Params )
     {
-        if ( arglist->Elements[i]->Code != Elem_Symbol )
-            ThrowError( CERR_UNSUPPORTED, arglist->Elements[i].get(), "only simple parameters are supported" );
+        if ( parameter->TypeRef != nullptr )
+            ThrowErrorSyntax( CERR_UNSUPPORTED, parameter->TypeRef.get(), "only simple parameters are supported" );
 
-        Symbol* argSym = (Symbol*) arglist->Elements[i].get();
-        AddArg( argTable, argSym->String, argTable.size() );
+        AddArg( argTable, parameter->Name, argTable.size() );
 
         func->ArgCount++;
     }
@@ -2049,8 +1981,14 @@ void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
     mMaxExprDepth = 0;
     mLocalAddrRefs.clear();
 
+    GenConfig config = GenConfig::Statement();
     GenStatus status = { Expr_Other };
-    GenerateImplicitProgn( list, BodyIndex, GenConfig::Statement(), status );
+
+    mGenStack.push_back( { config, status } );
+
+    procDecl->Body.Accept( this );
+
+    mGenStack.pop_back();
 
     if ( !status.tailRet )
     {
@@ -2101,16 +2039,16 @@ void Compiler::GenerateProc( Slist* list, int startIndex, Function* func )
     mInFunc = false;
 }
 
-void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateImplicitProgn( StatementList* stmtList, const GenConfig& config, GenStatus& status )
 {
-    for ( size_t i = startIndex; i < list->Elements.size() - 1; i++ )
+    for ( int i = 0; i < (int) stmtList->Statements.size() - 1; i++ )
     {
-        GenerateDiscard( list->Elements[i].get() );
+        GenerateDiscard( stmtList->Statements[i].get() );
     }
 
-    if ( list->Elements.size() > (size_t) startIndex )
+    if ( stmtList->Statements.size() >= 1 )
     {
-        Generate( list->Elements.back().get(), config, status );
+        Generate( stmtList->Statements.back().get(), config, status );
     }
     else    // There are no expressions
     {
@@ -2129,16 +2067,25 @@ void Compiler::GenerateImplicitProgn( Slist* list, int startIndex, const GenConf
     }
 }
 
-void Compiler::GenerateStatements( Slist* list, size_t startIndex, const GenConfig& config, GenStatus& status )
+void Compiler::VisitStatementList( StatementList* stmtList )
+{
+    GenerateImplicitProgn( stmtList, Config(), Status() );
+}
+
+#if 0
+
+void Compiler::GenerateStatements( Slist* list, const GenConfig& config, GenStatus& status )
 {
     GenerateStatements( list, startIndex, list->Elements.size(), config, status );
 }
 
-void Compiler::GenerateStatements( Slist* list, size_t startIndex, size_t endIndex, const GenConfig& config, GenStatus& status )
+#endif
+
+void Compiler::GenerateStatements( StatementList* list, const GenConfig& config, GenStatus& status )
 {
-    for ( size_t i = startIndex; i < endIndex; i++ )
+    for ( auto& node : list->Statements )
     {
-        GenerateDiscard( list->Elements[i].get(), config );
+        GenerateDiscard( node.get(), config );
     }
 }
 
@@ -2158,6 +2105,8 @@ void Compiler::GenerateNilIfNeeded( const GenConfig& config, GenStatus& status )
     }
 }
 
+#if 0
+
 void Compiler::MatchSymbol( Element* elem, const char* name, const char* message )
 {
     if ( elem->Code != Elem_Symbol || 0 != strcmp( name, ((Symbol*) elem)->String.c_str() ) )
@@ -2167,6 +2116,20 @@ void Compiler::MatchSymbol( Element* elem, const char* name, const char* message
         else
             ThrowError( CERR_SEMANTICS, elem, message );
     }
+}
+
+#endif
+
+const Compiler::GenConfig& Compiler::Config() const
+{
+    assert( mGenStack.size() >= 1 );
+    return mGenStack.back().config;
+}
+
+Compiler::GenStatus& Compiler::Status()
+{
+    assert( mGenStack.size() >= 1 );
+    return mGenStack.back().status;
 }
 
 void Compiler::GenerateSentinel()
@@ -2292,36 +2255,27 @@ void Compiler::MakeStdEnv()
     AddConst( "true", 1 );
 }
 
-void Compiler::CollectFunctionForwards( Slist* program )
+void Compiler::CollectFunctionForwards( Unit* program )
 {
-    for ( auto& elem : program->Elements )
+    for ( auto& elem : program->FuncDeclarations )
     {
-        if ( elem->Code == Elem_Slist )
-        {
-            auto listElem = (Slist*) elem.get();
+        auto funcDecl = (ProcDecl*) elem.get();
 
-            if ( listElem->Elements.size() >= 2
-                && listElem->Elements[0]->Code == Elem_Symbol
-                && ((Symbol*) listElem->Elements[0].get())->String == "defun"
-                && listElem->Elements[1]->Code == Elem_Symbol )
-            {
-                Function* func = AddForward( ((Symbol*) listElem->Elements[1].get())->String );
-                mForwards++;
-            }
-        }
+        AddForward( funcDecl->Name );
+        mForwards++;
     }
 }
 
-std::optional<I32> Compiler::GetOptionalElementValue( Element* elem )
+std::optional<I32> Compiler::GetOptionalElementValue( Syntax* elem )
 {
-    if ( elem->Code == Elem_Number )
+    if ( elem->Kind == SyntaxKind::Elem_Number )
     {
-        auto number = (Number*) elem;
+        auto number = (NumberExpr*) elem;
         return number->Value;
     }
-    else if ( elem->Code == Elem_Symbol )
+    else if ( elem->Kind == SyntaxKind::Elem_Symbol )
     {
-        Declaration* decl = FindSymbol( ((Symbol*) elem)->String );
+        Declaration* decl = FindSymbol( ((NameExpr*) elem)->String );
 
         if ( decl != nullptr && decl->Kind == Decl_Const )
         {
@@ -2333,7 +2287,7 @@ std::optional<I32> Compiler::GetOptionalElementValue( Element* elem )
     return std::optional<I32>();
 }
 
-I32 Compiler::GetElementValue( Element* elem, const char* message )
+I32 Compiler::GetElementValue( Syntax* elem, const char* message )
 {
     auto optValue = GetOptionalElementValue( elem );
 
@@ -2341,9 +2295,9 @@ I32 Compiler::GetElementValue( Element* elem, const char* message )
         return optValue.value();
 
     if ( message != nullptr )
-        ThrowError( CERR_SEMANTICS, elem, message );
+        ThrowErrorSyntax( CERR_SEMANTICS, elem, message );
     else
-        ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
+        ThrowErrorSyntax( CERR_SEMANTICS, elem, "Expected a constant value" );
 }
 
 void Compiler::IncreaseExprDepth()
@@ -2451,6 +2405,14 @@ void Compiler::CalculateStackDepth( Function* func )
     func->IsDepthKnown = true;
     func->CallDepth = 1 + maxChildDepth;
     func->TreeStackUsage = func->IndividualStackUsage + maxChildStackUsage;
+}
+
+void Compiler::ThrowErrorSyntax( CompilerErr exceptionCode, Syntax* elem, const char* format, ... )
+{
+    va_list args;
+    va_start( args, format );
+    ThrowError( exceptionCode, elem->Line, elem->Column, format, args );
+    va_end( args );
 }
 
 void Compiler::ThrowError( CompilerErr exceptionCode, Element* elem, const char* format, ... )

@@ -243,7 +243,7 @@ int main( int argc, char* argv[] )
     env.AddGlobal( "@2", 2 );
     env.AddGlobal( "@3", 3 );
 
-    std::unique_ptr<Compiler::Slist> progTree;
+    std::unique_ptr<Unit> progTree;
     size_t filePathLen = strlen( filePath );
 
     if ( filePathLen > (sizeof LispyExt - 1)

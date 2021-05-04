@@ -6,11 +6,6 @@
 template <typename T>
 using Unique  = std::unique_ptr<T>;
 
-using Element = Compiler::Element;
-using Number  = Compiler::Number;
-using Symbol  = Compiler::Symbol;
-using Slist   = Compiler::Slist;
-
 
 AlgolyParser::AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog* log ) :
     mCodeTextPtr( codeText ),
@@ -418,9 +413,9 @@ bool AlgolyParser::IsStatementSeparator( TokenCode tokenCode )
         ;
 }
 
-Compiler::Slist* AlgolyParser::Parse()
+Unit* AlgolyParser::Parse()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    Unique<Unit> unit = Make<Unit>();
 
     ScanToken();
 
@@ -428,11 +423,11 @@ Compiler::Slist* AlgolyParser::Parse()
     {
         if ( mCurToken == TokenCode::Def )
         {
-            list->Elements.push_back( ParseFunction() );
+            unit->FuncDeclarations.push_back( ParseFunction() );
         }
         else if ( mCurToken == TokenCode::Var )
         {
-            list->Elements.push_back( ParseVar() );
+            unit->VarDeclarations.push_back( ParseVar() );
         }
         else
         {
@@ -442,55 +437,58 @@ Compiler::Slist* AlgolyParser::Parse()
         SkipLineSeparators();
     }
 
-    return list.release();
+    return unit.release();
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseFunction()
+Unique<ProcDecl> AlgolyParser::ParseFunction()
 {
-    auto proc = ParseProc( "defun", true );
+    auto proc = ParseProc( true );
 
     SkipLineEndings();
 
     return proc;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseLambda()
+Unique<LambdaExpr> AlgolyParser::ParseLambda()
 {
-    return ParseProc( "lambda", false );
+    Unique<LambdaExpr> lambda( Make<LambdaExpr>() );
+
+    lambda->Proc = ParseProc( false );
+
+    return lambda;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseProc( const char* head, bool hasName )
+Unique<ProcDecl> AlgolyParser::ParseProc( bool hasName )
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    Unique<ProcDecl> proc( Make<ProcDecl>() );
 
-    mCurString = head;
-    list->Elements.push_back( ParseAsSymbol() );
+    ScanToken();
 
     if ( hasName )
-        list->Elements.push_back( ParseSymbol() );
+        proc->Name = ParseRawSymbol();
 
     if ( mCurToken == TokenCode::LParen )
     {
-        list->Elements.push_back( ParseParamList() );
+        proc->Params = ParseParamList();
     }
     else
     {
-        list->Elements.push_back( MakeSlist() );
+        proc->Params = std::vector<std::unique_ptr<ParamDecl>>();
     }
 
     SkipLineSeparators();
 
-    ParseStatements( list.get() );
+    ParseStatements( proc->Body );
 
     // Read past "end"
     ScanToken( TokenCode::End );
 
-    return list;
+    return proc;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseParamList()
+std::vector<std::unique_ptr<ParamDecl>> AlgolyParser::ParseParamList()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    std::vector<std::unique_ptr<ParamDecl>> paramList;
 
     // Read past left parenthesis
     ScanToken();
@@ -511,29 +509,33 @@ Unique<Compiler::Slist> AlgolyParser::ParseParamList()
 
         first = false;
 
+        Unique<ParamDecl> param = Make<ParamDecl>();
+
         if ( mCurToken != TokenCode::Symbol )
             ThrowSyntaxError( "Expected parameter name" );
 
-        list->Elements.push_back( ParseSymbol() );
+        param->Name = ParseRawSymbol();
+
+        paramList.push_back( std::move( param ) );
     }
 
     // Read past right parenthesis
     ScanToken();
 
-    return list;
+    return paramList;
 }
 
-void AlgolyParser::ParseStatements( Slist* container )
+void AlgolyParser::ParseStatements( StatementList& container )
 {
     while ( !IsSeparatorKeyword( mCurToken ) )
     {
-        container->Elements.push_back( ParseStatement() );
+        container.Statements.push_back( ParseStatement() );
     }
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseStatement()
+Unique<Syntax> AlgolyParser::ParseStatement()
 {
-    std::unique_ptr<Element> elem;
+    std::unique_ptr<Syntax> elem;
 
     switch ( mCurToken )
     {
@@ -575,13 +577,13 @@ Unique<Compiler::Element> AlgolyParser::ParseStatement()
     return elem;
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
+Unique<Syntax> AlgolyParser::ParseExprStatement()
 {
-    std::unique_ptr<Element> expr( ParseExpr() );
+    std::unique_ptr<Syntax> expr( ParseExpr() );
 
     if ( !IsStatementSeparator( mCurToken ) )
     {
-        if ( expr->Code == Compiler::Elem_Symbol )
+        if ( expr->Kind == SyntaxKind::Elem_Symbol )
         {
             // The parsed expression was only a symbol. But there are more tokens.
             // So, parse them into arguments for a call without parentheses.
@@ -595,24 +597,22 @@ Unique<Compiler::Element> AlgolyParser::ParseExprStatement()
     }
     else
     {
-        if ( expr->Code == Compiler::Elem_Symbol )
+        if ( expr->Kind == SyntaxKind::Elem_Symbol )
         {
             // The whole statement was a symbol. It can be a variable or a call without
             // parentheses and arguments. Use eval* to disambiguate them.
 
-            std::unique_ptr<Slist> list( new Slist() );
+            Unique<CallOrSymbolExpr> eval = Make<CallOrSymbolExpr>();
 
-            list->Elements.push_back( MakeSymbol( "eval*" ) );
-            list->Elements.push_back( std::move( expr ) );
-
-            expr = std::move( list );
+            eval->Symbol = std::move( (Unique<NameExpr>&) expr );
+            expr = std::move( eval );
         }
     }
 
     return expr;
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseExpr()
+Unique<Syntax> AlgolyParser::ParseExpr()
 {
     switch ( mCurToken )
     {
@@ -677,7 +677,7 @@ bool AlgolyParser::IsTokenMultiplicativeOp()
         || mCurToken == TokenCode::Percent;
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseBinaryPart( int level )
+Unique<Syntax> AlgolyParser::ParseBinaryPart( int level )
 {
     if ( level + 1 >= _countof( AlgolyParser::sTestOpFuncs ) )
         return ParseUnary();
@@ -685,69 +685,62 @@ Unique<Compiler::Element> AlgolyParser::ParseBinaryPart( int level )
         return ParseBinary( level + 1 );
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseBinary( int level )
+Unique<Syntax> AlgolyParser::ParseBinary( int level )
 {
-    std::unique_ptr<Element> first( ParseBinaryPart( level ) );
+    std::unique_ptr<Syntax> first( ParseBinaryPart( level ) );
     TestOpFunc testOpFunc = sTestOpFuncs[level];
 
     // Left-associative
 
     while ( (this->*testOpFunc)() )
     {
-        std::unique_ptr<Slist> list = MakeSlist();
+        auto binary = Make<BinaryExpr>();
 
-        list->Elements.push_back( ParseAsSymbol() );
+        binary->Op = ParseAsRawSymbol();
 
         SkipLineEndings();
 
-        list->Elements.push_back( std::move( first ) );
-        list->Elements.push_back( ParseBinaryPart( level ) );
+        binary->Left = std::move( first );
+        binary->Right = ParseBinaryPart( level );
 
         if ( testOpFunc == &AlgolyParser::IsTokenComparisonOp && IsTokenComparisonOp() )
             ThrowSyntaxError( "Comparisons are binary only" );
 
-        first = std::move( list );
+        first = std::move( binary );
     }
 
     return first;
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseUnary()
+Unique<Syntax> AlgolyParser::ParseUnary()
 {
     if ( mCurToken == TokenCode::Minus
         || mCurToken == TokenCode::Not )
     {
-        std::unique_ptr<Slist> list( MakeSlist() );
+        auto unary = Make<UnaryExpr>();
 
-        list->Elements.push_back( ParseAsSymbol() );
-        list->Elements.push_back( ParseSingle() );
+        unary->Op = ParseAsRawSymbol();
+        unary->Inner = ParseSingle();
 
-        if ( ((Symbol*) list->Elements[0].get())->String == "-"
-            && list->Elements[1]->Code == Compiler::Elem_Number )
-        {
-            return MakeNumber( -((Number*) list->Elements[1].get())->Value );
-        }
-
-        return list;
+        return unary;
     }
     else if ( mCurToken == TokenCode::Ampersand )
     {
-        std::unique_ptr<Slist> list( MakeSlist() );
+        auto addrOf = Make<AddrOfExpr>();
 
         ScanToken();
 
-        list->Elements.push_back( MakeSymbol( "function" ) );
-        list->Elements.push_back( ParseSymbol() );
+        addrOf->Inner = ParseSymbol();
 
-        return list;
+        return addrOf;
     }
 
     return ParseSingle();
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseSingle()
+Unique<Syntax> AlgolyParser::ParseSingle()
 {
-    std::unique_ptr<Element> elem;
+    std::unique_ptr<Syntax> elem;
     bool indirect = false;
 
     // TODO: Or should we use a different syntax for indirect calls?
@@ -786,17 +779,15 @@ Unique<Compiler::Element> AlgolyParser::ParseSingle()
     return elem;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head, bool indirect, bool parens )
+Unique<Syntax> AlgolyParser::ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens )
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto call = Make<CallExpr>();
 
-    if ( head->Code == Compiler::Elem_Number )
+    if ( head->Kind == SyntaxKind::Elem_Number )
         ThrowSyntaxError( "A number cannot designate a procedure to call" );
 
-    if ( indirect )
-        list->Elements.push_back( MakeSymbol( "funcall" ) );
-
-    list->Elements.push_back( std::move( head ) );
+    call->IsIndirect = indirect;
+    call->Head = std::move( head );
 
     if ( parens )
     {
@@ -821,7 +812,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head
 
         first = false;
 
-        list->Elements.push_back( ParseExpr() );
+        call->Arguments.push_back( ParseExpr() );
 
         if ( parens )
             SkipLineEndings();
@@ -833,60 +824,50 @@ Unique<Compiler::Slist> AlgolyParser::ParseCall( std::unique_ptr<Element>&& head
         ScanToken();
     }
 
-    return list;
+    return call;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseAssignment( std::unique_ptr<Compiler::Element>&& head )
+Unique<Syntax> AlgolyParser::ParseAssignment( std::unique_ptr<Syntax>&& head )
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto assignment = Make<AssignmentExpr>();
 
-    list->Elements.push_back( MakeSymbol( "set" ) );
-
-    list->Elements.push_back( std::move( head ) );
+    assignment->Left = std::move( head );
 
     // Read past assignment operator
     ScanToken();
     SkipLineEndings();
 
-    list->Elements.push_back( ParseExpr() );
+    assignment->Right = ParseExpr();
 
-    return list;
+    return assignment;
 }
 
-Unique<Compiler::Element> AlgolyParser::ParseIndexing( std::unique_ptr<Compiler::Element>&& head )
+Unique<Syntax> AlgolyParser::ParseIndexing( std::unique_ptr<Syntax>&& head )
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto indexing = Make<IndexExpr>();
 
-    list->Elements.push_back( MakeSymbol( "aref" ) );
-    list->Elements.push_back( std::move( head ) );
+    indexing->Head = std::move( head );
 
     ScanToken();
 
-    list->Elements.push_back( ParseExpr() );
+    indexing->Index = ParseExpr();
 
     ScanToken( TokenCode::RBracket );
 
-    return list;
+    return indexing;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseLet()
+Unique<Syntax> AlgolyParser::ParseLet()
 {
-    std::unique_ptr<Slist> assignments( MakeSlist() );
+    auto letNode = Make<LetStatement>();
 
-    std::unique_ptr<Slist> list( MakeSlist() );
-
-    list->Elements.push_back( ParseAsSymbol() );
-    list->Elements.push_back( std::unique_ptr<Element>() );
-
+    ScanToken();
     SkipLineEndings();
 
     bool first = true;
 
     do
     {
-        std::unique_ptr<Slist> pair( MakeSlist() );
-        std::unique_ptr<Symbol> nameSym;
-
         if ( !first )
         {
             if ( mCurToken != TokenCode::Comma )
@@ -898,27 +879,28 @@ Unique<Compiler::Slist> AlgolyParser::ParseLet()
 
         first = false;
 
+        Unique<VarDecl> varDecl = Make<VarDecl>();
+
         if ( mCurToken != TokenCode::Symbol )
             ThrowSyntaxError( "Expected variable name" );
 
-        nameSym = ParseSymbol();
+        varDecl->Name = ParseRawSymbol();
 
         if ( mCurToken == TokenCode::Colon )
         {
-            std::unique_ptr<Slist> headList( MakeSlist() );
-            std::unique_ptr<Slist> initList( MakeSlist() );
+            auto arrayTypeRef = Make<ArrayTypeRef>();
 
             ScanToken();
             ScanToken( TokenCode::LBracket );
 
-            headList->Elements.push_back( std::move( nameSym ) );
-            headList->Elements.push_back( ParseExpr() );
+            arrayTypeRef->SizeExpr = ParseExpr();
 
             ScanToken( TokenCode::RBracket );
             ScanToken( TokenCode::EQ );
             SkipLineEndings();
             ScanToken( TokenCode::LBracket );
 
+            auto initList = Make<InitList>();
             bool firstInit = true;
 
             while ( mCurToken != TokenCode::RBracket )
@@ -926,7 +908,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseLet()
                 if ( mCurToken == TokenCode::Ellipsis )
                 {
                     ScanToken();
-                    initList->Elements.push_back( MakeSymbol( "&extra" ) );
+                    initList->HasExtra = true;
                     break;
                 }
                 else if ( !firstInit )
@@ -937,73 +919,64 @@ Unique<Compiler::Slist> AlgolyParser::ParseLet()
 
                 firstInit = false;
 
-                initList->Elements.push_back( ParseExpr() );
+                initList->Values.push_back( ParseExpr() );
             }
 
             ScanToken( TokenCode::RBracket );
 
-            pair->Elements.push_back( std::move( headList ) );
-            pair->Elements.push_back( std::move( initList ) );
+            varDecl->TypeRef = std::move( arrayTypeRef );
+            varDecl->Initializer = std::move( initList );
         }
         else
         {
             ScanToken( TokenCode::EQ );
             SkipLineEndings();
 
-            pair->Elements.push_back( std::move( nameSym ) );
-            pair->Elements.push_back( ParseExpr() );
+            varDecl->Initializer = ParseExpr();
         }
 
-        assignments->Elements.push_back( std::move( pair ) );
+        letNode->Variables.push_back( std::move( varDecl ) );
 
     } while ( mCurToken != TokenCode::Eol
         && mCurToken != TokenCode::Separator
         && mCurToken != TokenCode::End );
 
-    list->Elements[1] = std::move( assignments );
-
     SkipLineSeparators();
 
     while ( mCurToken != TokenCode::End )
     {
-        list->Elements.push_back( ParseStatement() );
+        letNode->Body.Statements.push_back( ParseStatement() );
     }
 
-    return list;
+    return letNode;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseVar()
+Unique<VarDecl> AlgolyParser::ParseVar()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
-    std::string name;
-
-    list->Elements.push_back( MakeSymbol( "defvar" ) );
+    Unique<VarDecl> varDecl = Make<VarDecl>();
 
     ScanToken();
 
     if ( mCurToken != TokenCode::Symbol )
         ThrowSyntaxError( "Expected variable name" );
 
-    name = std::move( mCurString );
-
-    ScanToken();
+    varDecl->Name = ParseRawSymbol();
 
     if ( mCurToken == TokenCode::Colon )
     {
-        std::unique_ptr<Slist> headList( MakeSlist() );
-        std::unique_ptr<Slist> initList( MakeSlist() );
+        auto arrayTypeRef = Make<ArrayTypeRef>();
 
         ScanToken();
         ScanToken( TokenCode::LBracket );
 
-        headList->Elements.push_back( MakeSymbol( name.c_str() ) );
-        headList->Elements.push_back( ParseExpr() );
+        arrayTypeRef->SizeExpr = ParseExpr();
 
         ScanToken( TokenCode::RBracket );
         ScanToken( TokenCode::Assign );
         SkipLineEndings();
         ScanToken( TokenCode::LBracket );
 
+        auto initList = Make<InitList>();
         bool first = true;
 
         while ( mCurToken != TokenCode::RBracket )
@@ -1011,7 +984,7 @@ Unique<Compiler::Slist> AlgolyParser::ParseVar()
             if ( mCurToken == TokenCode::Ellipsis )
             {
                 ScanToken();
-                initList->Elements.push_back( MakeSymbol( "&extra" ) );
+                initList->HasExtra = true;
                 break;
             }
             else if ( !first )
@@ -1022,64 +995,63 @@ Unique<Compiler::Slist> AlgolyParser::ParseVar()
 
             first = false;
 
-            initList->Elements.push_back( ParseExpr() );
+            initList->Values.push_back( ParseExpr() );
         }
 
         ScanToken( TokenCode::RBracket );
 
-        list->Elements.push_back( std::move( headList ) );
-        list->Elements.push_back( std::move( initList ) );
+        varDecl->TypeRef = std::move( arrayTypeRef );
+        varDecl->Initializer = std::move( initList );
     }
     else
     {
         ScanToken( TokenCode::Assign );
 
-        list->Elements.push_back( MakeSymbol( name.c_str() ) );
-        list->Elements.push_back( ParseExpr() );
+        varDecl->Initializer = ParseExpr();
     }
 
-    return list;
+    return varDecl;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseReturn()
+Unique<Syntax> AlgolyParser::ParseReturn()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto retStmt = Make<ReturnStatement>();
 
-    list->Elements.push_back( ParseAsSymbol() );
-    list->Elements.push_back( ParseExpr() );
+    ScanToken();
 
-    return list;
+    retStmt->Inner = ParseExpr();
+
+    return retStmt;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseIf()
+Unique<Syntax> AlgolyParser::ParseIf()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto condExpr = Make<CondExpr>();
 
-    list->Elements.push_back( MakeSymbol( "cond" ) );
-    list->Elements.push_back( ParseIfClause() );
+    condExpr->Clauses.push_back( ParseIfClause() );
 
     while ( mCurToken == TokenCode::Elsif )
     {
-        list->Elements.push_back( ParseIfClause() );
+        condExpr->Clauses.push_back( ParseIfClause() );
     }
 
     if ( mCurToken == TokenCode::Else )
     {
-        list->Elements.push_back( ParseElseClause() );
+        condExpr->Clauses.push_back( ParseElseClause() );
     }
 
     ScanToken( TokenCode::End );
 
-    return list;
+    return condExpr;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseIfClause()
+Unique<CondClause> AlgolyParser::ParseIfClause()
 {
-    std::unique_ptr<Slist> clause( MakeSlist() );
+    std::unique_ptr<CondClause> clause( new CondClause() );
 
     ScanToken();
 
-    clause->Elements.push_back( ParseExpr() );
+    clause->Condition = ParseExpr();
 
     if ( mCurToken != TokenCode::Then )
         ThrowSyntaxError( "Expected then" );
@@ -1087,140 +1059,133 @@ Unique<Compiler::Slist> AlgolyParser::ParseIfClause()
     ScanToken();
     SkipLineSeparators();
 
-    ParseStatements( clause.get() );
+    ParseStatements( clause->Body );
 
     return clause;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseElseClause()
+Unique<CondClause> AlgolyParser::ParseElseClause()
 {
-    std::unique_ptr<Slist> clause( MakeSlist() );
+    std::unique_ptr<CondClause> clause( new CondClause() );
 
     ScanToken();
     SkipLineSeparators();
 
-    clause->Elements.push_back( MakeNumber( 1 ) );
+    clause->Condition = MakeNumber( 1 );
 
-    ParseStatements( clause.get() );
+    ParseStatements( clause->Body );
 
     return clause;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseFor()
+Unique<Syntax> AlgolyParser::ParseFor()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto forStmt = Make<ForStatement>();
 
-    list->Elements.push_back( MakeSymbol( "loop" ) );
-    list->Elements.push_back( ParseAsSymbol() );
-    list->Elements.push_back( ParseSymbol() );
+    ScanToken();
+
+    forStmt->IndexName = ParseRawSymbol();
 
     ScanToken( TokenCode::Assign );
-    list->Elements.push_back( MakeSymbol( "from" ) );
-    list->Elements.push_back( ParseExpr() );
+
+    forStmt->First = ParseExpr();
 
     if ( mCurToken == TokenCode::Above
         || mCurToken == TokenCode::Below
         || mCurToken == TokenCode::Downto
         || mCurToken == TokenCode::To )
     {
-        list->Elements.push_back( ParseAsSymbol() );
+        forStmt->Comparison = ParseAsRawSymbol();
     }
     else
     {
         ThrowSyntaxError( "Expected: above, below, downto, to" );
     }
 
-    list->Elements.push_back( ParseExpr() );
+    forStmt->Last = ParseExpr();
 
     if ( mCurToken == TokenCode::By )
     {
-        list->Elements.push_back( ParseAsSymbol() );
-        list->Elements.push_back( ParseExpr() );
+        ScanToken();
+
+        forStmt->Step = ParseExpr();
     }
 
-    AssertToken( TokenCode::Do );
-    list->Elements.push_back( ParseAsSymbol() );
+    ScanToken( TokenCode::Do );
     SkipLineSeparators();
 
-    ParseStatements( list.get() );
+    ParseStatements( forStmt->Body );
 
     ScanToken( TokenCode::End );
 
-    return list;
+    return forStmt;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseLoop()
+Unique<Syntax> AlgolyParser::ParseLoop()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto loopStmt = Make<LoopStatement>();
 
     ScanToken();
     SkipLineSeparators();
 
-    list->Elements.push_back( MakeSymbol( "loop" ) );
-    list->Elements.push_back( MakeSymbol( "do" ) );
-    ParseStatements( list.get() );
+    ParseStatements( loopStmt->Body );
 
     if ( mCurToken == TokenCode::Do )
     {
         ScanToken();
         ScanToken( TokenCode::While );
 
-        list->Elements.push_back( MakeSymbol( "while" ) );
-        list->Elements.push_back( ParseExpr() );
+        loopStmt->Condition = ParseExpr();
     }
 
     ScanToken( TokenCode::End );
 
-    return list;
+    return loopStmt;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseWhile()
+Unique<Syntax> AlgolyParser::ParseWhile()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto whileStmt = Make<WhileStatement>();
 
     ScanToken();
-    list->Elements.push_back( MakeSymbol( "do" ) );
-    list->Elements.push_back( ParseExpr() );
+    whileStmt->Condition = ParseExpr();
     ScanToken( TokenCode::Do );
 
-    ParseStatements( list.get() );
+    ParseStatements( whileStmt->Body );
 
     ScanToken( TokenCode::End );
 
-    return list;
+    return whileStmt;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseCase()
+Unique<Syntax> AlgolyParser::ParseCase()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
+    auto caseExpr = Make<CaseExpr>();
 
-    list->Elements.push_back( ParseAsSymbol() );
-    list->Elements.push_back( ParseExpr() );
+    ScanToken();
+
+    caseExpr->TestKey = ParseExpr();
 
     SkipLineSeparators();
 
     while ( mCurToken == TokenCode::When )
     {
-        list->Elements.push_back( ParseCaseWhen() );
+        caseExpr->Clauses.push_back( ParseCaseWhen() );
     }
 
     if ( mCurToken == TokenCode::Else )
     {
-        list->Elements.push_back( ParseCaseElse() );
+        caseExpr->Fallback = ParseCaseElse();
     }
 
     ScanToken( TokenCode::End );
 
-    return list;
+    return caseExpr;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseCaseWhen()
+Unique<CaseWhen> AlgolyParser::ParseCaseWhen()
 {
-    std::unique_ptr<Slist> clause( MakeSlist() );
-
-    clause->Elements.push_back( MakeSlist() );
-
-    auto keys = (Slist*) clause->Elements[0].get();
+    std::unique_ptr<CaseWhen> clause( new CaseWhen() );
 
     ScanToken();
 
@@ -1238,11 +1203,11 @@ Unique<Compiler::Slist> AlgolyParser::ParseCaseWhen()
 
         if ( mCurToken == TokenCode::Symbol )
         {
-            keys->Elements.push_back( ParseSymbol() );
+            clause->Keys.push_back( ParseSymbol() );
         }
         else if ( mCurToken == TokenCode::Number )
         {
-            keys->Elements.push_back( ParseNumber() );
+            clause->Keys.push_back( ParseNumber() );
         }
         else
         {
@@ -1256,110 +1221,122 @@ Unique<Compiler::Slist> AlgolyParser::ParseCaseWhen()
     ScanToken();
     SkipLineSeparators();
 
-    ParseStatements( clause.get() );
+    ParseStatements( clause->Body );
 
     return clause;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseCaseElse()
+Unique<CaseElse> AlgolyParser::ParseCaseElse()
 {
-    std::unique_ptr<Slist> clause( MakeSlist() );
-
-    clause->Elements.push_back( MakeSymbol( "otherwise" ) );
+    std::unique_ptr<CaseElse> clause( new CaseElse() );
 
     ScanToken();
     SkipLineSeparators();
 
-    ParseStatements( clause.get() );
+    ParseStatements( clause->Body );
 
     return clause;
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseBreak()
+Unique<Syntax> AlgolyParser::ParseBreak()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
-
-    list->Elements.push_back( ParseAsSymbol() );
-
-    return list;
+    ScanToken();
+    return Make<BreakStatement>();
 }
 
-Unique<Compiler::Slist> AlgolyParser::ParseNext()
+Unique<Syntax> AlgolyParser::ParseNext()
 {
-    std::unique_ptr<Slist> list( MakeSlist() );
-
-    list->Elements.push_back( ParseAsSymbol() );
-
-    return list;
+    ScanToken();
+    return Make<NextStatement>();
 }
 
-Unique<Compiler::Number> AlgolyParser::ParseNumber()
+I32 AlgolyParser::ParseRawNumber()
 {
     if ( mCurToken != TokenCode::Number )
         ThrowSyntaxError( "Expected number" );
 
-    std::unique_ptr<Number> elem( WrapNumber() );
+    I32 number = mCurNumber;
+    ScanToken();
+    return number;
+}
+
+Unique<NumberExpr> AlgolyParser::ParseNumber()
+{
+    if ( mCurToken != TokenCode::Number )
+        ThrowSyntaxError( "Expected number" );
+
+    std::unique_ptr<NumberExpr> elem( WrapNumber() );
     ScanToken();
     return elem;
 }
 
-Unique<Compiler::Symbol> AlgolyParser::ParseSymbol()
+std::string AlgolyParser::ParseRawSymbol()
 {
     if ( mCurToken != TokenCode::Symbol )
         ThrowSyntaxError( "Expected symbol" );
 
-    std::unique_ptr<Symbol> elem( WrapSymbol() );
+    std::string symbol = std::move( mCurString );
+    ScanToken();
+    return symbol;
+}
+
+Unique<NameExpr> AlgolyParser::ParseSymbol()
+{
+    if ( mCurToken != TokenCode::Symbol )
+        ThrowSyntaxError( "Expected symbol" );
+
+    std::unique_ptr<NameExpr> elem( WrapSymbol() );
     ScanToken();
     return elem;
 }
 
-Unique<Compiler::Symbol> AlgolyParser::ParseAsSymbol()
+std::string AlgolyParser::ParseAsRawSymbol()
 {
     if ( mCurString.size() == 0 )
         ThrowInternalError();
 
-    std::unique_ptr<Symbol> elem( WrapSymbol() );
+    std::string symbol = std::move( mCurString );
     ScanToken();
-    return elem;
+    return symbol;
 }
 
-Unique<Compiler::Number> AlgolyParser::WrapNumber()
+Unique<NumberExpr> AlgolyParser::WrapNumber()
 {
     return MakeNumber( mCurNumber );
 }
 
-Unique<Compiler::Symbol> AlgolyParser::WrapSymbol()
+Unique<NameExpr> AlgolyParser::WrapSymbol()
 {
     return MakeSymbol( mCurString.c_str() );
 }
 
-Unique<Compiler::Number> AlgolyParser::MakeNumber( int32_t value )
+Unique<NumberExpr> AlgolyParser::MakeNumber( int32_t value )
 {
-    Number* number = new Number();
-    number->Code = Compiler::Elem_Number;
+    NumberExpr* number = new NumberExpr();
+    number->Kind = SyntaxKind::Elem_Number;
     number->Value = value;
     number->Line = mTokLine;
     number->Column = mTokCol;
-    return std::unique_ptr<Number>( number );
+    return std::unique_ptr<NumberExpr>( number );
 }
 
-Unique<Compiler::Symbol> AlgolyParser::MakeSymbol( const char* string )
+Unique<NameExpr> AlgolyParser::MakeSymbol( const char* string )
 {
-    Symbol* symbol = new Symbol();
-    symbol->Code = Compiler::Elem_Symbol;
+    NameExpr* symbol = new NameExpr();
+    symbol->Kind = SyntaxKind::Elem_Symbol;
     symbol->String = string;
     symbol->Line = mTokLine;
     symbol->Column = mTokCol;
-    return std::unique_ptr<Symbol>( symbol );
+    return std::unique_ptr<NameExpr>( symbol );
 }
 
-Unique<Compiler::Slist> AlgolyParser::MakeSlist()
+template <typename T>
+Unique<T> AlgolyParser::Make()
 {
-    Slist* list = new Slist();
-    list->Code = Compiler::Elem_Slist;
-    list->Line = mTokLine;
-    list->Column = mTokCol;
-    return std::unique_ptr<Slist>( list );
+    T* syntax = new T();
+    syntax->Line = mTokLine;
+    syntax->Column = mTokCol;
+    return std::unique_ptr<T>( syntax );
 }
 
 void AlgolyParser::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
