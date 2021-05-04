@@ -3,44 +3,16 @@
 #include "OpCodes.h"
 #include <ctype.h>
 #include <cstdarg>
-
-
-class LocalScope
-{
-    Compiler::SymTable  mLocalTable;
-    Compiler&           mCompiler;
-
-public:
-    explicit LocalScope( Compiler& compiler ) :
-        mCompiler( compiler )
-    {
-        mCompiler.mSymStack.push_back( &mLocalTable );
-        mCompiler.mCurLevelLocalCount = 0;
-    }
-
-    ~LocalScope()
-    {
-        mCompiler.mCurLocalCount -= mCompiler.mCurLevelLocalCount;
-        mCompiler.mCurLevelLocalCount = 0;
-        mCompiler.mSymStack.pop_back();
-    }
-
-    LocalScope( const LocalScope& ) = delete;
-    LocalScope& operator=( const LocalScope& ) = delete;
-};
+#include "BinderVisitor.h"
 
 
 Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex ) :
     mCodeBin( codeBin ),
     mCodeBinPtr( codeBin ),
     mCodeBinEnd( codeBin + codeBinLen ),
-    mForwards( 0 ),
     mEnv( env ),
     mLog( log ),
     mModIndex( modIndex ),
-    mCurLevelLocalCount(),
-    mCurLocalCount(),
-    mMaxLocalCount(),
     mInFunc( false ),
     mCurFunc(),
     mCurExprDepth(),
@@ -58,19 +30,15 @@ CompilerErr Compiler::Compile( Unit* progTree )
         MakeStdEnv();
         CollectFunctionForwards( progTree );
 
-        mSymStack.push_back( &mConstTable );
-        mSymStack.push_back( &mGlobalTable );
+        BinderVisitor binder( mConstTable, mGlobalTable, mEnv, mLog );
+
+        binder.Bind( progTree );
+
+        mGlobals.resize( binder.GetDataSize() );
 
         progTree->Accept( this );
 
         GenerateLambdas();
-
-        mSymStack.pop_back();
-        mSymStack.pop_back();
-
-        if ( mForwards != 0 )
-            ThrowUnresolvedFuncsError();
-
         GenerateSentinel();
     }
     catch ( CompilerException& ex )
@@ -251,84 +219,72 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
         return;
     }
 
-    auto decl = FindSymbol( symbol->String );
-    if ( decl != nullptr )
+    auto decl = symbol->Decl.get();
+
+    switch ( decl->Kind )
     {
-        switch ( decl->Kind )
+    case DeclKind::Global:
+        mCodeBinPtr[0] = OP_LDMOD;
+        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr += 2;
+        WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
+        IncreaseExprDepth();
+        break;
+
+    case DeclKind::Local:
+        mCodeBinPtr[0] = OP_LDLOC;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        IncreaseExprDepth();
+        break;
+
+    case DeclKind::Arg:
+        mCodeBinPtr[0] = OP_LDARG;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        IncreaseExprDepth();
+        break;
+
+    case DeclKind::Func:
+    case DeclKind::Forward:
+        ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
+        break;
+
+    case DeclKind::Const:
         {
-        case DeclKind::Global:
-            mCodeBinPtr[0] = OP_LDMOD;
-            mCodeBinPtr[1] = mModIndex;
-            mCodeBinPtr += 2;
-            WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
-            IncreaseExprDepth();
-            break;
-
-        case DeclKind::Local:
-            mCodeBinPtr[0] = OP_LDLOC;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            IncreaseExprDepth();
-            break;
-
-        case DeclKind::Arg:
-            mCodeBinPtr[0] = OP_LDARG;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            IncreaseExprDepth();
-            break;
-
-        case DeclKind::Func:
-        case DeclKind::Forward:
-            ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
-            break;
-
-        case DeclKind::Const:
-            {
-                std::unique_ptr<NumberExpr> number( new NumberExpr() );
-                number->Line = symbol->Line;
-                number->Column = symbol->Column;
-                number->Value = ((ConstDecl*) decl)->Value;
-                VisitNumberExpr( number.get() );
-            }
-            break;
-
-        default:
-            assert( false );
-            ThrowInternalError();
+            std::unique_ptr<NumberExpr> number( new NumberExpr() );
+            number->Line = symbol->Line;
+            number->Column = symbol->Column;
+            number->Value = ((ConstDecl*) decl)->Value;
+            VisitNumberExpr( number.get() );
         }
-    }
-    else
-    {
-        ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        break;
+
+    default:
+        assert( false );
+        ThrowInternalError();
     }
 }
 
 void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status )
 {
     auto& symbol = callOrSymbol->Symbol;
-    auto decl = FindSymbol( symbol->String );
+    auto decl = symbol->Decl.get();
 
-    if ( decl != nullptr )
+    if ( decl->Kind == DeclKind::Func || decl->Kind == DeclKind::Forward )
     {
-        if ( decl->Kind == DeclKind::Func || decl->Kind == DeclKind::Forward )
-        {
-            std::unique_ptr<CallExpr> call( new CallExpr() );
-            std::unique_ptr<NameExpr> nameExpr( new NameExpr() );
+        std::unique_ptr<CallExpr> call( new CallExpr() );
+        std::unique_ptr<NameExpr> nameExpr( new NameExpr() );
 
-            nameExpr->String = symbol->String;
-            call->Head = std::move( nameExpr );
+        nameExpr->String = symbol->String;
+        nameExpr->Decl = symbol->Decl;
+        call->Head = std::move( nameExpr );
 
-            GenerateCall( call.get(), config, status );
-        }
-        else
-        {
-            GenerateSymbol( symbol.get(), config, status );
-        }
+        GenerateCall( call.get(), config, status );
     }
     else
     {
-        ThrowError( CERR_SEMANTICS, symbol.get(), "symbol not found '%s'", symbol->String.c_str() );
+        GenerateSymbol( symbol.get(), config, status );
     }
 }
 
@@ -439,7 +395,8 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
         }
         else if ( clause->Condition->Kind == SyntaxKind::Elem_Symbol )
         {
-            auto decl = FindSymbol( ((NameExpr*) clause->Condition.get())->String );
+            auto decl = ((NameExpr*) clause->Condition.get())->Decl.get();
+
             if ( decl != nullptr && decl->Kind == DeclKind::Const && ((ConstDecl*) decl)->Value != 0 )
                 isConstantTrue = true;
         }
@@ -558,46 +515,40 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
     }
 
     auto targetSym = (NameExpr*) assignment->Left.get();
-    auto decl = FindSymbol( targetSym->String );
-    if ( decl != nullptr )
+    auto decl = targetSym->Decl.get();
+
+    switch ( decl->Kind )
     {
-        switch ( decl->Kind )
-        {
-        case DeclKind::Global:
-            mCodeBinPtr[0] = OP_STMOD;
-            mCodeBinPtr[1] = mModIndex;
-            mCodeBinPtr += 2;
-            WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
-            break;
+    case DeclKind::Global:
+        mCodeBinPtr[0] = OP_STMOD;
+        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr += 2;
+        WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
+        break;
 
-        case DeclKind::Local:
-            mCodeBinPtr[0] = OP_STLOC;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            break;
+    case DeclKind::Local:
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        break;
 
-        case DeclKind::Arg:
-            mCodeBinPtr[0] = OP_STARG;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
-            mCodeBinPtr += 2;
-            break;
+    case DeclKind::Arg:
+        mCodeBinPtr[0] = OP_STARG;
+        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr += 2;
+        break;
 
-        case DeclKind::Func:
-        case DeclKind::Forward:
-            ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
-            break;
+    case DeclKind::Func:
+    case DeclKind::Forward:
+        ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
+        break;
 
-        default:
-            assert( false );
-            ThrowInternalError();
-        }
-
-        DecreaseExprDepth();
+    default:
+        assert( false );
+        ThrowInternalError();
     }
-    else
-    {
-        ThrowError( CERR_SEMANTICS, targetSym, "symbol not found '%s'", targetSym->String.c_str() );
-    }
+
+    DecreaseExprDepth();
 }
 
 void Compiler::VisitAssignmentExpr( AssignmentExpr* assignment )
@@ -607,37 +558,15 @@ void Compiler::VisitAssignmentExpr( AssignmentExpr* assignment )
 
 void Compiler::VisitProcDecl( ProcDecl* procDecl )
 {
-    if ( mInFunc )
-        ThrowError( CERR_SEMANTICS, procDecl, "a function can't be defined inside another" );
-
     U32 addr = (mCodeBinPtr - mCodeBin);
 
-    SymTable::iterator it = mGlobalTable.find( procDecl->Name );
-    Function* func = nullptr;
+    auto func = (Function*) procDecl->Decl.get();
 
-    if ( it != mGlobalTable.end() )
-    {
-        if ( it->second->Kind == DeclKind::Forward )
-        {
-            func = (Function*) it->second.get();
-            func->Kind = DeclKind::Func;
-            func->Address = addr;
-            PatchCalls( &func->Patches, addr );
-            mForwards--;
-        }
-        else if ( it->second->Kind == DeclKind::Func )
-        {
-            ThrowError( CERR_SEMANTICS, procDecl, "the function '%s' is already defined", procDecl->Name.c_str() );
-        }
-        else
-        {
-            ThrowError( CERR_SEMANTICS, procDecl, "the symbol '%s' is already defined", procDecl->Name.c_str() );
-        }
-    }
-    else
-    {
-        func = AddFunc( procDecl->Name, addr );
-    }
+    func->Address = addr;
+
+    auto patchIt = mPatchMap.find( func->Name );
+    if ( patchIt != mPatchMap.end() )
+        PatchCalls( &patchIt->second, addr );
 
     mEnv->AddExternal( procDecl->Name, External_Bytecode, func->Address );
 
@@ -680,58 +609,21 @@ void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, Ge
         return;
     }
 
-    auto op = addrOf->Inner.get();
     U32 addr = 0;
 
-    SymTable::iterator it = mGlobalTable.find( op->String );
-    if ( it != mGlobalTable.end() )
+    auto func = (Function*) addrOf->Inner->Decl.get();
+
+    if ( func->Address != INT32_MAX )
     {
-        Function* func = (Function*) it->second.get();
-
-        if ( it->second->Kind == DeclKind::Func )
-        {
-            addr = func->Address;
-        }
-        else if ( it->second->Kind == DeclKind::Forward )
-        {
-            PushPatch( &func->Patches );
-
-            AddrRef ref = { AddrRefKind::Inst };
-            ref.InstPtr = &func->Patches.First->Inst;
-            mLocalAddrRefs.push_back( ref );
-        }
-        else
-        {
-            ThrowError( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
-        }
+        addr = func->Address;
     }
     else
     {
-        ExternalFunc external = { 0 };
+        PatchChain* chain = PushFuncPatch( func->Name );
 
-        if ( mEnv->FindExternal( op->String, &external ) )
-        {
-            if ( external.Kind == External_Bytecode )
-            {
-                // TODO:
-                ThrowError( CERR_SEMANTICS, addrOf, "Referencing external functions is not supported yet" );
-            }
-            else if ( external.Kind == External_Native )
-            {
-                ThrowError( CERR_SEMANTICS, addrOf, "Cannot reference a native function" );
-            }
-            else
-            {
-                assert( false );
-                ThrowInternalError();
-            }
-        }
-        else
-        {
-            Function* func = AddForward( op->String );
-            PushPatch( &func->Patches );
-            mForwards++;
-        }
+        AddrRef ref = { AddrRefKind::Inst };
+        ref.InstPtr = &chain->First->Inst;
+        mLocalAddrRefs.push_back( ref );
     }
 
     mCodeBinPtr[0] = OP_LDC;
@@ -778,8 +670,6 @@ void Compiler::GenerateFuncall( CallExpr* call, const GenConfig& config, GenStat
 
 void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenStatus& status )
 {
-    LocalScope localScope( *this );
-
     for ( auto& binding : letStmt->Variables )
     {
         GenerateLetBinding( binding.get() );
@@ -792,7 +682,7 @@ void Compiler::GenerateLetBinding( VarDecl* binding )
 {
     if ( binding->TypeRef == nullptr )
     {
-        Storage* local = AddLocal( binding->Name, 1 );
+        auto local = (Storage*) binding->GetDecl();
 
         if ( binding->Initializer != nullptr )
         {
@@ -807,16 +697,11 @@ void Compiler::GenerateLetBinding( VarDecl* binding )
     {
         auto type = (ArrayTypeRef*) binding->TypeRef.get();
 
-        I32 size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
-
-        if ( size <= 0 )
-            ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
-
-        auto local = AddLocal( binding->Name, size );
+        auto local = (Storage*) binding->GetDecl();
 
         if ( binding->Initializer != nullptr )
         {
-            AddLocalDataArray( local, binding->Initializer.get(), size );
+            AddLocalDataArray( local, binding->Initializer.get(), type->Size );
         }
     }
     else
@@ -905,27 +790,28 @@ void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus&
     int argCount = call->Arguments.size();
     U8 callFlags = CallFlags::Build( argCount, config.discard );
 
-    SymTable::iterator it = mGlobalTable.find( op->String );
-    if ( it != mGlobalTable.end() )
+    auto decl = call->Head->GetDecl();
+
+    if ( decl == nullptr )
     {
-        Function* func = (Function*) it->second.get();
+        ThrowInternalError( "Call head has no declaration" );
+    }
+    else if ( decl->Kind == DeclKind::Func )
+    {
+        Function* func = (Function*) decl;
         U32 addr = 0;
 
-        if ( it->second->Kind == DeclKind::Func )
+        if ( func->Address != INT32_MAX )
         {
             addr = func->Address;
         }
-        else if ( it->second->Kind == DeclKind::Forward )
-        {
-            PushPatch( &func->Patches );
-
-            AddrRef ref = { AddrRefKind::Inst };
-            ref.InstPtr = &func->Patches.First->Inst;
-            mLocalAddrRefs.push_back( ref );
-        }
         else
         {
-            ThrowError( CERR_SEMANTICS, op, "'%s' is not a function", op->String.c_str() );
+            PatchChain* chain = PushFuncPatch( func->Name );
+
+            AddrRef ref = { AddrRefKind::Inst };
+            ref.InstPtr = &chain->First->Inst;
+            mLocalAddrRefs.push_back( ref );
         }
 
         mCodeBinPtr[0] = OP_CALL;
@@ -938,57 +824,43 @@ void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus&
     }
     else
     {
-        ExternalFunc external = { 0 };
         int opCode = 0;
+        I32 id = 0;
 
-        if ( mEnv->FindExternal( op->String, &external ) )
+        if ( decl->Kind == DeclKind::ExternalFunc )
         {
-            if ( external.Kind == External_Bytecode )
-            {
-                opCode = OP_CALLM;
+            opCode = OP_CALLM;
+            id = ((ExternalFunction*) decl)->Id;
 
-                // TODO: Add this external call to the list of called functions
-            }
-            else if ( external.Kind == External_Native )
-            {
-                if ( external.Id >= 0x100 )
-                    opCode = OP_CALLNATIVE;
-                else
-                    opCode = OP_CALLNATIVE_S;
-            }
+            // TODO: Add this external call to the list of called functions
+        }
+        else if ( decl->Kind == DeclKind::NativeFunc )
+        {
+            id = ((NativeFunction*) decl)->Id;
+
+            if ( id >= 0x100 )
+                opCode = OP_CALLNATIVE;
             else
-            {
-                assert( false );
-                ThrowInternalError();
-            }
-
-            mCodeBinPtr[0] = opCode;
-            mCodeBinPtr[1] = callFlags;
-            mCodeBinPtr += 2;
-
-            if ( opCode == OP_CALLNATIVE_S )
-            {
-                *(U8*) mCodeBinPtr = (U8) external.Id;
-                mCodeBinPtr += 1;
-            }
-            else
-            {
-                WriteU32( mCodeBinPtr, external.Id );
-            }
+                opCode = OP_CALLNATIVE_S;
         }
         else
         {
-            Function* func = AddForward( op->String );
-            PushPatch( &func->Patches );
-            mForwards++;
+            assert( false );
+            ThrowInternalError();
+        }
 
-            mCodeBinPtr[0] = OP_CALL;
-            mCodeBinPtr[1] = callFlags;
-            mCodeBinPtr += 2;
-            WriteU24( mCodeBinPtr, 0 );
+        mCodeBinPtr[0] = opCode;
+        mCodeBinPtr[1] = callFlags;
+        mCodeBinPtr += 2;
 
-            if ( mInFunc )
-                mCurFunc->CalledFunctions.push_back( op->String );
+        if ( opCode == OP_CALLNATIVE_S )
+        {
+            *(U8*) mCodeBinPtr = (U8) id;
+            mCodeBinPtr += 1;
+        }
+        else
+        {
+            WriteU32( mCodeBinPtr, id );
         }
     }
 
@@ -1013,11 +885,9 @@ void Compiler::VisitCallExpr( CallExpr* call )
 
 void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenStatus& status )
 {
-    LocalScope localScope( *this );
-
     // Variable name
 
-    Storage* local = AddLocal( forStmt->IndexName, 1 );
+    auto local = (Storage*) forStmt->IndexDecl.get();
 
     int primitive;
     int step;
@@ -1235,16 +1105,13 @@ void Compiler::GenerateCase( CaseExpr* caseExpr, const GenConfig& config, GenSta
 
 void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
 {
-    LocalScope localScope( *this );
     PatchChain exitChain;
 
     const GenConfig& statementConfig = config;
 
-    if ( caseExpr->TestKey->Kind == SyntaxKind::Elem_Slist )
+    if ( caseExpr->TestKeyDecl != nullptr )
     {
-        std::unique_ptr<NameExpr> localSym( new NameExpr() );
-        localSym->String = "$testKey";
-        Storage* local = AddLocal( localSym->String, 1 );
+        auto local = (Storage*) caseExpr->TestKeyDecl.get();
 
         Generate( caseExpr->TestKey.get() );
         mCodeBinPtr[0] = OP_STLOC;
@@ -1253,6 +1120,9 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
         DecreaseExprDepth();
 
         // Replace the keyform expression with the temporary variable
+        std::unique_ptr<NameExpr> localSym( new NameExpr() );
+        localSym->String = "$testKey";
+        localSym->Decl = caseExpr->TestKeyDecl;
         caseExpr->TestKey = std::move( localSym );
     }
 
@@ -1493,6 +1363,20 @@ void Compiler::PopPatch( PatchChain* chain )
     delete link;
 }
 
+Compiler::PatchChain* Compiler::PushFuncPatch( const std::string& name )
+{
+    auto patchIt = mPatchMap.find( name );
+    if ( patchIt == mPatchMap.end() )
+    {
+        auto result = mPatchMap.insert( PatchMap::value_type( { name, PatchChain() } ) );
+        patchIt = std::move( result.first );
+    }
+
+    PushPatch( &patchIt->second );
+
+    return &patchIt->second;
+}
+
 void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
 {
     if (   trueChain->First  == nullptr
@@ -1618,7 +1502,7 @@ void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
     auto symbol = (NameExpr*) indexExpr->Head.get();
     uint32_t addrWord;
 
-    Declaration* decl = FindSymbol( symbol->String );
+    auto decl = symbol->Decl.get();
 
     if ( decl == nullptr )
     {
@@ -1679,12 +1563,9 @@ void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
 
 void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )
 {
-    if ( mInFunc )
-        ThrowError( CERR_SEMANTICS, varDecl, "'defvar' must be used outside of a function" );
-
     if ( varDecl->TypeRef == nullptr )
     {
-        auto global = AddGlobal( varDecl->Name, 1 );
+        auto global = (Storage*) varDecl->GetDecl();
 
         if ( varDecl->Initializer != nullptr )
         {
@@ -1695,16 +1576,11 @@ void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenSta
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
-        I32 size = GetElementValue( type->SizeExpr.get(), "Expected a constant array size" );
-
-        if ( size <= 0 )
-            ThrowError( CERR_SEMANTICS, type->SizeExpr.get(), "Array size must be positive" );
-
-        auto global = AddGlobal( varDecl->Name, size );
+        auto global = (Storage*) varDecl->GetDecl();
 
         if ( varDecl->Initializer != nullptr )
         {
-            AddGlobalDataArray( global, varDecl->Initializer.get(), size );
+            AddGlobalDataArray( global, varDecl->Initializer.get(), type->Size );
         }
     }
     else
@@ -1772,10 +1648,9 @@ void Compiler::GenerateLambdas()
         int addrWord = CodeAddr::Build( address, mModIndex );
         StoreU32( it->Patch, addrWord );
 
-        char name[32];
+        auto func = (Function*) it->Definition->GetDecl();
 
-        sprintf_s( name, "$Lambda$%d", i );
-        Function* func = AddFunc( name, address );
+        func->Address = address;
 
         GenerateProc( it->Definition, func );
     }
@@ -1785,20 +1660,6 @@ void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
 {
     mInFunc = true;
     mCurFunc = func;
-
-    SymTable argTable;
-
-    mSymStack.push_back( &argTable );
-
-    for ( auto& parameter : procDecl->Params )
-    {
-        if ( parameter->TypeRef != nullptr )
-            ThrowError( CERR_UNSUPPORTED, parameter->TypeRef.get(), "only simple parameters are supported" );
-
-        AddArg( argTable, parameter->Name, argTable.size() );
-
-        func->ArgCount++;
-    }
 
     constexpr uint8_t PushInstSize = 2;
 
@@ -1811,8 +1672,6 @@ void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
     pushCountPatch = mCodeBinPtr;
     mCodeBinPtr++;
 
-    mMaxLocalCount = 0;
-    mCurLocalCount = 0;
     mCurExprDepth = 0;
     mMaxExprDepth = 0;
     mLocalAddrRefs.clear();
@@ -1832,9 +1691,9 @@ void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
         mCodeBinPtr += 1;
     }
 
-    if ( mMaxLocalCount > 0 )
+    if ( func->LocalCount > 0 )
     {
-        *pushCountPatch = mMaxLocalCount;
+        *pushCountPatch = (uint8_t) func->LocalCount;
     }
     else
     {
@@ -1866,10 +1725,7 @@ void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
         }
     }
 
-    func->LocalCount = mMaxLocalCount;
     func->ExprDepth = mMaxExprDepth;
-
-    mSymStack.pop_back();
 
     mCurFunc = nullptr;
     mInFunc = false;
@@ -1954,105 +1810,19 @@ void Compiler::GenerateSentinel()
     mCodeBinPtr += SENTINEL_SIZE;
 }
 
-Compiler::Declaration* Compiler::FindSymbol( const std::string& symbol )
-{
-    for ( auto stackIt = mSymStack.rbegin(); stackIt != mSymStack.rend(); stackIt++ )
-    {
-        auto tableIt = (*stackIt)->find( symbol );
-        if ( tableIt != (*stackIt)->end() )
-            return tableIt->second.get();
-    }
-
-    int offset = 0;
-
-    if ( mEnv->FindGlobal( symbol, offset ) )
-    {
-        static Storage dummy {};
-        dummy.Kind = DeclKind::Global;
-        dummy.Offset = offset;
-        return &dummy;
-    }
-
-    return nullptr;
-}
-
-Compiler::Storage* Compiler::AddArg( SymTable& table, const std::string& name, int offset )
-{
-    auto* arg = new Storage();
-    arg->Kind = DeclKind::Arg;
-    arg->Offset = offset;
-    table.insert( SymTable::value_type( name, arg ) );
-    return arg;
-}
-
-Compiler::Function* Compiler::AddFunc( const std::string& name, int address )
-{
-    if ( mGlobalTable.find( name ) != mGlobalTable.end() )
-        ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
-
-    auto* func = new Function();
-    func->Kind = DeclKind::Func;
-    func->Name = name;
-    func->Address = address;
-    mGlobalTable.insert( SymTable::value_type( name, func ) );
-    return func;
-}
-
-Compiler::Function* Compiler::AddForward( const std::string& name )
+Function* Compiler::AddForward( const std::string& name )
 {
     auto* func = new Function();
     func->Kind = DeclKind::Forward;
     func->Name = name;
-    func->Address = 0;
+    func->Address = INT32_MAX;
     mGlobalTable.insert( SymTable::value_type( name, func ) );
     return func;
 }
 
-Compiler::Storage* Compiler::AddLocal( SymTable& table, const std::string& name, int offset )
-{
-    auto* local = new Storage();
-    local->Kind = DeclKind::Local;
-    local->Offset = offset;
-    table.insert( SymTable::value_type( name, local ) );
-    return local;
-}
-
-Compiler::Storage* Compiler::AddLocal( const std::string& name, size_t size )
-{
-    assert( size >= 1 );
-
-    auto local = AddLocal( *mSymStack.back(), name, mCurLocalCount + size - 1 );
-
-    mCurLocalCount += size;
-    mCurLevelLocalCount += size;
-
-    if ( mCurLocalCount > mMaxLocalCount )
-        mMaxLocalCount = mCurLocalCount;
-
-    if ( mMaxLocalCount > UINT8_MAX )
-        ThrowError( CERR_SEMANTICS, 0, 0, "Local exceeds capacity: %s", name.c_str() );
-
-    return local;
-}
-
-Compiler::Storage* Compiler::AddGlobal( const std::string& name, size_t size )
-{
-    if ( mGlobalTable.find( name ) != mGlobalTable.end() )
-        ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
-
-    auto* global = new Storage();
-    global->Kind = DeclKind::Global;
-    global->Offset = mGlobals.size();
-    mGlobalTable.insert( SymTable::value_type( name, global ) );
-
-    mGlobals.resize( mGlobals.size() + size, 0 );
-
-    return global;
-}
-
 // TODO: split this into standard constants that go in constant table and other constants that go in global table
 
-Compiler::ConstDecl* Compiler::AddConst( const std::string& name, int value )
+ConstDecl* Compiler::AddConst( const std::string& name, int value )
 {
     auto* constant = new ConstDecl();
     constant->Kind = DeclKind::Const;
@@ -2074,7 +1844,6 @@ void Compiler::CollectFunctionForwards( Unit* program )
         auto funcDecl = (ProcDecl*) elem.get();
 
         AddForward( funcDecl->Name );
-        mForwards++;
     }
 }
 
@@ -2087,7 +1856,7 @@ std::optional<I32> Compiler::GetOptionalElementValue( Syntax* elem )
     }
     else if ( elem->Kind == SyntaxKind::Elem_Symbol )
     {
-        Declaration* decl = FindSymbol( ((NameExpr*) elem)->String );
+        auto decl = ((NameExpr*) elem)->Decl.get();
 
         if ( decl != nullptr && decl->Kind == DeclKind::Const )
         {
@@ -2223,7 +1992,14 @@ void Compiler::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* 
 {
     va_list args;
     va_start( args, format );
-    ThrowError( exceptionCode, elem->Line, elem->Column, format, args );
+    int line = 0;
+    int column = 0;
+    if ( elem != nullptr )
+    {
+        line = elem->Line;
+        column = elem->Column;
+    }
+    ThrowError( exceptionCode, line, column, format, args );
     va_end( args );
 }
 
@@ -2244,25 +2020,6 @@ void Compiler::ThrowInternalError( const char* format, ... )
     va_start( args, format );
     ThrowError( CERR_INTERNAL, 0, 0, format, args );
     va_end( args );
-}
-
-void Compiler::ThrowUnresolvedFuncsError()
-{
-    if ( mLog != nullptr )
-    {
-        char msg[256] = "";
-
-        for ( auto it = mGlobalTable.begin(); it != mGlobalTable.end(); it++ )
-        {
-            if ( it->second->Kind == DeclKind::Forward )
-            {
-                sprintf_s( msg, "unresolved function: %s", it->first.c_str() );
-                mLog->Add( LOG_ERROR, 0, 0, msg );
-            }
-        }
-    }
-
-    ThrowError( CERR_SEMANTICS, nullptr, "there are %d unresolved functions", mForwards );
 }
 
 void Compiler::Log( LogCategory category, int line, int col, const char* format, va_list args )

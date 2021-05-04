@@ -471,10 +471,6 @@ Unique<ProcDecl> AlgolyParser::ParseProc( bool hasName )
     {
         proc->Params = ParseParamList();
     }
-    else
-    {
-        proc->Params = std::vector<std::unique_ptr<ParamDecl>>();
-    }
 
     SkipLineSeparators();
 

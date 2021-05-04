@@ -17,6 +17,8 @@ class IVisitor;
 
 class ProcDecl;
 
+struct Declaration;
+
 
 class Syntax
 {
@@ -27,6 +29,7 @@ public:
 
     virtual ~Syntax() {}
     virtual void Accept( IVisitor* visitor ) = 0;
+    virtual Declaration* GetDecl();
 };
 
 class StatementList : public Syntax
@@ -40,6 +43,7 @@ public:
 class NameExpr : public Syntax
 {
 public:
+    std::shared_ptr<Declaration> Decl;
     std::string String;
 
     NameExpr()
@@ -60,6 +64,7 @@ public:
     }
 
     virtual void Accept( IVisitor* visitor ) override;
+    virtual Declaration* GetDecl() override;
 };
 
 class NumberExpr : public Syntax
@@ -89,6 +94,8 @@ public:
 class ArrayTypeRef : public TypeRef
 {
 public:
+    int32_t Size;
+
     std::unique_ptr<Syntax> SizeExpr;
 
     virtual void Accept( IVisitor* visitor ) override;
@@ -107,11 +114,14 @@ public:
 class VarDecl : public Syntax
 {
 public:
+    std::shared_ptr<Declaration> Decl;
+
     std::string Name;
     std::unique_ptr<TypeRef> TypeRef;
     std::unique_ptr<Syntax> Initializer;
 
     virtual void Accept( IVisitor* visitor ) override;
+    virtual Declaration* GetDecl() override;
 };
 
 class LambdaExpr : public Syntax
@@ -156,6 +166,8 @@ public:
     std::unique_ptr<Syntax> TestKey;
     std::unique_ptr<CaseElse> Fallback;
     std::vector<std::unique_ptr<CaseWhen>> Clauses;
+
+    std::shared_ptr<Declaration> TestKeyDecl;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -250,6 +262,8 @@ public:
     std::unique_ptr<Syntax> Step;
     StatementList Body;
 
+    std::shared_ptr<Declaration> IndexDecl;
+
     virtual void Accept( IVisitor* visitor ) override;
 };
 
@@ -286,20 +300,28 @@ public:
 class ParamDecl : public Syntax
 {
 public:
+    std::shared_ptr<Declaration> Decl;
     std::string Name;
     std::unique_ptr<TypeRef> TypeRef;
 
     virtual void Accept( IVisitor* visitor ) override;
+    virtual Declaration* GetDecl() override;
 };
 
 class ProcDecl : public Syntax
 {
 public:
+    constexpr static int16_t MaxArgs = 127;
+    constexpr static int16_t MaxLocals = 127;
+
+    std::shared_ptr<Declaration> Decl;
+
     std::string Name;
     std::vector<std::unique_ptr<ParamDecl>> Params;
     StatementList Body;
 
     virtual void Accept( IVisitor* visitor ) override;
+    virtual Declaration* GetDecl() override;
 };
 
 class Unit : public Syntax
@@ -311,6 +333,10 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
+
+//----------------------------------------------------------------------------
+//  Visitors
+//----------------------------------------------------------------------------
 
 class IVisitor
 {
@@ -341,4 +367,68 @@ public:
     virtual void VisitUnit( Unit* unit ) = 0;
     virtual void VisitVarDecl( VarDecl* varDecl ) = 0;
     virtual void VisitWhileStatement( WhileStatement* whileStmt ) = 0;
+};
+
+
+//----------------------------------------------------------------------------
+//  Declarations
+//----------------------------------------------------------------------------
+
+enum class DeclKind
+{
+    Const,
+    Global,
+    Local,
+    Arg,
+    Func,
+    Forward,
+    ExternalFunc,
+    NativeFunc,
+};
+
+struct Declaration
+{
+    DeclKind  Kind;
+    virtual ~Declaration() { }
+};
+
+struct ConstDecl : public Declaration
+{
+    int Value;
+};
+
+struct Storage : public Declaration
+{
+    int Offset;
+};
+
+struct Function : public Declaration
+{
+    std::string Name;
+    int         Address;
+
+    int16_t     LocalCount;
+    int16_t     ArgCount;
+    int16_t     ExprDepth;
+
+    int16_t     CallDepth;
+    int16_t     IndividualStackUsage;
+    int16_t     TreeStackUsage;
+
+    bool        IsCalculating;
+    bool        IsRecursive;
+    bool        IsDepthKnown;
+    bool        CallsIndirectly;
+
+    std::list<std::string> CalledFunctions;
+};
+
+struct ExternalFunction : public Declaration
+{
+    int32_t Id;
+};
+
+struct NativeFunction : public Declaration
+{
+    int32_t Id;
 };

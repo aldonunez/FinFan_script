@@ -85,6 +85,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AlgolyParser.h" />
+    <ClInclude Include="BinderVisitor.h" />
     <ClInclude Include="Compiler.h" />
     <ClInclude Include="Disassembler.h" />
     <ClInclude Include="GeminiCommon.h" />
@@ -97,6 +98,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AlgolyParser.cpp" />
+    <ClCompile Include="BinderVisitor.cpp" />
     <ClCompile Include="Compiler.cpp" />
     <ClCompile Include="Disassembler.cpp" />
     <ClCompile Include="Gemini.cpp" />

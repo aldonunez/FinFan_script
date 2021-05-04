@@ -2,6 +2,32 @@
 #include "Syntax.h"
 
 
+Declaration* Syntax::GetDecl()
+{
+    return nullptr;
+}
+
+Declaration* NameExpr::GetDecl()
+{
+    return Decl.get();
+}
+
+Declaration* ParamDecl::GetDecl()
+{
+    return Decl.get();
+}
+
+Declaration* ProcDecl::GetDecl()
+{
+    return Decl.get();
+}
+
+Declaration* VarDecl::GetDecl()
+{
+    return Decl.get();
+}
+
+
 void AddrOfExpr::Accept( IVisitor* visitor )
 {
     visitor->VisitAddrOfExpr( this );

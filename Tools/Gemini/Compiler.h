@@ -68,6 +68,7 @@ struct CompilerStats
     CallStats   Static;
 };
 
+
 class LocalScope;
 
 
@@ -89,9 +90,6 @@ public:
             return mError;
         }
     };
-
-private:
-    friend class LocalScope;
 
     struct InstPatch
     {
@@ -119,54 +117,10 @@ private:
         }
     };
 
-    enum class DeclKind
-    {
-        Const,
-        Global,
-        Local,
-        Arg,
-        Func,
-        Forward,
-    };
+    using SymTable = std::map<std::string, std::shared_ptr<Declaration>>;
+    using PatchMap = std::map<std::string, PatchChain>;
 
-    struct Declaration
-    {
-        DeclKind  Kind;
-        virtual ~Declaration() { }
-    };
-
-    struct ConstDecl : public Declaration
-    {
-        int Value;
-    };
-
-    struct Storage : public Declaration
-    {
-        int Offset;
-    };
-
-    struct Function : public Declaration
-    {
-        std::string Name;
-        int         Address;
-        PatchChain  Patches;
-
-        int16_t     LocalCount;
-        int16_t     ArgCount;
-        int16_t     ExprDepth;
-
-        int16_t     CallDepth;
-        int16_t     IndividualStackUsage;
-        int16_t     TreeStackUsage;
-
-        bool        IsCalculating;
-        bool        IsRecursive;
-        bool        IsDepthKnown;
-        bool        CallsIndirectly;
-
-        std::list<std::string> CalledFunctions;
-    };
-
+private:
     struct DeferredLambda
     {
         ProcDecl*   Definition;
@@ -272,8 +226,6 @@ private:
         ConjClauseGenerator NegativeGenerator;
     };
 
-    typedef std::map<std::string, std::unique_ptr<Declaration>> SymTable;
-    typedef std::vector<SymTable*> SymStack;
     typedef std::vector<DeferredLambda> LambdaVec;
     typedef std::vector<AddrRef> AddrRefVec;
 
@@ -292,13 +244,9 @@ private:
 
     SymTable        mConstTable;
     SymTable        mGlobalTable;
-    SymStack        mSymStack;
+    PatchMap        mPatchMap;
     LambdaVec       mLambdas;
     AddrRefVec      mLocalAddrRefs;
-    int             mCurLevelLocalCount;
-    int             mCurLocalCount;
-    int             mMaxLocalCount;
-    int             mForwards;
     bool            mInFunc;
     Function*       mCurFunc;
     int16_t         mCurExprDepth;
@@ -399,14 +347,9 @@ private:
     void PatchCalls( PatchChain* chain, U32 addr );
     void PushPatch( PatchChain* chain );
     void PopPatch( PatchChain* chain );
+    PatchChain* PushFuncPatch( const std::string& name );
 
     // Symbol table
-    Declaration* FindSymbol( const std::string& symbol );
-    Storage* AddArg( SymTable& table, const std::string& name, int offset );
-    Storage* AddLocal( SymTable& table, const std::string& name, int offset );
-    Storage* AddLocal( const std::string& name, size_t size );
-    Storage* AddGlobal( const std::string& name, size_t size );
-    Function* AddFunc( const std::string& name, int address );
     Function* AddForward( const std::string& name );
     ConstDecl* AddConst( const std::string& name, int value );
     void MakeStdEnv();
@@ -425,7 +368,6 @@ private:
     [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
     [[noreturn]] void ThrowInternalError();
     [[noreturn]] void ThrowInternalError( const char* format, ... );
-    [[noreturn]] void ThrowUnresolvedFuncsError();
 
     void Log( LogCategory category, int line, int col, const char* format, va_list args );
     void LogWarning( int line, int col, const char* format, ... );
