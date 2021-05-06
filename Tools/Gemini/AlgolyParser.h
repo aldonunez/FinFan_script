@@ -122,7 +122,6 @@ private:
     Unique<ProcDecl> ParseProc( bool hasName );
     std::vector<std::unique_ptr<ParamDecl>> ParseParamList();
     Unique<Syntax> ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens = true );
-    Unique<Syntax> ParseAssignment( std::unique_ptr<Syntax>&& head );
     Unique<Syntax> ParseLet();
 
     void ParseGlobalVars( Unit* unit );
@@ -144,6 +143,7 @@ private:
     Unique<Syntax> ParseStatement();
     Unique<Syntax> ParseExprStatement();
     Unique<Syntax> ParseExpr();
+    Unique<Syntax> ParseAssignment();
     Unique<Syntax> ParseBinaryPart( int level );
     Unique<Syntax> ParseBinary( int level );
     Unique<Syntax> ParseUnary();

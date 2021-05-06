@@ -623,8 +623,36 @@ Unique<Syntax> AlgolyParser::ParseExpr()
         return ParseCase();
 
     default:
-        return ParseBinary( 0 );
+        return ParseAssignment();
     }
+}
+
+Unique<Syntax> AlgolyParser::ParseAssignment()
+{
+    Unique<Syntax> first = ParseBinary( 0 );
+
+    if ( mCurToken == TokenCode::Assign )
+    {
+        if ( first->Kind != SyntaxKind::Name
+            && first->Kind != SyntaxKind::Index )
+        {
+            mRep.ThrowError( CERR_SYNTAX, first.get(), "Left side of assignment must be modifiable" );
+        }
+
+        auto assignment = Make<AssignmentExpr>();
+
+        assignment->Left = std::move( first );
+
+        // Read past assignment operator
+        ScanToken();
+        SkipLineEndings();
+
+        assignment->Right = ParseExpr();
+
+        return assignment;
+    }
+
+    return first;
 }
 
 const AlgolyParser::TestOpFunc AlgolyParser::sTestOpFuncs[] =
@@ -768,10 +796,6 @@ Unique<Syntax> AlgolyParser::ParseSingle()
     {
         return ParseCall( std::move( elem ), indirect );
     }
-    else if ( mCurToken == TokenCode::Assign )
-    {
-        return ParseAssignment( std::move( elem ) );
-    }
 
     return elem;
 }
@@ -822,21 +846,6 @@ Unique<Syntax> AlgolyParser::ParseCall( std::unique_ptr<Syntax>&& head, bool ind
     }
 
     return call;
-}
-
-Unique<Syntax> AlgolyParser::ParseAssignment( std::unique_ptr<Syntax>&& head )
-{
-    auto assignment = Make<AssignmentExpr>();
-
-    assignment->Left = std::move( head );
-
-    // Read past assignment operator
-    ScanToken();
-    SkipLineEndings();
-
-    assignment->Right = ParseExpr();
-
-    return assignment;
 }
 
 Unique<Syntax> AlgolyParser::ParseIndexing( std::unique_ptr<Syntax>&& head )

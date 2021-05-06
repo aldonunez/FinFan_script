@@ -519,7 +519,7 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
         IncreaseExprDepth();
     }
 
-    if ( assignment->Left->Kind != SyntaxKind::Name )
+    if ( assignment->Left->Kind == SyntaxKind::Index )
     {
         auto indexExpr = (IndexExpr*) assignment->Left.get();
 
@@ -558,7 +558,13 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
 
     case DeclKind::Func:
     case DeclKind::Forward:
+    case DeclKind::ExternalFunc:
+    case DeclKind::NativeFunc:
         mRep.ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
+        break;
+
+    case DeclKind::Const:
+        mRep.ThrowError( CERR_SEMANTICS, targetSym, "Constants can't be changed" );
         break;
 
     default:
@@ -1544,7 +1550,7 @@ void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
             break;
 
         default:
-            mRep.ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals" );
+            mRep.ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals and locals" );
         }
     }
 
@@ -1767,18 +1773,7 @@ void Compiler::GenerateImplicitProgn( StatementList* stmtList, const GenConfig& 
     }
     else    // There are no expressions
     {
-        if ( config.discard )
-        {
-            status.discarded = true;
-        }
-        else
-        {
-            mCodeBinPtr[0] = OP_LDC_S;
-            mCodeBinPtr[1] = 0;
-            mCodeBinPtr += 2;
-
-            IncreaseExprDepth();
-        }
+        GenerateNilIfNeeded( config, status );
     }
 }
 

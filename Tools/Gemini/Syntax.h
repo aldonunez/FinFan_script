@@ -9,6 +9,7 @@ enum class SyntaxKind
 {
     Number,
     Name,
+    Index,
     Other,
 };
 
@@ -46,22 +47,9 @@ public:
     std::shared_ptr<Declaration> Decl;
     std::string String;
 
-    NameExpr()
-    {
-        Kind = SyntaxKind::Name;
-    }
-
-    NameExpr( const std::string& str ) :
-        String( str )
-    {
-        Kind = SyntaxKind::Name;
-    }
-
-    NameExpr( std::string&& str ) :
-        String( str )
-    {
-        Kind = SyntaxKind::Name;
-    }
+    NameExpr();
+    NameExpr( const std::string& str );
+    NameExpr( std::string&& str );
 
     virtual void Accept( IVisitor* visitor ) override;
     virtual Declaration* GetDecl() override;
@@ -72,16 +60,8 @@ class NumberExpr : public Syntax
 public:
     int32_t Value;
 
-    NumberExpr() :
-        NumberExpr( 0 )
-    {
-    }
-
-    NumberExpr( int32_t value ) :
-        Value( value )
-    {
-        Kind = SyntaxKind::Number;
-    }
+    NumberExpr();
+    NumberExpr( int32_t value );
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -215,6 +195,8 @@ class IndexExpr : public Syntax
 public:
     std::unique_ptr<Syntax> Head;
     std::unique_ptr<Syntax> Index;
+
+    IndexExpr();
 
     virtual void Accept( IVisitor* visitor ) override;
 };

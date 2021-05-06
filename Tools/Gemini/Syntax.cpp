@@ -7,9 +7,42 @@ Declaration* Syntax::GetDecl()
     return nullptr;
 }
 
+NameExpr::NameExpr()
+{
+    Kind = SyntaxKind::Name;
+}
+
+NameExpr::NameExpr( const std::string& str ) :
+    String( str )
+{
+    Kind = SyntaxKind::Name;
+}
+
+NameExpr::NameExpr( std::string&& str ) :
+    String( str )
+{
+    Kind = SyntaxKind::Name;
+}
+
 Declaration* NameExpr::GetDecl()
 {
     return Decl.get();
+}
+
+NumberExpr::NumberExpr() :
+    NumberExpr( 0 )
+{
+}
+
+NumberExpr::NumberExpr( int32_t value ) :
+    Value( value )
+{
+    Kind = SyntaxKind::Number;
+}
+
+IndexExpr::IndexExpr()
+{
+    Kind = SyntaxKind::Index;
 }
 
 Declaration* ParamDecl::GetDecl()

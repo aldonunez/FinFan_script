@@ -120,20 +120,19 @@ void BinderVisitor::VisitBreakStatement( BreakStatement* breakStmt )
 
 void BinderVisitor::VisitCallExpr( CallExpr* call )
 {
+    call->Head->Accept( this );
+
+    if ( !call->IsIndirect )
+    {
+        auto decl = call->Head->GetDecl();
+
+        if ( decl == nullptr || !IsCallableDeclaration( decl->Kind ) )
+            mRep.ThrowError( CERR_SEMANTICS, call->Head.get(), "Expected a function" );
+    }
+
     for ( auto& arg : call->Arguments )
     {
         arg->Accept( this );
-    }
-
-    call->Head->Accept( this );
-
-    if ( !call->IsIndirect
-        && (call->Head->Kind != SyntaxKind::Name
-            || !IsCallableDeclaration( call->Head->GetDecl()->Kind )) )
-    {
-        auto nameExpr = (NameExpr*) call->Head.get();
-
-        mRep.ThrowError( CERR_SEMANTICS, nameExpr, "'%s' is not a function", nameExpr->String.c_str() );
     }
 }
 
@@ -148,7 +147,8 @@ void BinderVisitor::VisitCaseExpr( CaseExpr* caseExpr )
 
     caseExpr->TestKey->Accept( this );
 
-    if ( caseExpr->TestKey->Kind == SyntaxKind::Other )
+    if ( caseExpr->TestKey->Kind != SyntaxKind::Name
+        && caseExpr->TestKey->Kind != SyntaxKind::Number )
     {
         // TODO: remove duplicate string in Compiler
         // TODO: ideally, add the local during code generation
