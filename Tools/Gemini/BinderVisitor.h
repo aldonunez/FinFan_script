@@ -20,7 +20,6 @@ class BinderVisitor : public IVisitor
     LambdaVec       mLambdas;
     SymStack        mSymStack;
     SymTable        mExtTable;
-    SymTable&       mConstTable;
     SymTable&       mGlobalTable;
     ICompilerEnv*   mEnv;
     Reporter        mRep;
@@ -32,7 +31,6 @@ class BinderVisitor : public IVisitor
 
 public:
     BinderVisitor(
-        SymTable& constTable,
         SymTable& globalTable,
         ICompilerEnv* env,
         ICompilerLog* log );
@@ -84,6 +82,11 @@ private:
     std::shared_ptr<Storage> AddLocal( SymTable& table, const std::string& name, int offset );
     std::shared_ptr<Storage> AddLocal( const std::string& name, size_t size );
     std::shared_ptr<Storage> AddGlobal( const std::string& name, size_t size );
-    std::shared_ptr<Function> AddFunc( const std::string& name, int address );
     std::shared_ptr<Constant> AddConst( const std::string& name, int32_t value );
+    std::shared_ptr<Function> AddFunc( const std::string& name, int address );
+    std::shared_ptr<Function> AddForward( const std::string& name );
+    void CheckDuplicateGlobalSymbol( const std::string& name );
+
+    void MakeStdEnv();
+    void CollectFunctionForwards( Unit* program );
 };

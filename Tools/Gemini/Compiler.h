@@ -260,7 +260,6 @@ private:
     U8*             mCodeBinEnd;
     GlobalVec       mGlobals;
 
-    SymTable        mConstTable;
     SymTable        mGlobalTable;
     PatchMap        mPatchMap;
     LambdaVec       mLambdas;
@@ -370,12 +369,6 @@ private:
     void PushPatch( PatchChain* chain );
     void PopPatch( PatchChain* chain );
     PatchChain* PushFuncPatch( const std::string& name );
-
-    // Symbol table
-    Function* AddForward( const std::string& name );
-    Constant* AddConst( const std::string& name, int value );
-    void MakeStdEnv();
-    void CollectFunctionForwards( Unit* program );
 
     I32 GetElementValue( Syntax* elem, const char* message = nullptr );
     std::optional<I32> GetOptionalElementValue( Syntax* elem );

@@ -45,14 +45,19 @@ bool IsCallableDeclaration( DeclKind kind )
         || kind == DeclKind::NativeFunc;
 }
 
+bool IsVarDeclaration( DeclKind kind )
+{
+    return kind == DeclKind::Arg
+        || kind == DeclKind::Global
+        || kind == DeclKind::Local;
+}
+
 
 BinderVisitor::BinderVisitor(
-    SymTable& constTable,
     SymTable& globalTable,
     ICompilerEnv* env,
     ICompilerLog* log )
     :
-    mConstTable( constTable ),
     mGlobalTable( globalTable ),
     mEnv( env ),
     mRep( log ),
@@ -65,14 +70,15 @@ BinderVisitor::BinderVisitor(
 
 void BinderVisitor::Bind( Unit* unit )
 {
-    mSymStack.push_back( &mConstTable );
+    MakeStdEnv();
+    CollectFunctionForwards( unit );
+
     mSymStack.push_back( &mGlobalTable );
 
     unit->Accept( this );
 
     BindLambdas();
 
-    mSymStack.pop_back();
     mSymStack.pop_back();
 }
 
@@ -105,6 +111,16 @@ void BinderVisitor::VisitAssignmentExpr( AssignmentExpr* assignment )
 {
     assignment->Left->Accept( this );
     assignment->Right->Accept( this );
+
+    if ( assignment->Left->Kind == SyntaxKind::Name )
+    {
+        auto decl = assignment->Left->GetDecl();
+
+        if ( !IsVarDeclaration( decl->Kind ) )
+            mRep.ThrowError( CERR_SEMANTICS, assignment, "Left side is not a variable object" );
+    }
+
+    // An indexing expression would have checked itself already
 }
 
 void BinderVisitor::VisitBinaryExpr( BinaryExpr* binary )
@@ -229,6 +245,11 @@ void BinderVisitor::VisitIndexExpr( IndexExpr* indexExpr )
 {
     indexExpr->Head->Accept( this );
     indexExpr->Index->Accept( this );
+
+    auto decl = indexExpr->Head->GetDecl();
+
+    if ( decl == nullptr || (decl->Kind != DeclKind::Local && decl->Kind != DeclKind::Global) )
+        mRep.ThrowError( CERR_SEMANTICS, indexExpr->Head.get(), "Only named arrays can be indexed" );
 }
 
 void BinderVisitor::VisitInitList( InitList* initList )
@@ -263,9 +284,10 @@ void BinderVisitor::VisitLetStatement( LetStatement* letStmt )
 void BinderVisitor::VisitLetBinding( DataDecl* varDecl )
 {
     if ( varDecl->TypeRef != nullptr )
-    {
         varDecl->TypeRef->Accept( this );
-    }
+
+    if ( varDecl->Initializer != nullptr )
+        varDecl->Initializer->Accept( this );
 
     if ( varDecl->TypeRef == nullptr )
     {
@@ -277,9 +299,6 @@ void BinderVisitor::VisitLetBinding( DataDecl* varDecl )
 
         varDecl->Decl = AddLocal( varDecl->Name, type->Size );
     }
-
-    if ( varDecl->Initializer != nullptr )
-        varDecl->Initializer->Accept( this );
 }
 
 void BinderVisitor::VisitLoopStatement( LoopStatement* loopStmt )
@@ -441,9 +460,10 @@ void BinderVisitor::VisitUnit( Unit* unit )
 void BinderVisitor::VisitVarDecl( VarDecl* varDecl )
 {
     if ( varDecl->TypeRef != nullptr )
-    {
         varDecl->TypeRef->Accept( this );
-    }
+
+    if ( varDecl->Initializer != nullptr )
+        varDecl->Initializer->Accept( this );
 
     if ( varDecl->TypeRef == nullptr )
     {
@@ -455,9 +475,6 @@ void BinderVisitor::VisitVarDecl( VarDecl* varDecl )
 
         varDecl->Decl = AddGlobal( varDecl->Name, type->Size );
     }
-
-    if ( varDecl->Initializer != nullptr )
-        varDecl->Initializer->Accept( this );
 }
 
 void BinderVisitor::VisitWhileStatement( WhileStatement* whileStmt )
@@ -527,19 +544,6 @@ std::shared_ptr<Storage> BinderVisitor::AddArg( const std::string& name )
     return arg;
 }
 
-std::shared_ptr<Function> BinderVisitor::AddFunc( const std::string& name, int address )
-{
-    if ( mGlobalTable.find( name ) != mGlobalTable.end() )
-        mRep.ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
-
-    std::shared_ptr<Function> func( new Function() );
-    func->Kind = DeclKind::Func;
-    func->Name = name;
-    func->Address = address;
-    mGlobalTable.insert( SymTable::value_type( name, func ) );
-    return func;
-}
-
 std::shared_ptr<Storage> BinderVisitor::AddLocal( SymTable& table, const std::string& name, int offset )
 {
     std::shared_ptr<Storage> local( new Storage() );
@@ -569,8 +573,7 @@ std::shared_ptr<Storage> BinderVisitor::AddLocal( const std::string& name, size_
 
 std::shared_ptr<Storage> BinderVisitor::AddGlobal( const std::string& name, size_t size )
 {
-    if ( mGlobalTable.find( name ) != mGlobalTable.end() )
-        mRep.ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
+    CheckDuplicateGlobalSymbol( name );
 
     std::shared_ptr<Storage> global( new Storage() );
     global->Kind = DeclKind::Global;
@@ -584,9 +587,57 @@ std::shared_ptr<Storage> BinderVisitor::AddGlobal( const std::string& name, size
 
 std::shared_ptr<Constant> BinderVisitor::AddConst( const std::string& name, int32_t value )
 {
+    CheckDuplicateGlobalSymbol( name );
+
     std::shared_ptr<Constant> constant( new Constant() );
     constant->Kind = DeclKind::Const;
     constant->Value = value;
-    mConstTable.insert( SymTable::value_type( name, constant ) );
+    mGlobalTable.insert( SymTable::value_type( name, constant ) );
     return constant;
+}
+
+std::shared_ptr<Function> BinderVisitor::AddFunc( const std::string& name, int address )
+{
+    CheckDuplicateGlobalSymbol( name );
+
+    std::shared_ptr<Function> func( new Function() );
+    func->Kind = DeclKind::Func;
+    func->Name = name;
+    func->Address = address;
+    mGlobalTable.insert( SymTable::value_type( name, func ) );
+    return func;
+}
+
+std::shared_ptr<Function> BinderVisitor::AddForward( const std::string& name )
+{
+    CheckDuplicateGlobalSymbol( name );
+
+    std::shared_ptr<Function> func( new Function() );
+    func->Kind = DeclKind::Forward;
+    func->Name = name;
+    func->Address = INT32_MAX;
+    mGlobalTable.insert( SymTable::value_type( name, func ) );
+    return func;
+}
+
+void BinderVisitor::CheckDuplicateGlobalSymbol( const std::string& name )
+{
+    if ( mGlobalTable.find( name ) != mGlobalTable.end() )
+        mRep.ThrowError( CERR_SEMANTICS, nullptr, "Duplicate symbol: %s", name.c_str() );
+}
+
+void BinderVisitor::MakeStdEnv()
+{
+    AddConst( "false", 0 );
+    AddConst( "true", 1 );
+}
+
+void BinderVisitor::CollectFunctionForwards( Unit* program )
+{
+    for ( auto& elem : program->FuncDeclarations )
+    {
+        auto funcDecl = (ProcDecl*) elem.get();
+
+        AddForward( funcDecl->Name );
+    }
 }

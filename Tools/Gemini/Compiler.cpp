@@ -28,9 +28,6 @@ CompilerErr Compiler::Compile( Unit* progTree )
 {
     try
     {
-        MakeStdEnv();
-        CollectFunctionForwards( progTree );
-
         BindAttributes( progTree );
         FoldConstants( progTree );
         GenerateCode( progTree );
@@ -74,7 +71,7 @@ size_t Compiler::GetDataSize()
 
 void Compiler::BindAttributes( Unit* progTree )
 {
-    BinderVisitor binder( mConstTable, mGlobalTable, mEnv, mRep.GetLog() );
+    BinderVisitor binder( mGlobalTable, mEnv, mRep.GetLog() );
 
     binder.Bind( progTree );
 
@@ -704,10 +701,10 @@ void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenS
 
 void Compiler::GenerateLetBinding( DataDecl* binding )
 {
+    auto local = (Storage*) binding->GetDecl();
+
     if ( binding->TypeRef == nullptr )
     {
-        auto local = (Storage*) binding->GetDecl();
-
         if ( binding->Initializer != nullptr )
         {
             Generate( binding->Initializer.get() );
@@ -720,8 +717,6 @@ void Compiler::GenerateLetBinding( DataDecl* binding )
     else if ( binding->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) binding->TypeRef.get();
-
-        auto local = (Storage*) binding->GetDecl();
 
         if ( binding->Initializer != nullptr )
         {
@@ -1587,10 +1582,10 @@ void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
 
 void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )
 {
+    auto global = (Storage*) varDecl->GetDecl();
+
     if ( varDecl->TypeRef == nullptr )
     {
-        auto global = (Storage*) varDecl->GetDecl();
-
         if ( varDecl->Initializer != nullptr )
         {
             AddGlobalData( global->Offset, varDecl->Initializer.get() );
@@ -1599,8 +1594,6 @@ void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenSta
     else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
-
-        auto global = (Storage*) varDecl->GetDecl();
 
         if ( varDecl->Initializer != nullptr )
         {
@@ -1826,43 +1819,6 @@ void Compiler::GenerateSentinel()
     }
 
     mCodeBinPtr += SENTINEL_SIZE;
-}
-
-Function* Compiler::AddForward( const std::string& name )
-{
-    auto* func = new Function();
-    func->Kind = DeclKind::Forward;
-    func->Name = name;
-    func->Address = INT32_MAX;
-    mGlobalTable.insert( SymTable::value_type( name, func ) );
-    return func;
-}
-
-// TODO: split this into standard constants that go in constant table and other constants that go in global table
-
-Constant* Compiler::AddConst( const std::string& name, int value )
-{
-    auto* constant = new Constant();
-    constant->Kind = DeclKind::Const;
-    constant->Value = value;
-    mConstTable.insert( SymTable::value_type( name, constant ) );
-    return constant;
-}
-
-void Compiler::MakeStdEnv()
-{
-    AddConst( "false", 0 );
-    AddConst( "true", 1 );
-}
-
-void Compiler::CollectFunctionForwards( Unit* program )
-{
-    for ( auto& elem : program->FuncDeclarations )
-    {
-        auto funcDecl = (ProcDecl*) elem.get();
-
-        AddForward( funcDecl->Name );
-    }
 }
 
 std::optional<I32> Compiler::GetOptionalElementValue( Syntax* elem )
