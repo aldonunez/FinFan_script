@@ -524,6 +524,9 @@ std::vector<std::unique_ptr<ParamDecl>> AlgolyParser::ParseParamList()
 
 void AlgolyParser::ParseStatements( StatementList& container )
 {
+    container.Line = mTokLine;
+    container.Column = mTokCol;
+
     while ( !IsSeparatorKeyword( mCurToken ) )
     {
         container.Statements.push_back( ParseStatement() );
@@ -1015,6 +1018,7 @@ Unique<Syntax> AlgolyParser::ParseIf()
 {
     auto condExpr = Make<CondExpr>();
 
+    condExpr->IsIf = true;
     condExpr->Clauses.push_back( ParseIfClause() );
 
     while ( mCurToken == TokenCode::Elsif )

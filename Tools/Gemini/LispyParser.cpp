@@ -667,6 +667,8 @@ Unique<Syntax> LispyParser::ParseIf()
     auto condExpr = Make<CondExpr>();
     Unique<CondClause> consequence( new CondClause() );
 
+    condExpr->IsIf = true;
+
     ScanToken();
 
     consequence->Condition = ParseExpression();
@@ -910,6 +912,9 @@ Unique<Syntax> LispyParser::ParseProgn()
 
 void LispyParser::ParseImplicitProgn( StatementList& container )
 {
+    container.Line = mTokLine;
+    container.Column = mTokCol;
+
     while ( mCurToken != TokenCode::RParen )
     {
         container.Statements.push_back( ParseExpression() );

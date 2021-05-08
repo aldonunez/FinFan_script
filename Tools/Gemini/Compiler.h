@@ -118,9 +118,11 @@ public:
     struct PatchChain
     {
         InstPatch*  First;
+        U8*         PatchedPtr;
 
-        PatchChain()
-            :   First( nullptr )
+        PatchChain() :
+            First( nullptr ),
+            PatchedPtr( nullptr )
         {
         }
 
@@ -370,8 +372,7 @@ private:
     void PopPatch( PatchChain* chain );
     PatchChain* PushFuncPatch( const std::string& name );
 
-    I32 GetElementValue( Syntax* elem, const char* message = nullptr );
-    std::optional<I32> GetOptionalElementValue( Syntax* elem );
+    I32 GetSyntaxValue( Syntax* node, const char* message = nullptr );
 
     // Stack usage
     void IncreaseExprDepth();

@@ -19,7 +19,6 @@ class BinderVisitor : public IVisitor
 
     LambdaVec       mLambdas;
     SymStack        mSymStack;
-    SymTable        mExtTable;
     SymTable&       mGlobalTable;
     ICompilerEnv*   mEnv;
     Reporter        mRep;
@@ -74,7 +73,7 @@ private:
     void VisitProc( ProcDecl* procDecl );
     void VisitLetBinding( DataDecl* varDecl );
 
-    I32 GetElementValue( Syntax* elem, const char* message = nullptr );
+    I32 GetFoldedSyntaxValue( Syntax* node, const char* message = nullptr );
 
     // Symbol table
     std::shared_ptr<Declaration> FindSymbol( const std::string& symbol );

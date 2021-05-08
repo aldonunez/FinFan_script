@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -134,6 +135,7 @@ class CondExpr : public Syntax
 {
 public:
     std::vector<std::unique_ptr<CondClause>> Clauses;
+    bool IsIf = false;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -325,6 +327,8 @@ public:
 
     virtual void Accept( IVisitor* visitor ) override;
 };
+
+std::optional<int32_t> GetOptionalSyntaxValue( Syntax* node );
 
 
 //----------------------------------------------------------------------------

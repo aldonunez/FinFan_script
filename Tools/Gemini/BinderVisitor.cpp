@@ -8,7 +8,7 @@
 class LocalScope
 {
     Compiler::SymTable  mLocalTable;
-    BinderVisitor& mBinder;
+    BinderVisitor&      mBinder;
 
 public:
     explicit LocalScope( BinderVisitor& binder ) :
@@ -101,7 +101,7 @@ void BinderVisitor::VisitArrayTypeRef( ArrayTypeRef* typeRef )
 {
     typeRef->SizeExpr->Accept( this );
 
-    typeRef->Size = GetElementValue( typeRef->SizeExpr.get(), "Expected a constant array size" );
+    typeRef->Size = GetFoldedSyntaxValue( typeRef->SizeExpr.get(), "Expected a constant array size" );
 
     if ( typeRef->Size <= 0 )
         mRep.ThrowError( CERR_SEMANTICS, typeRef->SizeExpr.get(), "Array size must be positive" );
@@ -207,7 +207,7 @@ void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
         {
             constDecl->Initializer->Accept( this );
 
-            value = GetElementValue( constDecl->Initializer.get(), "Constant initializer is not constant" );
+            value = GetFoldedSyntaxValue( constDecl->Initializer.get(), "Constant initializer is not constant" );
         }
         else
         {
@@ -323,6 +323,8 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
 
         if ( mEnv->FindExternal( nameExpr->String, &external ) )
         {
+            CheckDuplicateGlobalSymbol( nameExpr->String );
+
             if ( external.Kind == External_Bytecode )
             {
                 std::shared_ptr<ExternalFunction> extFunc( new ExternalFunction() );
@@ -331,7 +333,7 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
                 extFunc->Id = external.Id;
 
                 nameExpr->Decl = extFunc;
-                mExtTable.insert( { nameExpr->String, extFunc } );
+                mGlobalTable.insert( { nameExpr->String, extFunc } );
             }
             else if ( external.Kind == External_Native )
             {
@@ -341,12 +343,16 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
                 extFunc->Id = external.Id;
 
                 nameExpr->Decl = extFunc;
-                mExtTable.insert( { nameExpr->String, extFunc } );
+                mGlobalTable.insert( { nameExpr->String, extFunc } );
             }
             else
             {
                 mRep.ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
             }
+        }
+        else
+        {
+            mRep.ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
         }
     }
 }
@@ -505,19 +511,19 @@ void BinderVisitor::BindLambdas()
 }
 
 
-I32 BinderVisitor::GetElementValue( Syntax* elem, const char* message )
+I32 BinderVisitor::GetFoldedSyntaxValue( Syntax* node, const char* message )
 {
     FolderVisitor folder( mRep.GetLog() );
 
-    auto optValue = folder.Evaluate( elem );
+    auto optValue = folder.Evaluate( node );
 
     if ( optValue.has_value() )
         return optValue.value();
 
     if ( message != nullptr )
-        mRep.ThrowError( CERR_SEMANTICS, elem, message );
+        mRep.ThrowError( CERR_SEMANTICS, node, message );
     else
-        mRep.ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
+        mRep.ThrowError( CERR_SEMANTICS, node, "Expected a constant value" );
 }
 
 

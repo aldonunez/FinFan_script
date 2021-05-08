@@ -383,9 +383,11 @@ void Compiler::VisitReturnStatement( ReturnStatement* retStmt )
 
 void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenStatus& status )
 {
+    PatchChain  falseChain;
     PatchChain  leaveChain;
     bool        foundCatchAll = false;
     int         exprDepth = mCurExprDepth;
+    U8*         startPtr = mCodeBinPtr;
 
     GenConfig statementConfig = GenConfig::Statement( config.discard )
         .WithLoop( config.breakChain, config.nextChain );
@@ -399,34 +401,16 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
 
         auto clause = condExpr->Clauses[i].get();
 
-        // TODO: make the check more general.
+        auto optVal = GetOptionalSyntaxValue( clause->Condition.get() );
 
-        bool isConstantTrue = false;
-
-        if ( clause->Condition->Kind == SyntaxKind::Number )
-        {
-            if ( ((NumberExpr*) clause->Condition.get())->Value != 0 )
-                isConstantTrue = true;
-        }
-        else if ( clause->Condition->Kind == SyntaxKind::Name )
-        {
-            auto decl = ((NameExpr*) clause->Condition.get())->Decl.get();
-
-            if ( decl != nullptr && decl->Kind == DeclKind::Const && ((Constant*) decl)->Value != 0 )
-                isConstantTrue = true;
-        }
+        bool isConstantTrue = optVal.has_value() && optVal.value() != 0;
 
         if ( isConstantTrue )
         {
-            if ( clause->Body.Statements.size() == 0 )
+            if ( clause->Body.Statements.size() == 0 && !condExpr->IsIf )
             {
-                if ( !config.discard )
-                {
-                    mCodeBinPtr[0] = OP_LDC_S;
-                    mCodeBinPtr[1] = 1;
-                    mCodeBinPtr += 2;
-                    IncreaseExprDepth();
-                }
+                GenStatus clauseStatus = { ExprKind::Other };
+                Generate( clause->Condition.get(), statementConfig, clauseStatus );
             }
             else
             {
@@ -437,7 +421,7 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
             break;
         }
 
-        if ( clause->Body.Statements.size() == 0 )
+        if ( clause->Body.Statements.size() == 0 && !condExpr->IsIf )
         {
             Generate( clause->Condition.get() );
 
@@ -457,7 +441,8 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
         else
         {
             PatchChain  trueChain;
-            PatchChain  falseChain;
+
+            falseChain = PatchChain();
 
             Generate( clause->Condition.get(), GenConfig::Expr( &trueChain, &falseChain, false ) );
             ElideTrue( &trueChain, &falseChain );
@@ -488,6 +473,16 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
             mCodeBinPtr += 2;
             IncreaseExprDepth();
         }
+    }
+
+    if ( (mCodeBinPtr - startPtr) >= BranchInst::Size
+        && mCodeBinPtr[-BranchInst::Size] == OP_B
+        && leaveChain.First != nullptr
+        && leaveChain.First->Inst == &mCodeBinPtr[-BranchInst::Size]
+        && falseChain.PatchedPtr == mCodeBinPtr )
+    {
+        mCodeBinPtr -= BranchInst::Size;
+        Patch( &falseChain );
     }
 
     Patch( &leaveChain );
@@ -769,11 +764,11 @@ void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size
 
     if ( initList->HasExtra && lastTwoElems[1] != nullptr )
     {
-        prevValue = GetElementValue( lastTwoElems[1], "Array initializer extrapolation requires a constant" );
+        prevValue = GetSyntaxValue( lastTwoElems[1], "Array initializer extrapolation requires a constant" );
 
         if ( lastTwoElems[0] != nullptr )
         {
-            auto prevValue2 = GetOptionalElementValue( lastTwoElems[0] );
+            auto prevValue2 = GetOptionalSyntaxValue( lastTwoElems[0] );
             if ( prevValue2.has_value() )
                 step = prevValue - prevValue2.value();
         }
@@ -1195,6 +1190,10 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
     {
         GenerateImplicitProgn( &caseExpr->Fallback->Body, statementConfig, status );
     }
+    else
+    {
+        GenerateNilIfNeeded( config, status );
+    }
 
     Patch( &exitChain );
 }
@@ -1448,6 +1447,8 @@ void Compiler::Patch( PatchChain* chain, U8* targetPtr )
 
         BranchInst::StoreOffset( &link->Inst[1], diff );
     }
+
+    chain->PatchedPtr = target;
 }
 
 void Compiler::PatchCalls( PatchChain* chain, U32 addr )
@@ -1613,7 +1614,7 @@ void Compiler::VisitVarDecl( VarDecl* varDecl )
 
 void Compiler::AddGlobalData( U32 offset, Syntax* valueElem )
 {
-    mGlobals[offset] = GetElementValue( valueElem, "Globals must be initialized with constant data" );
+    mGlobals[offset] = GetSyntaxValue( valueElem, "Globals must be initialized with constant data" );
 }
 
 void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size )
@@ -1821,38 +1822,17 @@ void Compiler::GenerateSentinel()
     mCodeBinPtr += SENTINEL_SIZE;
 }
 
-std::optional<I32> Compiler::GetOptionalElementValue( Syntax* elem )
+I32 Compiler::GetSyntaxValue( Syntax* node, const char* message )
 {
-    if ( elem->Kind == SyntaxKind::Number )
-    {
-        auto number = (NumberExpr*) elem;
-        return number->Value;
-    }
-    else if ( elem->Kind == SyntaxKind::Name )
-    {
-        auto decl = ((NameExpr*) elem)->Decl.get();
-
-        if ( decl != nullptr && decl->Kind == DeclKind::Const )
-        {
-            auto constant = (Constant*) decl;
-            return constant->Value;
-        }
-    }
-
-    return std::optional<I32>();
-}
-
-I32 Compiler::GetElementValue( Syntax* elem, const char* message )
-{
-    auto optValue = GetOptionalElementValue( elem );
+    auto optValue = GetOptionalSyntaxValue( node );
 
     if ( optValue.has_value() )
         return optValue.value();
 
     if ( message != nullptr )
-        mRep.ThrowError( CERR_SEMANTICS, elem, message );
+        mRep.ThrowError( CERR_SEMANTICS, node, message );
     else
-        mRep.ThrowError( CERR_SEMANTICS, elem, "Expected a constant value" );
+        mRep.ThrowError( CERR_SEMANTICS, node, "Expected a constant value" );
 }
 
 void Compiler::IncreaseExprDepth()

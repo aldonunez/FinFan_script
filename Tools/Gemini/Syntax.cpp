@@ -195,3 +195,25 @@ void WhileStatement::Accept( IVisitor* visitor )
 {
     visitor->VisitWhileStatement( this );
 }
+
+
+std::optional<int32_t> GetOptionalSyntaxValue( Syntax* node )
+{
+    if ( node->Kind == SyntaxKind::Number )
+    {
+        auto number = (NumberExpr*) node;
+        return number->Value;
+    }
+    else if ( node->Kind == SyntaxKind::Name )
+    {
+        auto decl = ((NameExpr*) node)->Decl.get();
+
+        if ( decl != nullptr && decl->Kind == DeclKind::Const )
+        {
+            auto constant = (Constant*) decl;
+            return constant->Value;
+        }
+    }
+
+    return std::optional<int32_t>();
+}
