@@ -529,8 +529,10 @@ I32 BinderVisitor::GetFoldedSyntaxValue( Syntax* node, const char* message )
 
 std::shared_ptr<Declaration> BinderVisitor::FindSymbol( const std::string& symbol )
 {
-    for ( auto table : mSymStack )
+    for ( auto stackIt = mSymStack.rbegin(); stackIt != mSymStack.rend(); stackIt++ )
     {
+        auto table = *stackIt;
+
         auto it = table->find( symbol );
         if ( it != table->end() )
             return it->second;
