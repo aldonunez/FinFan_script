@@ -20,13 +20,14 @@ class BinderVisitor : public IVisitor
     LambdaVec       mLambdas;
     SymStack        mSymStack;
     SymTable&       mGlobalTable;
-    ICompilerEnv*   mEnv;
+    ICompilerEnv*   mEnv = nullptr;
     Reporter        mRep;
 
-    int             mCurLevelLocalCount;
-    int             mCurLocalCount;
-    int             mMaxLocalCount;
-    int             mGlobalSize;
+    int             mCurLevelLocalCount = 0;
+    int             mCurLocalCount = 0;
+    int             mMaxLocalCount = 0;
+    int             mGlobalSize = 0;
+    int             mNextNativeId = 0;
 
 public:
     BinderVisitor(
@@ -56,6 +57,7 @@ public:
     virtual void VisitLetStatement( LetStatement* letStmt ) override;
     virtual void VisitLoopStatement( LoopStatement* loopStmt ) override;
     virtual void VisitNameExpr( NameExpr* nameExpr ) override;
+    virtual void VisitNativeDecl( NativeDecl* nativeDecl ) override;
     virtual void VisitNextStatement( NextStatement* nextStmt ) override;
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) override;
     virtual void VisitParamDecl( ParamDecl* paramDecl ) override;

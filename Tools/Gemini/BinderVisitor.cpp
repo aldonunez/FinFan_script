@@ -60,11 +60,7 @@ BinderVisitor::BinderVisitor(
     :
     mGlobalTable( globalTable ),
     mEnv( env ),
-    mRep( log ),
-    mCurLevelLocalCount(),
-    mCurLocalCount(),
-    mMaxLocalCount(),
-    mGlobalSize()
+    mRep( log )
 {
 }
 
@@ -319,42 +315,22 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
     }
     else
     {
-        ExternalFunc external = { 0 };
-
-        if ( mEnv->FindExternal( nameExpr->String, &external ) )
-        {
-            CheckDuplicateGlobalSymbol( nameExpr->String );
-
-            if ( external.Kind == External_Bytecode )
-            {
-                std::shared_ptr<ExternalFunction> extFunc( new ExternalFunction() );
-
-                extFunc->Kind = DeclKind::ExternalFunc;
-                extFunc->Id = external.Id;
-
-                nameExpr->Decl = extFunc;
-                mGlobalTable.insert( { nameExpr->String, extFunc } );
-            }
-            else if ( external.Kind == External_Native )
-            {
-                std::shared_ptr<NativeFunction> extFunc( new NativeFunction() );
-
-                extFunc->Kind = DeclKind::NativeFunc;
-                extFunc->Id = external.Id;
-
-                nameExpr->Decl = extFunc;
-                mGlobalTable.insert( { nameExpr->String, extFunc } );
-            }
-            else
-            {
-                mRep.ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
-            }
-        }
-        else
-        {
-            mRep.ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
-        }
+        mRep.ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
     }
+}
+
+void BinderVisitor::VisitNativeDecl( NativeDecl* nativeDecl )
+{
+    CheckDuplicateGlobalSymbol( nativeDecl->Name );
+
+    std::shared_ptr<NativeFunction> native( new NativeFunction() );
+    native->Kind = DeclKind::NativeFunc;
+    native->Id = mNextNativeId;
+    mGlobalTable.insert( SymTable::value_type( nativeDecl->Name, native ) );
+
+    mNextNativeId++;
+
+    nativeDecl->Decl = native;
 }
 
 void BinderVisitor::VisitNextStatement( NextStatement* nextStmt )
@@ -384,7 +360,7 @@ void BinderVisitor::VisitProcDecl( ProcDecl* procDecl )
     {
         if ( it->second->Kind == DeclKind::Forward )
         {
-            func = (std::shared_ptr<Function>&) it->second;
+            func = std::static_pointer_cast<Function>( it->second );
             func->Kind = DeclKind::Func;
             func->Address = INT32_MAX;
             // TODO: look for forwards another way

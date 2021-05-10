@@ -13,14 +13,7 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mCodeBinEnd( codeBin + codeBinLen ),
     mEnv( env ),
     mRep( log ),
-    mModIndex( modIndex ),
-    mInFunc( false ),
-    mCurFunc(),
-    mCurExprDepth(),
-    mMaxExprDepth(),
-    mCompiled(),
-    mCalculatedStats(),
-    mStats()
+    mModIndex( modIndex )
 {
 }
 
@@ -286,7 +279,9 @@ void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig
     auto& symbol = callOrSymbol->Symbol;
     auto decl = symbol->Decl.get();
 
-    if ( decl->Kind == DeclKind::Func || decl->Kind == DeclKind::Forward )
+    if ( decl->Kind == DeclKind::Func
+        || decl->Kind == DeclKind::Forward
+        || decl->Kind == DeclKind::NativeFunc )
     {
         std::unique_ptr<CallExpr> call( new CallExpr() );
         std::unique_ptr<NameExpr> nameExpr( new NameExpr() );
@@ -1657,6 +1652,11 @@ void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t si
 }
 
 void Compiler::VisitConstDecl( ConstDecl* constDecl )
+{
+    // Nothing
+}
+
+void Compiler::VisitNativeDecl( NativeDecl* nativeDecl )
 {
     // Nothing
 }

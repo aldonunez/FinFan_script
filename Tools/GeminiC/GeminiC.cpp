@@ -13,6 +13,60 @@
 constexpr char LispyExt[]   = ".geml";
 constexpr char AlgolyExt[]  = ".gema";
 
+constexpr char AlgolyNatives[] =
+    "native HasItem\n"
+    "native AddItem\n"
+    "native RemoveItem\n"
+    "native ShowDialog\n"
+    "native SetObjectVisible\n"
+    "native IsObjectVisible\n"
+    "native HasEventFlag\n"
+    "native SetEventFlag\n"
+    "native PlayFanfare\n"
+    "native PlayGotItem\n"
+    "native HasWorldEventFlag\n"
+    "native SetWorldEventFlag\n"
+    "native Fight\n"
+    "native FadeOut\n"
+    "native FadeIn\n"
+    "native SwapMap\n"
+    "native MakeAllObjects\n"
+    "native PlayDefaultSong\n"
+    "native UpgradeClass\n"
+    "native StartTrack\n"
+    "native Turn\n"
+    "native Pause\n"
+    "native Join\n"
+    "native PushSong\n"
+    ;
+
+constexpr char LispyNatives[] =
+    "(defnative HasItem () )\n"
+    "(defnative AddItem () )\n"
+    "(defnative RemoveItem () )\n"
+    "(defnative ShowDialog () )\n"
+    "(defnative SetObjectVisible () )\n"
+    "(defnative IsObjectVisible () )\n"
+    "(defnative HasEventFlag () )\n"
+    "(defnative SetEventFlag () )\n"
+    "(defnative PlayFanfare () )\n"
+    "(defnative PlayGotItem () )\n"
+    "(defnative HasWorldEventFlag () )\n"
+    "(defnative SetWorldEventFlag () )\n"
+    "(defnative Fight () )\n"
+    "(defnative FadeOut () )\n"
+    "(defnative FadeIn () )\n"
+    "(defnative SwapMap () )\n"
+    "(defnative MakeAllObjects () )\n"
+    "(defnative PlayDefaultSong () )\n"
+    "(defnative UpgradeClass () )\n"
+    "(defnative StartTrack () )\n"
+    "(defnative Turn () )\n"
+    "(defnative Pause () )\n"
+    "(defnative Join () )\n"
+    "(defnative PushSong () )\n"
+    ;
+
 
 class CompilerEnv : public ICompilerEnv
 {
@@ -201,7 +255,7 @@ int main( int argc, char* argv[] )
     long fileSize = ftell( file );
     fseek( file, 0, SEEK_SET );
 
-    std::vector<char> codeText( fileSize );
+    std::string codeText;
     int codeTextLen = fileSize;
     U8 codeBin[0x10000];
     int codeBinLen = sizeof codeBin;
@@ -211,32 +265,6 @@ int main( int argc, char* argv[] )
 
     CompilerEnv env;
     CompilerLog log;
-
-    // TODO: pass these to the compiler
-    env.AddExternal( "HasItem", External_Native, 0 );
-    env.AddExternal( "AddItem", External_Native, 0 );
-    env.AddExternal( "RemoveItem", External_Native, 0 );
-    env.AddExternal( "ShowDialog", External_Native, 0 );
-    env.AddExternal( "SetObjectVisible", External_Native, 0 );
-    env.AddExternal( "IsObjectVisible", External_Native, 0 );
-    env.AddExternal( "HasEventFlag", External_Native, 0 );
-    env.AddExternal( "SetEventFlag", External_Native, 0 );
-    env.AddExternal( "PlayFanfare", External_Native, 0 );
-    env.AddExternal( "PlayGotItem", External_Native, 0 );
-    env.AddExternal( "HasWorldEventFlag", External_Native, 0 );
-    env.AddExternal( "SetWorldEventFlag", External_Native, 0 );
-    env.AddExternal( "Fight", External_Native, 0 );
-    env.AddExternal( "FadeOut", External_Native, 0 );
-    env.AddExternal( "FadeIn", External_Native, 0 );
-    env.AddExternal( "SwapMap", External_Native, 0 );
-    env.AddExternal( "MakeAllObjects", External_Native, 0 );
-    env.AddExternal( "PlayDefaultSong", External_Native, 0 );
-    env.AddExternal( "UpgradeClass", External_Native, 0 );
-    env.AddExternal( "StartTrack", External_Native, 0 );
-    env.AddExternal( "Turn", External_Native, 0 );
-    env.AddExternal( "Pause", External_Native, 0 );
-    env.AddExternal( "Join", External_Native, 0 );
-    env.AddExternal( "PushSong", External_Native, 0 );
 
     env.AddGlobal( "@0", 0 );
     env.AddGlobal( "@1", 1 );
@@ -249,13 +277,17 @@ int main( int argc, char* argv[] )
     if ( filePathLen > (sizeof LispyExt - 1)
         && 0 == _stricmp( LispyExt, &filePath[filePathLen - (sizeof LispyExt - 1)] ) )
     {
-        LispyParser parser( &codeText.front(), codeTextLen, &log );
+        codeText.append( LispyNatives );
+
+        LispyParser parser( &codeText.front(), codeText.size(), &log );
         progTree.reset( parser.Parse() );
     }
     else if ( filePathLen > (sizeof AlgolyExt - 1)
         && 0 == _stricmp( AlgolyExt, &filePath[filePathLen - (sizeof AlgolyExt - 1)] ) )
     {
-        AlgolyParser parser( &codeText.front(), codeTextLen, &log );
+        codeText.append( AlgolyNatives );
+
+        AlgolyParser parser( &codeText.front(), codeText.size(), &log );
         progTree.reset( parser.Parse() );
     }
     else

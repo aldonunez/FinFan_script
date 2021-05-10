@@ -235,6 +235,11 @@ void FolderVisitor::VisitNameExpr( NameExpr* nameExpr )
     }
 }
 
+void FolderVisitor::VisitNativeDecl( NativeDecl* nativeDecl )
+{
+    // Nothing
+}
+
 void FolderVisitor::VisitNextStatement( NextStatement* nextStmt )
 {
     mLastValue.reset();

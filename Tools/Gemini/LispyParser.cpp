@@ -302,6 +302,10 @@ Unit* LispyParser::Parse()
         {
             unit->FuncDeclarations.push_back( ParseProc( true ) );
         }
+        else if ( mCurString == "defnative" )
+        {
+            unit->DataDeclarations.push_back( ParseNative() );
+        }
         else if ( mCurString == "defvar" )
         {
             unit->DataDeclarations.push_back( ParseDefvar() );
@@ -328,6 +332,19 @@ Unique<ProcDecl> LispyParser::ParseProc( bool hasName )
     if ( hasName )
         proc->Name = ScanSymbol();
 
+    proc->Params = ParseParamList();
+
+    ParseImplicitProgn( proc->Body );
+
+    ScanRParen();
+
+    return proc;
+}
+
+std::vector<std::unique_ptr<ParamDecl>> LispyParser::ParseParamList()
+{
+    std::vector<std::unique_ptr<ParamDecl>> paramList;
+
     ScanLParen();
 
     while ( mCurToken != TokenCode::RParen )
@@ -336,16 +353,12 @@ Unique<ProcDecl> LispyParser::ParseProc( bool hasName )
 
         parameter->Name = ScanSymbol();
 
-        proc->Params.push_back( std::move( parameter ) );
+        paramList.push_back( std::move( parameter ) );
     }
 
     ScanToken();
 
-    ParseImplicitProgn( proc->Body );
-
-    ScanRParen();
-
-    return proc;
+    return paramList;
 }
 
 Unique<Syntax> LispyParser::ParseGlobalError()
@@ -495,6 +508,20 @@ Unique<Syntax> LispyParser::ParseLambda()
     lambdaExpr->Proc = ParseProc( false );
 
     return lambdaExpr;
+}
+
+Unique<Syntax> LispyParser::ParseNative()
+{
+    auto nativeDecl = Make<NativeDecl>();
+
+    ScanToken();
+
+    nativeDecl->Name = ScanSymbol();
+    nativeDecl->Params = ParseParamList();
+
+    ScanRParen();
+
+    return nativeDecl;
 }
 
 Unique<Syntax> LispyParser::ParseFunction()

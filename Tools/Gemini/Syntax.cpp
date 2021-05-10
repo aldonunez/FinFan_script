@@ -50,7 +50,7 @@ Declaration* ParamDecl::GetDecl()
     return Decl.get();
 }
 
-Declaration* ProcDecl::GetDecl()
+Declaration* ProcDeclBase::GetDecl()
 {
     return Decl.get();
 }
@@ -149,6 +149,11 @@ void NameExpr::Accept( IVisitor* visitor )
 void NextStatement::Accept( IVisitor* visitor )
 {
     visitor->VisitNextStatement( this );
+}
+
+void NativeDecl::Accept( IVisitor* visitor )
+{
+    visitor->VisitNativeDecl( this );
 }
 
 void NumberExpr::Accept( IVisitor* visitor )

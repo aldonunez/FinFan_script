@@ -35,6 +35,7 @@ public:
     virtual void VisitLetStatement( LetStatement* letStmt ) override;
     virtual void VisitLoopStatement( LoopStatement* loopStmt ) override;
     virtual void VisitNameExpr( NameExpr* nameExpr ) override;
+    virtual void VisitNativeDecl( NativeDecl* nativeDecl ) override;
     virtual void VisitNextStatement( NextStatement* nextStmt ) override;
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) override;
     virtual void VisitParamDecl( ParamDecl* paramDecl ) override;

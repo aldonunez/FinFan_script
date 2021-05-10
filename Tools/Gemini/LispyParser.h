@@ -76,6 +76,7 @@ private:
     Unique<Syntax> ParseCall();
     Unique<Syntax> ParseEvalStar();
     Unique<Syntax> ParseLambda();
+    Unique<Syntax> ParseNative();
     Unique<Syntax> ParseFunction();
     Unique<Syntax> ParseFuncall();
     Unique<Syntax> ParseReturn();
@@ -97,6 +98,7 @@ private:
     Unique<CaseWhen> ParseCaseWhen();
     Unique<Syntax> ParseProgn();
 
+    std::vector<std::unique_ptr<ParamDecl>> ParseParamList();
     Unique<ProcDecl> ParseProc( bool hasName );
     Unique<DataDecl> ParseDefvar();
     Unique<DataDecl> ParseDefconstant();

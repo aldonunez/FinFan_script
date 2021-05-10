@@ -55,6 +55,7 @@ class AlgolyParser
         If,
         Lambda,
         Loop,
+        Native,
         Next,
         Not,
         Or,
@@ -119,6 +120,7 @@ private:
 
     Unique<ProcDecl> ParseFunction();
     Unique<LambdaExpr> ParseLambda();
+    Unique<NativeDecl> ParseNative();
     Unique<ProcDecl> ParseProc( bool hasName );
     std::vector<std::unique_ptr<ParamDecl>> ParseParamList();
     Unique<Syntax> ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens = true );

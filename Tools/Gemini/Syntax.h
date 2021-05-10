@@ -303,7 +303,7 @@ public:
     virtual Declaration* GetDecl() override;
 };
 
-class ProcDecl : public Syntax
+class ProcDeclBase : public Syntax
 {
 public:
     constexpr static int16_t MaxArgs = 127;
@@ -313,16 +313,28 @@ public:
 
     std::string Name;
     std::vector<std::unique_ptr<ParamDecl>> Params;
+
+    virtual Declaration* GetDecl() override;
+};
+
+class ProcDecl : public ProcDeclBase
+{
+public:
     StatementList Body;
 
     virtual void Accept( IVisitor* visitor ) override;
-    virtual Declaration* GetDecl() override;
+};
+
+class NativeDecl : public ProcDeclBase
+{
+public:
+    virtual void Accept( IVisitor* visitor ) override;
 };
 
 class Unit : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<DataDecl>> DataDeclarations;
+    std::vector<std::unique_ptr<Syntax>> DataDeclarations;
     std::vector<std::unique_ptr<ProcDecl>> FuncDeclarations;
 
     virtual void Accept( IVisitor* visitor ) override;
@@ -355,6 +367,7 @@ public:
     virtual void VisitLetStatement( LetStatement* letStmt ) = 0;
     virtual void VisitLoopStatement( LoopStatement* loopStmt ) = 0;
     virtual void VisitNameExpr( NameExpr* nameExpr ) = 0;
+    virtual void VisitNativeDecl( NativeDecl* nativeDecl ) = 0;
     virtual void VisitNextStatement( NextStatement* nextStmt ) = 0;
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) = 0;
     virtual void VisitParamDecl( ParamDecl* paramDecl ) = 0;

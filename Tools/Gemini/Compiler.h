@@ -266,20 +266,20 @@ private:
     PatchMap        mPatchMap;
     LambdaVec       mLambdas;
     AddrRefVec      mLocalAddrRefs;
-    bool            mInFunc;
-    Function*       mCurFunc;
-    int16_t         mCurExprDepth;
-    int16_t         mMaxExprDepth;
+    bool            mInFunc = false;
+    Function*       mCurFunc = nullptr;
+    int16_t         mCurExprDepth = 0;
+    int16_t         mMaxExprDepth = 0;
 
-    ICompilerEnv*   mEnv;
+    ICompilerEnv*   mEnv = nullptr;
     Reporter        mRep;
-    int             mModIndex;
+    int             mModIndex = 0;
 
     std::vector<GenParams> mGenStack;
 
-    bool            mCompiled;
-    bool            mCalculatedStats;
-    CompilerStats   mStats;
+    bool            mCompiled = false;
+    bool            mCalculatedStats = false;
+    CompilerStats   mStats = {};
 
 public:
     Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex = 0 );
@@ -399,6 +399,7 @@ private:
     virtual void VisitLetStatement( LetStatement* letStmt ) override;
     virtual void VisitLoopStatement( LoopStatement* loopStmt ) override;
     virtual void VisitNameExpr( NameExpr* nameExpr ) override;
+    virtual void VisitNativeDecl( NativeDecl* nativeDecl ) override;
     virtual void VisitNextStatement( NextStatement* nextStmt ) override;
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) override;
     virtual void VisitParamDecl( ParamDecl* paramDecl ) override;

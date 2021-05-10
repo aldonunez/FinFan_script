@@ -367,6 +367,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "if",     TokenCode::If },
         { "lambda", TokenCode::Lambda },
         { "loop",   TokenCode::Loop },
+        { "native", TokenCode::Native },
         { "next",   TokenCode::Next },
         { "not",    TokenCode::Not },
         { "or",     TokenCode::Or },
@@ -425,6 +426,10 @@ Unit* AlgolyParser::Parse()
         {
             unit->FuncDeclarations.push_back( ParseFunction() );
         }
+        else if ( mCurToken == TokenCode::Native )
+        {
+            unit->DataDeclarations.push_back( ParseNative() );
+        }
         else if ( mCurToken == TokenCode::Var
             || mCurToken == TokenCode::Const )
         {
@@ -457,6 +462,22 @@ Unique<LambdaExpr> AlgolyParser::ParseLambda()
     lambda->Proc = ParseProc( false );
 
     return lambda;
+}
+
+Unique<NativeDecl> AlgolyParser::ParseNative()
+{
+    Unique<NativeDecl> native( Make<NativeDecl>() );
+
+    ScanToken();
+
+    native->Name = ParseRawSymbol();
+
+    if ( mCurToken == TokenCode::LParen )
+    {
+        native->Params = ParseParamList();
+    }
+
+    return native;
 }
 
 Unique<ProcDecl> AlgolyParser::ParseProc( bool hasName )
