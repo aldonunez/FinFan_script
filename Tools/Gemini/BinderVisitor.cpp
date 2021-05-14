@@ -89,7 +89,7 @@ void BinderVisitor::VisitAddrOfExpr( AddrOfExpr* addrOf )
 
     if ( !IsFunctionDeclaration( addrOf->Inner->Decl->Kind ) )
     {
-        mRep.ThrowError( CERR_SEMANTICS, addrOf, "'%s' is not a function", addrOf->Inner->String.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, addrOf->Inner.get(), "'%s' is not a function", addrOf->Inner->String.c_str() );
     }
 }
 
@@ -113,7 +113,7 @@ void BinderVisitor::VisitAssignmentExpr( AssignmentExpr* assignment )
         auto decl = assignment->Left->GetDecl();
 
         if ( !IsVarDeclaration( decl->Kind ) )
-            mRep.ThrowError( CERR_SEMANTICS, assignment, "Left side is not a variable object" );
+            mRep.ThrowError( CERR_SEMANTICS, assignment->Left.get(), "Left side is not a variable object" );
     }
 
     // An indexing expression would have checked itself already
@@ -279,21 +279,42 @@ void BinderVisitor::VisitLetStatement( LetStatement* letStmt )
 
 void BinderVisitor::VisitLetBinding( DataDecl* varDecl )
 {
+    VisitStorage( varDecl, DeclKind::Local );
+}
+
+void BinderVisitor::VisitStorage( DataDecl* varDecl, DeclKind declKind )
+{
     if ( varDecl->TypeRef != nullptr )
         varDecl->TypeRef->Accept( this );
 
     if ( varDecl->Initializer != nullptr )
         varDecl->Initializer->Accept( this );
 
+    if ( varDecl->TypeRef == nullptr
+        && varDecl->Initializer != nullptr
+        && varDecl->Initializer->Kind == SyntaxKind::ArrayInitializer )
+    {
+        int32_t size = ((InitList*) varDecl->Initializer.get())->Values.size();
+
+        varDecl->TypeRef = std::unique_ptr<ArrayTypeRef>( new ArrayTypeRef( size ) );
+    }
+    else if ( varDecl->TypeRef != nullptr
+        && varDecl->TypeRef->Kind == SyntaxKind::ArrayTypeRef
+        && varDecl->Initializer != nullptr
+        && varDecl->Initializer->Kind != SyntaxKind::ArrayInitializer )
+    {
+        mRep.ThrowError( CERR_SEMANTICS, varDecl->Initializer.get(), "Arrays are initialized with arrays" );
+    }
+
     if ( varDecl->TypeRef == nullptr )
     {
-        varDecl->Decl = AddLocal( varDecl->Name, 1 );
+        varDecl->Decl = AddStorage( varDecl->Name, 1, declKind );
     }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
+    else if ( varDecl->TypeRef->Kind == SyntaxKind::ArrayTypeRef )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
-        varDecl->Decl = AddLocal( varDecl->Name, type->Size );
+        varDecl->Decl = AddStorage( varDecl->Name, type->Size, declKind );
     }
 }
 
@@ -441,22 +462,7 @@ void BinderVisitor::VisitUnit( Unit* unit )
 
 void BinderVisitor::VisitVarDecl( VarDecl* varDecl )
 {
-    if ( varDecl->TypeRef != nullptr )
-        varDecl->TypeRef->Accept( this );
-
-    if ( varDecl->Initializer != nullptr )
-        varDecl->Initializer->Accept( this );
-
-    if ( varDecl->TypeRef == nullptr )
-    {
-        varDecl->Decl = AddGlobal( varDecl->Name, 1 );
-    }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
-    {
-        auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
-
-        varDecl->Decl = AddGlobal( varDecl->Name, type->Size );
-    }
+    VisitStorage( varDecl, DeclKind::Global );
 }
 
 void BinderVisitor::VisitWhileStatement( WhileStatement* whileStmt )
@@ -567,6 +573,17 @@ std::shared_ptr<Storage> BinderVisitor::AddGlobal( const std::string& name, size
     mGlobalSize += size;
 
     return global;
+}
+
+std::shared_ptr<Storage> BinderVisitor::AddStorage( const std::string& name, size_t size, DeclKind declKind )
+{
+    switch ( declKind )
+    {
+    case DeclKind::Global:  return AddGlobal( name, size );
+    case DeclKind::Local:   return AddLocal( name, size );
+    default:
+        mRep.ThrowInternalError();
+    }
 }
 
 std::shared_ptr<Constant> BinderVisitor::AddConst( const std::string& name, int32_t value )

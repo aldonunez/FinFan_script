@@ -40,14 +40,20 @@ NumberExpr::NumberExpr( int32_t value ) :
     Kind = SyntaxKind::Number;
 }
 
+ArrayTypeRef::ArrayTypeRef( int32_t size ) :
+    Size( size )
+{
+    Kind = SyntaxKind::ArrayTypeRef;
+}
+
+InitList::InitList()
+{
+    Kind = SyntaxKind::ArrayInitializer;
+}
+
 IndexExpr::IndexExpr()
 {
     Kind = SyntaxKind::Index;
-}
-
-Declaration* ParamDecl::GetDecl()
-{
-    return Decl.get();
 }
 
 Declaration* ProcDeclBase::GetDecl()

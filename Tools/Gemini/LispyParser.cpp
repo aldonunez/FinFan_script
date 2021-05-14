@@ -19,14 +19,14 @@ static const uint8_t sIdentifierInitialCharMap[] =
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0,
 };
 
-const char* gTokenNames[] =
+static const char* gTokenNames[] =
 {
     "",
-    "End-of-file",
-    "LParen",
-    "RParen",
-    "Number",
-    "Symbol",
+    "<End-of-file>",
+    "(",
+    ")",
+    "<Number>",
+    "<Symbol>",
 };
 
 
@@ -341,19 +341,15 @@ Unique<ProcDecl> LispyParser::ParseProc( bool hasName )
     return proc;
 }
 
-std::vector<std::unique_ptr<ParamDecl>> LispyParser::ParseParamList()
+std::vector<std::unique_ptr<DataDecl>> LispyParser::ParseParamList()
 {
-    std::vector<std::unique_ptr<ParamDecl>> paramList;
+    std::vector<std::unique_ptr<DataDecl>> paramList;
 
     ScanLParen();
 
     while ( mCurToken != TokenCode::RParen )
     {
-        auto parameter = Make<ParamDecl>();
-
-        parameter->Name = ScanSymbol();
-
-        paramList.push_back( std::move( parameter ) );
+        paramList.push_back( ParseParameter() );
     }
 
     ScanToken();
@@ -361,12 +357,17 @@ std::vector<std::unique_ptr<ParamDecl>> LispyParser::ParseParamList()
     return paramList;
 }
 
+Unique<DataDecl> LispyParser::ParseParameter()
+{
+    return ParseLetBinding( Make<ParamDecl>(), true );
+}
+
 Unique<Syntax> LispyParser::ParseGlobalError()
 {
     ThrowSyntaxError( "'%s' is only allowed at global scope", mCurString.c_str() );
 }
 
-Unique<Syntax> LispyParser::ParseExpression()
+Unique<Syntax> LispyParser::ParseExpression( bool isInit )
 {
     if ( mCurToken == TokenCode::Number )
     {
@@ -380,6 +381,12 @@ Unique<Syntax> LispyParser::ParseExpression()
     {
         ScanToken();
         AssertToken( TokenCode::Symbol );
+
+        if ( isInit )
+        {
+            if ( mCurString == "array" )
+                return ParseArrayInitializer();
+        }
 
         if ( auto it = mParserMap.find( mCurString );
             it != mParserMap.end() )
@@ -590,51 +597,28 @@ Unique<Syntax> LispyParser::ParseLet()
     return node;
 }
 
-Unique<DataDecl> LispyParser::ParseLetBinding( Unique<DataDecl>&& varDecl )
+Unique<DataDecl> LispyParser::ParseLetBinding( Unique<DataDecl>&& varDecl, bool isParam )
 {
     if ( mCurToken == TokenCode::Symbol )
     {
-        varDecl->Name = std::move( mCurString );
-        ScanToken();
+        varDecl->Name = ScanSymbol();
 
-        if ( mCurToken != TokenCode::RParen )
+        if ( !isParam && mCurToken != TokenCode::RParen )
         {
-            varDecl->Initializer = ParseExpression();
+            varDecl->Initializer = ParseExpression( true );
         }
     }
     else if ( mCurToken == TokenCode::LParen )
     {
-        auto type = Make<ArrayTypeRef>();
-
         ScanToken();
 
         varDecl->Name = ScanSymbol();
-        type->SizeExpr = ParseExpression();
-        varDecl->TypeRef = std::move( type );
+        ScanSymbol( ":" );
+        varDecl->TypeRef = ParseTypeRef();
 
-        ScanRParen();
-        ScanLParen();
-
-        if ( mCurToken != TokenCode::RParen )
+        if ( !isParam && mCurToken != TokenCode::RParen )
         {
-            auto initList = Make<InitList>();
-
-            while ( mCurToken != TokenCode::RParen )
-            {
-                if ( mCurToken == TokenCode::Symbol && mCurString == "&extra" )
-                {
-                    initList->HasExtra = true;
-                    ScanToken();
-                }
-                else
-                {
-                    initList->Values.push_back( ParseExpression() );
-                }
-            }
-
-            ScanRParen();
-
-            varDecl->Initializer = std::move( initList );
+            varDecl->Initializer = ParseExpression( true );
         }
     }
     else
@@ -642,9 +626,54 @@ Unique<DataDecl> LispyParser::ParseLetBinding( Unique<DataDecl>&& varDecl )
         ThrowSyntaxError( "Expected name or name and type" );
     }
 
-    ScanRParen();
+    if ( !isParam )
+        ScanRParen();
 
     return varDecl;
+}
+
+Unique<TypeRef> LispyParser::ParseTypeRef()
+{
+    return ParseArrayTypeRef();
+}
+
+Unique<TypeRef> LispyParser::ParseArrayTypeRef()
+{
+    auto typeRef = Make<ArrayTypeRef>();
+
+    ScanSymbol( "array" );
+    ScanLParen();
+
+    typeRef->SizeExpr = ParseExpression();
+
+    ScanRParen();
+    ScanRParen();
+
+    return typeRef;
+}
+
+Unique<Syntax> LispyParser::ParseArrayInitializer()
+{
+    auto initList = Make<InitList>();
+
+    ScanToken();
+
+    while ( mCurToken != TokenCode::RParen )
+    {
+        if ( mCurToken == TokenCode::Symbol && mCurString == "&extra" )
+        {
+            initList->HasExtra = true;
+            ScanToken();
+        }
+        else
+        {
+            initList->Values.push_back( ParseExpression() );
+        }
+    }
+
+    ScanRParen();
+
+    return initList;
 }
 
 Unique<DataDecl> LispyParser::ParseDefvar()

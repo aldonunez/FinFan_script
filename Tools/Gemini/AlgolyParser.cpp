@@ -7,6 +7,64 @@ template <typename T>
 using Unique  = std::unique_ptr<T>;
 
 
+static const char* gTokenNames[] =
+{
+    "<Bof>",
+    "<Eof>",
+    "<Eol>",
+    ";",
+    "<Number>",
+    "<Symbol>",
+    "(",
+    ")",
+    ",",
+    "&",
+    "[",
+    "]",
+    ":=",
+    ":",
+    "...",
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    "=",
+    "<>",
+    "<",
+    "<=",
+    ">",
+    ">=",
+    "Above",
+    "And",
+    "Below",
+    "Break",
+    "By",
+    "Case",
+    "Const",
+    "Def",
+    "Do",
+    "Downto",
+    "Else",
+    "Elsif",
+    "End",
+    "For",
+    "If",
+    "Lambda",
+    "Loop",
+    "Native",
+    "Next",
+    "Not",
+    "Or",
+    "Return",
+    "Then",
+    "To",
+    "Var",
+    "When",
+    "While",
+};
+
+
 AlgolyParser::AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog* log ) :
     mCodeTextPtr( codeText ),
     mCodeTextEnd( codeText + codeTextLen ),
@@ -242,7 +300,7 @@ void AlgolyParser::ScanToken( TokenCode code )
 void AlgolyParser::AssertToken( TokenCode code )
 {
     if ( mCurToken != code )
-        ThrowSyntaxError( "Expected token: %d", code );
+        ThrowSyntaxError( "Expected token: %s", gTokenNames[(int) code] );
 }
 
 void AlgolyParser::ReadLineEnding()
@@ -504,9 +562,9 @@ Unique<ProcDecl> AlgolyParser::ParseProc( bool hasName )
     return proc;
 }
 
-std::vector<std::unique_ptr<ParamDecl>> AlgolyParser::ParseParamList()
+std::vector<std::unique_ptr<DataDecl>> AlgolyParser::ParseParamList()
 {
-    std::vector<std::unique_ptr<ParamDecl>> paramList;
+    std::vector<std::unique_ptr<DataDecl>> paramList;
 
     // Read past left parenthesis
     ScanToken();
@@ -527,14 +585,7 @@ std::vector<std::unique_ptr<ParamDecl>> AlgolyParser::ParseParamList()
 
         first = false;
 
-        Unique<ParamDecl> param = Make<ParamDecl>();
-
-        if ( mCurToken != TokenCode::Symbol )
-            ThrowSyntaxError( "Expected parameter name" );
-
-        param->Name = ParseRawSymbol();
-
-        paramList.push_back( std::move( param ) );
+        paramList.push_back( ParseVar( Make<ParamDecl>(), std::nullopt ) );
     }
 
     // Read past right parenthesis
@@ -965,7 +1016,7 @@ void AlgolyParser::ParseGlobalVars( Unit* unit )
     SkipLineSeparators();
 }
 
-Unique<DataDecl> AlgolyParser::ParseVar( Unique<DataDecl>&& varDecl, TokenCode assignToken )
+Unique<DataDecl> AlgolyParser::ParseVar( Unique<DataDecl>&& varDecl, std::optional<TokenCode> assignToken )
 {
     if ( mCurToken != TokenCode::Symbol )
         ThrowSyntaxError( "Expected variable name" );
@@ -974,54 +1025,81 @@ Unique<DataDecl> AlgolyParser::ParseVar( Unique<DataDecl>&& varDecl, TokenCode a
 
     if ( mCurToken == TokenCode::Colon )
     {
-        auto arrayTypeRef = Make<ArrayTypeRef>();
-
         ScanToken();
-        ScanToken( TokenCode::LBracket );
 
-        arrayTypeRef->SizeExpr = ParseExpr();
-
-        ScanToken( TokenCode::RBracket );
-        ScanToken( assignToken );
-        SkipLineEndings();
-        ScanToken( TokenCode::LBracket );
-
-        auto initList = Make<InitList>();
-        bool first = true;
-
-        while ( mCurToken != TokenCode::RBracket )
-        {
-            if ( mCurToken == TokenCode::Ellipsis )
-            {
-                ScanToken();
-                initList->HasExtra = true;
-                break;
-            }
-            else if ( !first )
-            {
-                ScanToken( TokenCode::Comma );
-                SkipLineEndings();
-            }
-
-            first = false;
-
-            initList->Values.push_back( ParseExpr() );
-        }
-
-        ScanToken( TokenCode::RBracket );
-
-        varDecl->TypeRef = std::move( arrayTypeRef );
-        varDecl->Initializer = std::move( initList );
+        varDecl->TypeRef = ParseTypeRef();
     }
-    else
+
+    if ( assignToken.has_value() )
     {
-        ScanToken( assignToken );
+        ScanToken( assignToken.value() );
         SkipLineEndings();
 
-        varDecl->Initializer = ParseExpr();
+        varDecl->Initializer = ParseInitExpr();
     }
 
     return varDecl;
+}
+
+Unique<TypeRef> AlgolyParser::ParseTypeRef()
+{
+    return ParseArrayTypeRef();
+}
+
+Unique<TypeRef> AlgolyParser::ParseArrayTypeRef()
+{
+    auto arrayTypeRef = Make<ArrayTypeRef>();
+
+    ScanToken( TokenCode::LBracket );
+
+    arrayTypeRef->SizeExpr = ParseExpr();
+
+    ScanToken( TokenCode::RBracket );
+
+    return arrayTypeRef;
+}
+
+Unique<Syntax> AlgolyParser::ParseArrayInitializer()
+{
+    ScanToken( TokenCode::LBracket );
+
+    auto initList = Make<InitList>();
+    bool first = true;
+
+    while ( mCurToken != TokenCode::RBracket )
+    {
+        if ( mCurToken == TokenCode::Ellipsis )
+        {
+            ScanToken();
+            initList->HasExtra = true;
+            break;
+        }
+        else if ( !first )
+        {
+            ScanToken( TokenCode::Comma );
+            SkipLineEndings();
+        }
+
+        first = false;
+
+        initList->Values.push_back( ParseExpr() );
+    }
+
+    ScanToken( TokenCode::RBracket );
+
+    return initList;
+}
+
+Unique<Syntax> AlgolyParser::ParseInitExpr()
+{
+    if ( mCurToken == TokenCode::LBracket )
+    {
+        return ParseArrayInitializer();
+    }
+    else
+    {
+        return ParseExpr();
+    }
 }
 
 Unique<Syntax> AlgolyParser::ParseReturn()

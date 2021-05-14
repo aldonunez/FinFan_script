@@ -122,12 +122,17 @@ private:
     Unique<LambdaExpr> ParseLambda();
     Unique<NativeDecl> ParseNative();
     Unique<ProcDecl> ParseProc( bool hasName );
-    std::vector<std::unique_ptr<ParamDecl>> ParseParamList();
+    std::vector<std::unique_ptr<DataDecl>> ParseParamList();
     Unique<Syntax> ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens = true );
     Unique<Syntax> ParseLet();
 
     void ParseGlobalVars( Unit* unit );
-    Unique<DataDecl> ParseVar( Unique<DataDecl>&& newVarDecl, TokenCode assignToken );
+    Unique<DataDecl> ParseVar( Unique<DataDecl>&& newVarDecl, std::optional<TokenCode> assignToken );
+
+    Unique<TypeRef> ParseTypeRef();
+    Unique<TypeRef> ParseArrayTypeRef();
+    Unique<Syntax> ParseArrayInitializer();
+    Unique<Syntax> ParseInitExpr();
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseIf();
     Unique<CondClause> ParseIfClause();

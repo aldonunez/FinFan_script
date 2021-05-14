@@ -11,6 +11,8 @@ enum class SyntaxKind
     Number,
     Name,
     Index,
+    ArrayTypeRef,
+    ArrayInitializer,
     Other,
 };
 
@@ -79,6 +81,8 @@ public:
 
     std::unique_ptr<Syntax> SizeExpr;
 
+    ArrayTypeRef( int32_t size = 0 );
+
     virtual void Accept( IVisitor* visitor ) override;
 };
 
@@ -89,6 +93,8 @@ public:
 
     std::vector<std::unique_ptr<Syntax>> Values;
 
+    InitList();
+
     virtual void Accept( IVisitor* visitor ) override;
 };
 
@@ -98,8 +104,8 @@ public:
     std::shared_ptr<Declaration> Decl;
 
     std::string Name;
-    std::unique_ptr<TypeRef> TypeRef;
-    std::unique_ptr<Syntax> Initializer;
+    std::unique_ptr<TypeRef>    TypeRef;
+    std::unique_ptr<Syntax>     Initializer;
 
     virtual Declaration* GetDecl() override;
 };
@@ -111,6 +117,12 @@ public:
 };
 
 class VarDecl : public DataDecl
+{
+public:
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class ParamDecl : public DataDecl
 {
 public:
     virtual void Accept( IVisitor* visitor ) override;
@@ -292,17 +304,6 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
-class ParamDecl : public Syntax
-{
-public:
-    std::shared_ptr<Declaration> Decl;
-    std::string Name;
-    std::unique_ptr<TypeRef> TypeRef;
-
-    virtual void Accept( IVisitor* visitor ) override;
-    virtual Declaration* GetDecl() override;
-};
-
 class ProcDeclBase : public Syntax
 {
 public:
@@ -312,7 +313,7 @@ public:
     std::shared_ptr<Declaration> Decl;
 
     std::string Name;
-    std::vector<std::unique_ptr<ParamDecl>> Params;
+    std::vector<std::unique_ptr<DataDecl>> Params;
 
     virtual Declaration* GetDecl() override;
 };

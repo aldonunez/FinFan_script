@@ -65,7 +65,7 @@ private:
 
     // Parsing
 
-    Unique<Syntax> ParseExpression();
+    Unique<Syntax> ParseExpression( bool isInit = false );
     Unique<NumberExpr> ParseNumber();
     Unique<NameExpr> ParseSymbol();
 
@@ -81,7 +81,10 @@ private:
     Unique<Syntax> ParseFuncall();
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseLet();
-    Unique<DataDecl> ParseLetBinding( Unique<DataDecl>&& newVarDecl );
+    Unique<DataDecl> ParseLetBinding( Unique<DataDecl>&& newVarDecl, bool isParam = false );
+    Unique<TypeRef> ParseTypeRef();
+    Unique<TypeRef> ParseArrayTypeRef();
+    Unique<Syntax> ParseArrayInitializer();
     Unique<Syntax> ParseAref();
     Unique<Syntax> ParseSet();
 
@@ -98,7 +101,8 @@ private:
     Unique<CaseWhen> ParseCaseWhen();
     Unique<Syntax> ParseProgn();
 
-    std::vector<std::unique_ptr<ParamDecl>> ParseParamList();
+    std::vector<std::unique_ptr<DataDecl>> ParseParamList();
+    Unique<DataDecl> ParseParameter();
     Unique<ProcDecl> ParseProc( bool hasName );
     Unique<DataDecl> ParseDefvar();
     Unique<DataDecl> ParseDefconstant();

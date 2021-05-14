@@ -704,7 +704,7 @@ void Compiler::GenerateLetBinding( DataDecl* binding )
             DecreaseExprDepth();
         }
     }
-    else if ( binding->TypeRef->Kind == SyntaxKind::Other )
+    else if ( binding->TypeRef->Kind == SyntaxKind::ArrayTypeRef )
     {
         auto type = (ArrayTypeRef*) binding->TypeRef.get();
 
@@ -728,7 +728,7 @@ void Compiler::VisitLetStatement( LetStatement* letStmt )
 
 void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size )
 {
-    if ( valueElem->Kind != SyntaxKind::Other )
+    if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
         mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
     Syntax* lastTwoElems[2] = {};
@@ -1587,7 +1587,7 @@ void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenSta
             AddGlobalData( global->Offset, varDecl->Initializer.get() );
         }
     }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::Other )
+    else if ( varDecl->TypeRef->Kind == SyntaxKind::ArrayTypeRef )
     {
         auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
 
@@ -1614,7 +1614,7 @@ void Compiler::AddGlobalData( U32 offset, Syntax* valueElem )
 
 void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size )
 {
-    if ( valueElem->Kind != SyntaxKind::Other )
+    if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
         mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
     size_t i = 0;

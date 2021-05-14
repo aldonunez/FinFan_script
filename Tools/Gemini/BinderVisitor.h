@@ -74,6 +74,7 @@ private:
 
     void VisitProc( ProcDecl* procDecl );
     void VisitLetBinding( DataDecl* varDecl );
+    void VisitStorage( DataDecl* varDecl, DeclKind declKind );
 
     I32 GetFoldedSyntaxValue( Syntax* node, const char* message = nullptr );
 
@@ -83,6 +84,7 @@ private:
     std::shared_ptr<Storage> AddLocal( SymTable& table, const std::string& name, int offset );
     std::shared_ptr<Storage> AddLocal( const std::string& name, size_t size );
     std::shared_ptr<Storage> AddGlobal( const std::string& name, size_t size );
+    std::shared_ptr<Storage> AddStorage( const std::string& name, size_t size, DeclKind declKind );
     std::shared_ptr<Constant> AddConst( const std::string& name, int32_t value );
     std::shared_ptr<Function> AddFunc( const std::string& name, int address );
     std::shared_ptr<Function> AddForward( const std::string& name );
