@@ -7,9 +7,6 @@
 
 class AlgolyParser
 {
-    template <typename T>
-    using Unique = std::unique_ptr<T>;
-
     enum class TokenCode
     {
         Bof,
@@ -89,7 +86,7 @@ class AlgolyParser
 public:
     AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog* log );
 
-    Unit* Parse();
+    Unique<Unit> Parse();
 
 private:
     // Scanning
@@ -122,8 +119,8 @@ private:
     Unique<LambdaExpr> ParseLambda();
     Unique<NativeDecl> ParseNative();
     Unique<ProcDecl> ParseProc( bool hasName );
-    std::vector<std::unique_ptr<DataDecl>> ParseParamList();
-    Unique<Syntax> ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens = true );
+    std::vector<Unique<DataDecl>> ParseParamList();
+    Unique<Syntax> ParseCall( Unique<Syntax>&& head, bool indirect, bool parens = true );
     Unique<Syntax> ParseLet();
 
     void ParseGlobalVars( Unit* unit );
@@ -155,7 +152,7 @@ private:
     Unique<Syntax> ParseBinary( int level );
     Unique<Syntax> ParseUnary();
     Unique<Syntax> ParseSingle();
-    Unique<Syntax> ParseIndexing( std::unique_ptr<Syntax>&& head );
+    Unique<Syntax> ParseIndexing( Unique<Syntax>&& head );
 
     bool IsTokenOrOp();
     bool IsTokenAndOp();
@@ -177,8 +174,8 @@ private:
     Unique<NumberExpr> MakeNumber( int32_t value );
     Unique<NameExpr> MakeSymbol( const char* string );
 
-    template <typename T>
-    Unique<T> Make();
+    template <typename T, typename... Args>
+    Unique<T> Make( Args&&... args );
 
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );
 };

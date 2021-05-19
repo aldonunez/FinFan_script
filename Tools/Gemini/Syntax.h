@@ -19,9 +19,14 @@ enum class SyntaxKind
 
 class IVisitor;
 
+class Syntax;
 class ProcDecl;
 
 struct Declaration;
+
+
+template <class T = Syntax>
+using Unique = std::unique_ptr<T, std::default_delete<Syntax>>;
 
 
 class Syntax
@@ -39,7 +44,7 @@ public:
 class StatementList : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<Syntax>> Statements;
+    std::vector<Unique<Syntax>> Statements;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -79,7 +84,7 @@ class ArrayTypeRef : public TypeRef
 public:
     int32_t Size;
 
-    std::unique_ptr<Syntax> SizeExpr;
+    Unique<Syntax> SizeExpr;
 
     ArrayTypeRef( int32_t size = 0 );
 
@@ -91,7 +96,7 @@ class InitList : public Syntax
 public:
     bool HasExtra = false;
 
-    std::vector<std::unique_ptr<Syntax>> Values;
+    std::vector<Unique<Syntax>> Values;
 
     InitList();
 
@@ -104,8 +109,8 @@ public:
     std::shared_ptr<Declaration> Decl;
 
     std::string Name;
-    std::unique_ptr<TypeRef>    TypeRef;
-    std::unique_ptr<Syntax>     Initializer;
+    Unique<TypeRef>    TypeRef;
+    Unique<Syntax>     Initializer;
 
     virtual Declaration* GetDecl() override;
 };
@@ -131,46 +136,52 @@ public:
 class LambdaExpr : public Syntax
 {
 public:
-    std::unique_ptr<ProcDecl> Proc;
+    Unique<ProcDecl> Proc;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
 
-class CondClause
+class CondClause : public Syntax
 {
 public:
-    std::unique_ptr<Syntax> Condition;
+    Unique<Syntax> Condition;
     StatementList Body;
+
+    virtual void Accept( IVisitor* visitor ) override;
 };
 
 class CondExpr : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<CondClause>> Clauses;
+    std::vector<Unique<CondClause>> Clauses;
     bool IsIf = false;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
 
-class CaseWhen
+class CaseWhen : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<Syntax>> Keys;
+    std::vector<Unique<Syntax>> Keys;
     StatementList Body;
+
+    virtual void Accept( IVisitor* visitor ) override;
 };
 
-class CaseElse
+class CaseElse : public Syntax
 {
 public:
     StatementList Body;
+
+    virtual void Accept( IVisitor* visitor ) override;
 };
 
 class CaseExpr : public Syntax
 {
 public:
-    std::unique_ptr<Syntax> TestKey;
-    std::unique_ptr<CaseElse> Fallback;
-    std::vector<std::unique_ptr<CaseWhen>> Clauses;
+    Unique<Syntax> TestKey;
+    Unique<CaseElse> Fallback;
+    std::vector<Unique<CaseWhen>> Clauses;
 
     std::shared_ptr<Declaration> TestKeyDecl;
 
@@ -181,8 +192,8 @@ class BinaryExpr : public Syntax
 {
 public:
     std::string Op;
-    std::unique_ptr<Syntax> Left;
-    std::unique_ptr<Syntax> Right;
+    Unique<Syntax> Left;
+    Unique<Syntax> Right;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -191,7 +202,7 @@ class UnaryExpr : public Syntax
 {
 public:
     std::string Op;
-    std::unique_ptr<Syntax> Inner;
+    Unique<Syntax> Inner;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -199,7 +210,7 @@ public:
 class AddrOfExpr : public Syntax
 {
 public:
-    std::unique_ptr<NameExpr> Inner;
+    Unique<NameExpr> Inner;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -207,8 +218,8 @@ public:
 class IndexExpr : public Syntax
 {
 public:
-    std::unique_ptr<Syntax> Head;
-    std::unique_ptr<Syntax> Index;
+    Unique<Syntax> Head;
+    Unique<Syntax> Index;
 
     IndexExpr();
 
@@ -219,8 +230,8 @@ class CallExpr : public Syntax
 {
 public:
     bool IsIndirect = false;
-    std::unique_ptr<Syntax> Head;
-    std::vector<std::unique_ptr<Syntax>> Arguments;
+    Unique<Syntax> Head;
+    std::vector<Unique<Syntax>> Arguments;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -228,7 +239,7 @@ public:
 class CallOrSymbolExpr : public Syntax
 {
 public:
-    std::unique_ptr<NameExpr> Symbol;
+    Unique<NameExpr> Symbol;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -236,8 +247,8 @@ public:
 class AssignmentExpr : public Syntax
 {
 public:
-    std::unique_ptr<Syntax> Left;
-    std::unique_ptr<Syntax> Right;
+    Unique<Syntax> Left;
+    Unique<Syntax> Right;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -245,7 +256,7 @@ public:
 class LetStatement : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<DataDecl>> Variables;
+    std::vector<Unique<DataDecl>> Variables;
     StatementList Body;
 
     virtual void Accept( IVisitor* visitor ) override;
@@ -254,7 +265,7 @@ public:
 class ReturnStatement : public Syntax
 {
 public:
-    std::unique_ptr<Syntax> Inner;
+    Unique<Syntax> Inner;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -264,9 +275,9 @@ class ForStatement : public Syntax
 public:
     std::string IndexName;
     std::string Comparison;
-    std::unique_ptr<Syntax> First;
-    std::unique_ptr<Syntax> Last;
-    std::unique_ptr<Syntax> Step;
+    Unique<Syntax> First;
+    Unique<Syntax> Last;
+    Unique<Syntax> Step;
     StatementList Body;
 
     std::shared_ptr<Declaration> IndexDecl;
@@ -278,7 +289,7 @@ class LoopStatement : public Syntax
 {
 public:
     StatementList Body;
-    std::unique_ptr<Syntax> Condition;
+    Unique<Syntax> Condition;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -286,7 +297,7 @@ public:
 class WhileStatement : public Syntax
 {
 public:
-    std::unique_ptr<Syntax> Condition;
+    Unique<Syntax> Condition;
     StatementList Body;
 
     virtual void Accept( IVisitor* visitor ) override;
@@ -313,7 +324,7 @@ public:
     std::shared_ptr<Declaration> Decl;
 
     std::string Name;
-    std::vector<std::unique_ptr<DataDecl>> Params;
+    std::vector<Unique<DataDecl>> Params;
 
     virtual Declaration* GetDecl() override;
 };
@@ -335,8 +346,8 @@ public:
 class Unit : public Syntax
 {
 public:
-    std::vector<std::unique_ptr<Syntax>> DataDeclarations;
-    std::vector<std::unique_ptr<ProcDecl>> FuncDeclarations;
+    std::vector<Unique<Syntax>> DataDeclarations;
+    std::vector<Unique<ProcDecl>> FuncDeclarations;
 
     virtual void Accept( IVisitor* visitor ) override;
 };

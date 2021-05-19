@@ -3,10 +3,6 @@
 #include <stdarg.h>
 
 
-template <typename T>
-using Unique = std::unique_ptr<T>;
-
-
 static const uint8_t sIdentifierInitialCharMap[] =
 {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -287,7 +283,7 @@ void LispyParser::ReadSymbol()
     mCurToken = TokenCode::Symbol;
 }
 
-Unit* LispyParser::Parse()
+Unique<Unit> LispyParser::Parse()
 {
     auto unit = Make<Unit>();
 
@@ -320,7 +316,7 @@ Unit* LispyParser::Parse()
         }
     }
 
-    return unit.release();
+    return unit;
 }
 
 Unique<ProcDecl> LispyParser::ParseProc( bool hasName )
@@ -341,9 +337,9 @@ Unique<ProcDecl> LispyParser::ParseProc( bool hasName )
     return proc;
 }
 
-std::vector<std::unique_ptr<DataDecl>> LispyParser::ParseParamList()
+std::vector<Unique<DataDecl>> LispyParser::ParseParamList()
 {
-    std::vector<std::unique_ptr<DataDecl>> paramList;
+    std::vector<Unique<DataDecl>> paramList;
 
     ScanLParen();
 
@@ -721,7 +717,7 @@ Unique<Syntax> LispyParser::ParseSet()
 Unique<Syntax> LispyParser::ParseIf()
 {
     auto condExpr = Make<CondExpr>();
-    Unique<CondClause> consequence( new CondClause() );
+    auto consequence = Make<CondClause>();
 
     condExpr->IsIf = true;
 
@@ -733,7 +729,7 @@ Unique<Syntax> LispyParser::ParseIf()
 
     if ( mCurToken != TokenCode::RParen )
     {
-        Unique<CondClause> alternative( new CondClause() );
+        auto alternative = Make<CondClause>();
 
         alternative->Condition = Make<NumberExpr>( 1 );
         alternative->Body.Statements.push_back( ParseExpression() );
@@ -763,7 +759,7 @@ Unique<Syntax> LispyParser::ParseCond()
 
 Unique<CondClause> LispyParser::ParseCondClause()
 {
-    Unique<CondClause> clause( new CondClause() );
+    auto clause = Make<CondClause>();
 
     ScanLParen();
 
@@ -908,7 +904,7 @@ Unique<Syntax> LispyParser::ParseCase()
         if ( mCurToken == TokenCode::Symbol
             && (mCurString == "otherwise" || mCurString == "true") )
         {
-            Unique<CaseElse> caseElse( new CaseElse() );
+            auto caseElse = Make<CaseElse>();
 
             ScanToken();
             ParseImplicitProgn( caseElse->Body );
@@ -929,7 +925,7 @@ Unique<Syntax> LispyParser::ParseCase()
 
 Unique<CaseWhen> LispyParser::ParseCaseWhen()
 {
-    Unique<CaseWhen> caseWhen( new CaseWhen() );
+    auto caseWhen = Make<CaseWhen>();
 
     if ( mCurToken == TokenCode::LParen )
     {
@@ -978,12 +974,12 @@ void LispyParser::ParseImplicitProgn( StatementList& container )
 }
 
 template <typename T, typename... Args>
-std::unique_ptr<T> LispyParser::Make( Args&&... args )
+Unique<T> LispyParser::Make( Args&&... args )
 {
     T* syntax = new T( std::forward<Args>( args )... );
     syntax->Line = mTokLine;
     syntax->Column = mTokCol;
-    return std::unique_ptr<T>( syntax );
+    return Unique<T>( syntax );
 }
 
 void LispyParser::ThrowSyntaxError( const char* format, ... )

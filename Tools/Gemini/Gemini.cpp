@@ -342,7 +342,7 @@ int _tmain(int argc, _TCHAR* argv[])
         CompilerLog log;
 
         LispyParser lispyParser( progStr1, sizeof progStr1 - 1, &log );
-        std::unique_ptr<Unit> progTree( lispyParser.Parse() );
+        Unique<Unit> progTree( lispyParser.Parse() );
 
         Compiler compiler1( bin1, sizeof bin1, &env, &log );
         Module mod1;
@@ -405,10 +405,10 @@ int _tmain(int argc, _TCHAR* argv[])
         bool b = false;
         b = env.AddNative( "add", NativeLatent1 );
 
-        std::unique_ptr<Unit> progTree;
+        Unique<Unit> progTree;
 
         LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr );
-        progTree.reset( lispyParser.Parse() );
+        progTree = lispyParser.Parse();
 
         Module mod1;
         mod1.CodeBase = bin1;
@@ -416,7 +416,7 @@ int _tmain(int argc, _TCHAR* argv[])
         compiler1.Compile( progTree.get() );
 
         lispyParser = LispyParser( progStr2, sizeof progStr2 - 1, nullptr );
-        progTree.reset( lispyParser.Parse() );
+        progTree = lispyParser.Parse();
 
         Module mod2;
         mod2.CodeBase = bin2;
@@ -453,7 +453,7 @@ int _tmain(int argc, _TCHAR* argv[])
         CompilerEnv env;
 
         LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr );
-        std::unique_ptr<Unit> progTree( lispyParser.Parse() );
+        Unique<Unit> progTree( lispyParser.Parse() );
 
         Compiler compiler( bin, sizeof bin, &env, nullptr );
         compiler.Compile( progTree.get() );

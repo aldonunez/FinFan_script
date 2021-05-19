@@ -328,13 +328,13 @@ void FolderVisitor::VisitWhileStatement( WhileStatement* whileStmt )
 }
 
 
-void FolderVisitor::Fold( std::unique_ptr<Syntax>& child )
+void FolderVisitor::Fold( Unique<Syntax>& child )
 {
     child->Accept( this );
 
     if ( mFoldNodes && mLastValue.has_value() )
     {
-        std::unique_ptr<NumberExpr> number( new NumberExpr( mLastValue.value() ) );
+        Unique<NumberExpr> number( new NumberExpr( mLastValue.value() ) );
 
         child = std::move( number );
     }

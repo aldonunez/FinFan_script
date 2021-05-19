@@ -3,10 +3,6 @@
 #include <stdarg.h>
 
 
-template <typename T>
-using Unique  = std::unique_ptr<T>;
-
-
 static const char* gTokenNames[] =
 {
     "<Bof>",
@@ -472,7 +468,7 @@ bool AlgolyParser::IsStatementSeparator( TokenCode tokenCode )
         ;
 }
 
-Unit* AlgolyParser::Parse()
+Unique<Unit> AlgolyParser::Parse()
 {
     Unique<Unit> unit = Make<Unit>();
 
@@ -501,7 +497,7 @@ Unit* AlgolyParser::Parse()
         SkipLineSeparators();
     }
 
-    return unit.release();
+    return unit;
 }
 
 Unique<ProcDecl> AlgolyParser::ParseFunction()
@@ -562,9 +558,9 @@ Unique<ProcDecl> AlgolyParser::ParseProc( bool hasName )
     return proc;
 }
 
-std::vector<std::unique_ptr<DataDecl>> AlgolyParser::ParseParamList()
+std::vector<Unique<DataDecl>> AlgolyParser::ParseParamList()
 {
-    std::vector<std::unique_ptr<DataDecl>> paramList;
+    std::vector<Unique<DataDecl>> paramList;
 
     // Read past left parenthesis
     ScanToken();
@@ -586,6 +582,8 @@ std::vector<std::unique_ptr<DataDecl>> AlgolyParser::ParseParamList()
         first = false;
 
         paramList.push_back( ParseVar( Make<ParamDecl>(), std::nullopt ) );
+
+        SkipLineEndings();
     }
 
     // Read past right parenthesis
@@ -607,7 +605,7 @@ void AlgolyParser::ParseStatements( StatementList& container )
 
 Unique<Syntax> AlgolyParser::ParseStatement()
 {
-    std::unique_ptr<Syntax> elem;
+    Unique<Syntax> elem;
 
     switch ( mCurToken )
     {
@@ -651,7 +649,7 @@ Unique<Syntax> AlgolyParser::ParseStatement()
 
 Unique<Syntax> AlgolyParser::ParseExprStatement()
 {
-    std::unique_ptr<Syntax> expr( ParseExpr() );
+    Unique<Syntax> expr( ParseExpr() );
 
     if ( !IsStatementSeparator( mCurToken ) )
     {
@@ -787,7 +785,7 @@ Unique<Syntax> AlgolyParser::ParseBinaryPart( int level )
 
 Unique<Syntax> AlgolyParser::ParseBinary( int level )
 {
-    std::unique_ptr<Syntax> first( ParseBinaryPart( level ) );
+    Unique<Syntax> first( ParseBinaryPart( level ) );
     TestOpFunc testOpFunc = sTestOpFuncs[level];
 
     // Left-associative
@@ -840,7 +838,7 @@ Unique<Syntax> AlgolyParser::ParseUnary()
 
 Unique<Syntax> AlgolyParser::ParseSingle()
 {
-    std::unique_ptr<Syntax> elem;
+    Unique<Syntax> elem;
     bool indirect = false;
 
     // TODO: Or should we use a different syntax for indirect calls?
@@ -875,7 +873,7 @@ Unique<Syntax> AlgolyParser::ParseSingle()
     return elem;
 }
 
-Unique<Syntax> AlgolyParser::ParseCall( std::unique_ptr<Syntax>&& head, bool indirect, bool parens )
+Unique<Syntax> AlgolyParser::ParseCall( Unique<Syntax>&& head, bool indirect, bool parens )
 {
     auto call = Make<CallExpr>();
 
@@ -923,7 +921,7 @@ Unique<Syntax> AlgolyParser::ParseCall( std::unique_ptr<Syntax>&& head, bool ind
     return call;
 }
 
-Unique<Syntax> AlgolyParser::ParseIndexing( std::unique_ptr<Syntax>&& head )
+Unique<Syntax> AlgolyParser::ParseIndexing( Unique<Syntax>&& head )
 {
     auto indexing = Make<IndexExpr>();
 
@@ -1137,7 +1135,7 @@ Unique<Syntax> AlgolyParser::ParseIf()
 
 Unique<CondClause> AlgolyParser::ParseIfClause()
 {
-    std::unique_ptr<CondClause> clause( new CondClause() );
+    auto clause = Make<CondClause>();
 
     ScanToken();
 
@@ -1156,7 +1154,7 @@ Unique<CondClause> AlgolyParser::ParseIfClause()
 
 Unique<CondClause> AlgolyParser::ParseElseClause()
 {
-    std::unique_ptr<CondClause> clause( new CondClause() );
+    auto clause = Make<CondClause>();
 
     ScanToken();
     SkipLineSeparators();
@@ -1275,7 +1273,7 @@ Unique<Syntax> AlgolyParser::ParseCase()
 
 Unique<CaseWhen> AlgolyParser::ParseCaseWhen()
 {
-    std::unique_ptr<CaseWhen> clause( new CaseWhen() );
+    auto clause = Make<CaseWhen>();
 
     ScanToken();
 
@@ -1318,7 +1316,7 @@ Unique<CaseWhen> AlgolyParser::ParseCaseWhen()
 
 Unique<CaseElse> AlgolyParser::ParseCaseElse()
 {
-    std::unique_ptr<CaseElse> clause( new CaseElse() );
+    auto clause = Make<CaseElse>();
 
     ScanToken();
     SkipLineSeparators();
@@ -1355,7 +1353,7 @@ Unique<NumberExpr> AlgolyParser::ParseNumber()
     if ( mCurToken != TokenCode::Number )
         ThrowSyntaxError( "Expected number" );
 
-    std::unique_ptr<NumberExpr> elem( WrapNumber() );
+    Unique<NumberExpr> elem( WrapNumber() );
     ScanToken();
     return elem;
 }
@@ -1375,7 +1373,7 @@ Unique<NameExpr> AlgolyParser::ParseSymbol()
     if ( mCurToken != TokenCode::Symbol )
         ThrowSyntaxError( "Expected symbol" );
 
-    std::unique_ptr<NameExpr> elem( WrapSymbol() );
+    Unique<NameExpr> elem( WrapSymbol() );
     ScanToken();
     return elem;
 }
@@ -1407,7 +1405,7 @@ Unique<NumberExpr> AlgolyParser::MakeNumber( int32_t value )
     number->Value = value;
     number->Line = mTokLine;
     number->Column = mTokCol;
-    return std::unique_ptr<NumberExpr>( number );
+    return Unique<NumberExpr>( number );
 }
 
 Unique<NameExpr> AlgolyParser::MakeSymbol( const char* string )
@@ -1417,16 +1415,16 @@ Unique<NameExpr> AlgolyParser::MakeSymbol( const char* string )
     symbol->String = string;
     symbol->Line = mTokLine;
     symbol->Column = mTokCol;
-    return std::unique_ptr<NameExpr>( symbol );
+    return Unique<NameExpr>( symbol );
 }
 
-template <typename T>
-Unique<T> AlgolyParser::Make()
+template <typename T, typename... Args>
+Unique<T> AlgolyParser::Make( Args&&... args )
 {
-    T* syntax = new T();
+    T* syntax = new T( std::forward<Args>( args )... );
     syntax->Line = mTokLine;
     syntax->Column = mTokCol;
-    return std::unique_ptr<T>( syntax );
+    return Unique<T>( syntax );
 }
 
 void AlgolyParser::ThrowSyntaxError( const char* format, ... )

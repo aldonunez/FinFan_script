@@ -51,5 +51,5 @@ private:
     void VisitProc( ProcDecl* procDecl );
     void VisitLetBinding( DataDecl* varDecl );
 
-    void Fold( std::unique_ptr<Syntax>& child );
+    void Fold( Unique<Syntax>& child );
 };

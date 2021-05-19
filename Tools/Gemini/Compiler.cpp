@@ -260,7 +260,7 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
 
     case DeclKind::Const:
         {
-            std::unique_ptr<NumberExpr> number( new NumberExpr() );
+            Unique<NumberExpr> number( new NumberExpr() );
             number->Line = symbol->Line;
             number->Column = symbol->Column;
             number->Value = ((Constant*) decl)->Value;
@@ -283,8 +283,8 @@ void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig
         || decl->Kind == DeclKind::Forward
         || decl->Kind == DeclKind::NativeFunc )
     {
-        std::unique_ptr<CallExpr> call( new CallExpr() );
-        std::unique_ptr<NameExpr> nameExpr( new NameExpr() );
+        Unique<CallExpr> call( new CallExpr() );
+        Unique<NameExpr> nameExpr( new NameExpr() );
 
         nameExpr->String = symbol->String;
         nameExpr->Decl = symbol->Decl;
@@ -1129,7 +1129,7 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
         DecreaseExprDepth();
 
         // Replace the keyform expression with the temporary variable
-        std::unique_ptr<NameExpr> localSym( new NameExpr() );
+        Unique<NameExpr> localSym( new NameExpr() );
         localSym->String = "$testKey";
         localSym->Decl = caseExpr->TestKeyDecl;
         caseExpr->TestKey = std::move( localSym );

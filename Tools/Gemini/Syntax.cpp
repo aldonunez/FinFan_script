@@ -102,9 +102,24 @@ void CallOrSymbolExpr::Accept( IVisitor* visitor )
     visitor->VisitCallOrSymbolExpr( this );
 }
 
+void CaseElse::Accept( IVisitor* visitor )
+{
+    // There's no entry in IVisitor for this node
+}
+
 void CaseExpr::Accept( IVisitor* visitor )
 {
     visitor->VisitCaseExpr( this );
+}
+
+void CaseWhen::Accept( IVisitor* visitor )
+{
+    // There's no entry in IVisitor for this node
+}
+
+void CondClause::Accept( IVisitor* visitor )
+{
+    // There's no entry in IVisitor for this node
 }
 
 void CondExpr::Accept( IVisitor* visitor )

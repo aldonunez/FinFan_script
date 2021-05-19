@@ -16,9 +16,6 @@ class LispyParser
         Symbol,
     };
 
-    template <typename T>
-    using Unique = std::unique_ptr<T>;
-
     using ParseFunc = Unique<Syntax>( LispyParser::* )();
     using ParserMap = std::map<std::string, ParseFunc>;
 
@@ -40,7 +37,7 @@ class LispyParser
 public:
     LispyParser( const char* codeText, int codeTextLen, ICompilerLog* log );
 
-    Unit* Parse();
+    Unique<Unit> Parse();
 
 private:
     // Scanning
@@ -101,7 +98,7 @@ private:
     Unique<CaseWhen> ParseCaseWhen();
     Unique<Syntax> ParseProgn();
 
-    std::vector<std::unique_ptr<DataDecl>> ParseParamList();
+    std::vector<Unique<DataDecl>> ParseParamList();
     Unique<DataDecl> ParseParameter();
     Unique<ProcDecl> ParseProc( bool hasName );
     Unique<DataDecl> ParseDefvar();
@@ -111,7 +108,7 @@ private:
     void ParseImplicitProgn( StatementList& container );
 
     template <typename T, typename... Args>
-    std::unique_ptr<T> Make( Args&&... args );
+    Unique<T> Make( Args&&... args );
 
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );
 };

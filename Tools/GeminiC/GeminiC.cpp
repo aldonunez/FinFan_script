@@ -271,7 +271,7 @@ int main( int argc, char* argv[] )
     env.AddGlobal( "@2", 2 );
     env.AddGlobal( "@3", 3 );
 
-    std::unique_ptr<Unit> progTree;
+    Unique<Unit> progTree;
     size_t filePathLen = strlen( filePath );
 
     if ( filePathLen > (sizeof LispyExt - 1)
@@ -280,7 +280,7 @@ int main( int argc, char* argv[] )
         codeText.append( LispyNatives );
 
         LispyParser parser( &codeText.front(), codeText.size(), &log );
-        progTree.reset( parser.Parse() );
+        progTree = parser.Parse();
     }
     else if ( filePathLen > (sizeof AlgolyExt - 1)
         && 0 == _stricmp( AlgolyExt, &filePath[filePathLen - (sizeof AlgolyExt - 1)] ) )
@@ -288,7 +288,7 @@ int main( int argc, char* argv[] )
         codeText.append( AlgolyNatives );
 
         AlgolyParser parser( &codeText.front(), codeText.size(), &log );
-        progTree.reset( parser.Parse() );
+        progTree = parser.Parse();
     }
     else
     {

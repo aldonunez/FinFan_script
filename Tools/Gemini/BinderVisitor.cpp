@@ -162,8 +162,7 @@ void BinderVisitor::VisitCaseExpr( CaseExpr* caseExpr )
     if ( caseExpr->TestKey->Kind != SyntaxKind::Name
         && caseExpr->TestKey->Kind != SyntaxKind::Number )
     {
-        // TODO: remove duplicate string in Compiler
-        // TODO: ideally, add the local during code generation
+        // TODO: Ideally simplify a complex test key in one place
         caseExpr->TestKeyDecl = AddLocal( "$testKey", 1 );
     }
 
@@ -296,7 +295,7 @@ void BinderVisitor::VisitStorage( DataDecl* varDecl, DeclKind declKind )
     {
         int32_t size = ((InitList*) varDecl->Initializer.get())->Values.size();
 
-        varDecl->TypeRef = std::unique_ptr<ArrayTypeRef>( new ArrayTypeRef( size ) );
+        varDecl->TypeRef = Unique<ArrayTypeRef>( new ArrayTypeRef( size ) );
     }
     else if ( varDecl->TypeRef != nullptr
         && varDecl->TypeRef->Kind == SyntaxKind::ArrayTypeRef
