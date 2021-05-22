@@ -246,10 +246,10 @@ bool CompilerEnv::FindGlobal( const std::string& name, int& offset )
 class CompilerLog : public ICompilerLog
 {
 public:
-    virtual void Add( LogCategory category, int line, int column, const char* message )
+    virtual void Add( LogCategory category, const char* fileName, int line, int column, const char* message )
     {
         printf( "<%d>  ", category );
-        printf( "%4d %3d  ", line, column );
+        printf( "%s %4d %3d  ", (fileName != nullptr ? fileName : ""), line, column );
         printf( "%s\n", message );
     }
 };
@@ -341,7 +341,7 @@ int _tmain(int argc, _TCHAR* argv[])
         CompilerEnv env;
         CompilerLog log;
 
-        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, &log );
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr, &log );
         Unique<Unit> progTree( lispyParser.Parse() );
 
         Compiler compiler1( bin1, sizeof bin1, &env, &log );
@@ -410,7 +410,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
         Unique<Unit> progTree;
 
-        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr );
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr, nullptr );
         progTree = lispyParser.Parse();
 
         Module mod1;
@@ -419,7 +419,7 @@ int _tmain(int argc, _TCHAR* argv[])
         compiler1.AddUnit( std::move( progTree ) );
         compiler1.Compile();
 
-        lispyParser = LispyParser( progStr2, sizeof progStr2 - 1, nullptr );
+        lispyParser = LispyParser( progStr2, sizeof progStr2 - 1, nullptr, nullptr );
         progTree = lispyParser.Parse();
 
         Module mod2;
@@ -457,7 +457,7 @@ int _tmain(int argc, _TCHAR* argv[])
         U8 bin[1024];
         CompilerEnv env;
 
-        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr );
+        LispyParser lispyParser( progStr1, sizeof progStr1 - 1, nullptr, nullptr );
         Unique<Unit> progTree( lispyParser.Parse() );
 
         Compiler compiler( bin, sizeof bin, &env, nullptr );

@@ -68,6 +68,9 @@ class AlgolyParser
 
     static const TestOpFunc sTestOpFuncs[];
 
+    std::string     mFileName;
+    const char*     mUnitFileName;
+
     const char*     mCodeTextPtr;
     const char*     mCodeTextEnd;
     const char*     mLineStart;
@@ -84,7 +87,7 @@ class AlgolyParser
     Reporter        mRep;
 
 public:
-    AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog* log );
+    AlgolyParser( const char* codeText, int codeTextLen, const char* fileName, ICompilerLog* log );
 
     Unique<Unit> Parse();
 

@@ -50,7 +50,7 @@ enum LogCategory
 class ICompilerLog
 {
 public:
-    virtual void Add( LogCategory category, int line, int column, const char* message ) = 0;
+    virtual void Add( LogCategory category, const char* fileName, int line, int column, const char* message ) = 0;
 };
 
 struct CallStats
@@ -96,11 +96,11 @@ public:
 
     ICompilerLog* GetLog();
 
-    void Log( LogCategory category, int line, int col, const char* format, va_list args );
-    void LogWarning( int line, int col, const char* format, ... );
+    void Log( LogCategory category, const char* fileName, int line, int col, const char* format, va_list args );
+    void LogWarning( const char* fileName, int line, int col, const char* format, ... );
 
     [[noreturn]] void ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... );
-    [[noreturn]] void ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args );
+    [[noreturn]] void ThrowError( CompilerErr exceptionCode, const char* fileName, int line, int col, const char* format, va_list args );
     [[noreturn]] void ThrowInternalError();
     [[noreturn]] void ThrowInternalError( const char* format, ... );
 };

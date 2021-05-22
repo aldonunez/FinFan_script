@@ -61,6 +61,21 @@ IndexExpr::IndexExpr()
     Kind = SyntaxKind::Index;
 }
 
+Unit::Unit( const std::string& fileName )
+{
+    mFileName.resize( fileName.size() + 1 );
+
+    memcpy( mFileName.data(), fileName.data(), fileName.size() );
+    mFileName[fileName.size()] = '\0';
+
+    FileName = GetUnitFileName();
+}
+
+const char* Unit::GetUnitFileName()
+{
+    return mFileName.data();
+}
+
 
 void AddrOfExpr::Accept( IVisitor* visitor )
 {

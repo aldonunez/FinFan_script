@@ -61,7 +61,9 @@ static const char* gTokenNames[] =
 };
 
 
-AlgolyParser::AlgolyParser( const char* codeText, int codeTextLen, ICompilerLog* log ) :
+AlgolyParser::AlgolyParser( const char* codeText, int codeTextLen, const char* fileName, ICompilerLog* log ) :
+    mFileName( fileName != nullptr ? fileName : "" ),
+    mUnitFileName(),
     mCodeTextPtr( codeText ),
     mCodeTextEnd( codeText + codeTextLen ),
     mLineStart( codeText ),
@@ -470,7 +472,9 @@ bool AlgolyParser::IsStatementSeparator( TokenCode tokenCode )
 
 Unique<Unit> AlgolyParser::Parse()
 {
-    Unique<Unit> unit = Make<Unit>();
+    Unique<Unit> unit = Make<Unit>( mFileName );
+
+    mUnitFileName = unit->GetUnitFileName();
 
     ScanToken();
 
@@ -1406,6 +1410,7 @@ Unique<NumberExpr> AlgolyParser::MakeNumber( int32_t value )
     number->Value = value;
     number->Line = mTokLine;
     number->Column = mTokCol;
+    number->FileName = mUnitFileName;
     return Unique<NumberExpr>( number );
 }
 
@@ -1416,6 +1421,7 @@ Unique<NameExpr> AlgolyParser::MakeSymbol( const char* string )
     symbol->String = string;
     symbol->Line = mTokLine;
     symbol->Column = mTokCol;
+    symbol->FileName = mUnitFileName;
     return Unique<NameExpr>( symbol );
 }
 
@@ -1425,6 +1431,7 @@ Unique<T> AlgolyParser::Make( Args&&... args )
     T* syntax = new T( std::forward<Args>( args )... );
     syntax->Line = mTokLine;
     syntax->Column = mTokCol;
+    syntax->FileName = mUnitFileName;
     return Unique<T>( syntax );
 }
 
@@ -1432,6 +1439,6 @@ void AlgolyParser::ThrowSyntaxError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    mRep.ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
+    mRep.ThrowError( CERR_SYNTAX, mUnitFileName, mTokLine, mTokCol, format, args );
     va_end( args );
 }

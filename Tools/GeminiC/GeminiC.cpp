@@ -204,10 +204,10 @@ CompilerEnv::FuncMap::const_iterator CompilerEnv::EndExternals() const
 class CompilerLog : public ICompilerLog
 {
 public:
-    virtual void Add( LogCategory category, int line, int column, const char* message )
+    virtual void Add( LogCategory category, const char* fileName, int line, int column, const char* message )
     {
         printf( "<%d>  ", category );
-        printf( "%4d %3d  ", line, column );
+        printf( "%s %4d %3d  ", (fileName != nullptr ? fileName : ""), line, column );
         printf( "%s\n", message );
     }
 };
@@ -279,7 +279,7 @@ int main( int argc, char* argv[] )
     {
         codeText.append( LispyNatives );
 
-        LispyParser parser( &codeText.front(), codeText.size(), &log );
+        LispyParser parser( &codeText.front(), codeText.size(), nullptr, &log );
         progTree = parser.Parse();
     }
     else if ( filePathLen > (sizeof AlgolyExt - 1)
@@ -287,7 +287,7 @@ int main( int argc, char* argv[] )
     {
         codeText.append( AlgolyNatives );
 
-        AlgolyParser parser( &codeText.front(), codeText.size(), &log );
+        AlgolyParser parser( &codeText.front(), codeText.size(), nullptr, &log );
         progTree = parser.Parse();
     }
     else

@@ -35,6 +35,9 @@ public:
     SyntaxKind Kind = SyntaxKind::Other;
     int Line = 0;
     int Column = 0;
+    const char* FileName = nullptr;
+
+    // All nodes in the same syntax tree refer to the file name string in the root Unit
 
     virtual ~Syntax() {}
     virtual void Accept( IVisitor* visitor ) = 0;
@@ -345,9 +348,16 @@ public:
 
 class Unit : public Syntax
 {
+    // All nodes in the syntax tree rooted in this Unit refer to this string
+    std::vector<char> mFileName;
+
 public:
     std::vector<Unique<DeclSyntax>> DataDeclarations;
     std::vector<Unique<ProcDecl>> FuncDeclarations;
+
+    Unit( const std::string& fileName );
+
+    const char* GetUnitFileName();
 
     virtual void Accept( IVisitor* visitor ) override;
 };

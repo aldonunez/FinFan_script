@@ -19,6 +19,9 @@ class LispyParser
     using ParseFunc = Unique<Syntax>( LispyParser::* )();
     using ParserMap = std::map<std::string, ParseFunc>;
 
+    std::string     mFileName;
+    const char*     mUnitFileName;
+
     const char*     mCodeTextPtr;
     const char*     mCodeTextEnd;
     const char*     mLineStart;
@@ -35,7 +38,7 @@ class LispyParser
     ParserMap       mParserMap;
 
 public:
-    LispyParser( const char* codeText, int codeTextLen, ICompilerLog* log );
+    LispyParser( const char* codeText, int codeTextLen, const char* fileName, ICompilerLog* log );
 
     Unique<Unit> Parse();
 

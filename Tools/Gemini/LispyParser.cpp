@@ -26,7 +26,9 @@ static const char* gTokenNames[] =
 };
 
 
-LispyParser::LispyParser( const char* codeText, int codeTextLen, ICompilerLog* log ) :
+LispyParser::LispyParser( const char* codeText, int codeTextLen, const char* fileName, ICompilerLog* log ) :
+    mFileName( fileName != nullptr ? fileName : "" ),
+    mUnitFileName(),
     mCodeTextPtr( codeText ),
     mCodeTextEnd( codeText + codeTextLen ),
     mLineStart( codeText ),
@@ -285,7 +287,9 @@ void LispyParser::ReadSymbol()
 
 Unique<Unit> LispyParser::Parse()
 {
-    auto unit = Make<Unit>();
+    auto unit = Make<Unit>( mFileName );
+
+    mUnitFileName = unit->GetUnitFileName();
 
     ScanToken();
 
@@ -979,6 +983,7 @@ Unique<T> LispyParser::Make( Args&&... args )
     T* syntax = new T( std::forward<Args>( args )... );
     syntax->Line = mTokLine;
     syntax->Column = mTokCol;
+    syntax->FileName = mUnitFileName;
     return Unique<T>( syntax );
 }
 
@@ -986,7 +991,7 @@ void LispyParser::ThrowSyntaxError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    mRep.ThrowError( CERR_SYNTAX, mTokLine, mTokCol, format, args );
+    mRep.ThrowError( CERR_SYNTAX, mUnitFileName, mTokLine, mTokCol, format, args );
     va_end( args );
 }
 

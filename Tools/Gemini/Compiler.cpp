@@ -182,7 +182,7 @@ void Compiler::GenerateDiscard( Syntax* elem, const GenConfig& config )
     if ( !status.discarded )
     {
         assert( status.discarded );
-        mRep.LogWarning( elem->Line, elem->Column, "Deprecated: POP was emitted." );
+        mRep.LogWarning( elem->FileName, elem->Line, elem->Column, "Deprecated: POP was emitted." );
 
         *mCodeBinPtr = OP_POP;
         mCodeBinPtr++;
@@ -1956,7 +1956,7 @@ void Compiler::CalculateStackDepth( Function* func )
 
 //----------------------------------------------------------------------------
 
-void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args );
+void Log( ICompilerLog* log, LogCategory category, const char* fileName, int line, int col, const char* format, va_list args );
 
 
 Reporter::Reporter( ICompilerLog* log ) :
@@ -1974,20 +1974,22 @@ void Reporter::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* 
 {
     va_list args;
     va_start( args, format );
+    const char* fileName = nullptr;
     int line = 0;
     int column = 0;
     if ( elem != nullptr )
     {
+        fileName = elem->FileName;
         line = elem->Line;
         column = elem->Column;
     }
-    ThrowError( exceptionCode, line, column, format, args );
+    ThrowError( exceptionCode, fileName, line, column, format, args );
     va_end( args );
 }
 
-void Reporter::ThrowError( CompilerErr exceptionCode, int line, int col, const char* format, va_list args )
+void Reporter::ThrowError( CompilerErr exceptionCode, const char* fileName, int line, int col, const char* format, va_list args )
 {
-    Log( LOG_ERROR, line, col, format, args );
+    Log( LOG_ERROR, fileName, line, col, format, args );
     throw CompilerException( exceptionCode );
 }
 
@@ -2004,26 +2006,26 @@ void Reporter::ThrowInternalError( const char* format, ... )
     va_end( args );
 }
 
-void Reporter::Log( LogCategory category, int line, int col, const char* format, va_list args )
+void Reporter::Log( LogCategory category, const char* fileName, int line, int col, const char* format, va_list args )
 {
-    ::Log( mLog, category, line, col, format, args );
+    ::Log( mLog, category, fileName, line, col, format, args );
 }
 
-void Reporter::LogWarning( int line, int col, const char* format, ... )
+void Reporter::LogWarning( const char* fileName, int line, int col, const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    Log( LOG_WARNING, line, col, format, args );
+    Log( LOG_WARNING, fileName, line, col, format, args );
     va_end( args );
 }
 
 
-void Log( ICompilerLog* log, LogCategory category, int line, int col, const char* format, va_list args )
+void Log( ICompilerLog* log, LogCategory category, const char* fileName, int line, int col, const char* format, va_list args )
 {
     if ( log != nullptr )
     {
         char msg[256] = "";
         vsprintf_s( msg, format, args );
-        log->Add( category, line, col, msg );
+        log->Add( category, fileName, line, col, msg );
     }
 }
