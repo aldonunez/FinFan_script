@@ -66,6 +66,7 @@ void Compiler::BindAttributes( Unit* progTree )
 {
     BinderVisitor binder( mGlobalTable, mEnv, mRep.GetLog() );
 
+    binder.Declare( progTree );
     binder.Bind( progTree );
 
     mGlobals.resize( binder.GetDataSize() );

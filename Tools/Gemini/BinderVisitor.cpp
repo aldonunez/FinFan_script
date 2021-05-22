@@ -62,13 +62,21 @@ BinderVisitor::BinderVisitor(
     mEnv( env ),
     mRep( log )
 {
+    mSymStack.push_back( &mGlobalTable );
+}
+
+void BinderVisitor::Declare( Unit* unit )
+{
+    for ( auto& varNode : unit->DataDeclarations )
+        DeclareNode( varNode.get() );
+
+    for ( auto& funcNode : unit->FuncDeclarations )
+        DeclareNode( funcNode.get() );
 }
 
 void BinderVisitor::Bind( Unit* unit )
 {
     MakeStdEnv();
-
-    mSymStack.push_back( &mGlobalTable );
 
     unit->Accept( this );
 
@@ -191,6 +199,11 @@ void BinderVisitor::VisitCondExpr( CondExpr* condExpr )
 
 void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
 {
+    if ( constDecl->Decl )
+        return;
+
+    mGlobalTable.erase( constDecl->Name );
+
     // No need to make the type ref accept this visitor,
     // because only integer constants are supported
 
@@ -331,6 +344,9 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
 
     if ( decl != nullptr )
     {
+        if ( decl->Kind == DeclKind::Undefined )
+            decl = DefineNode( nameExpr->String, (UndefinedDeclaration*) decl.get() );
+
         nameExpr->Decl = decl;
     }
     else
@@ -341,7 +357,10 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
 
 void BinderVisitor::VisitNativeDecl( NativeDecl* nativeDecl )
 {
-    CheckDuplicateGlobalSymbol( nativeDecl->Name );
+    if ( nativeDecl->Decl )
+        return;
+
+    mGlobalTable.erase( nativeDecl->Name );
 
     std::shared_ptr<NativeFunction> native( new NativeFunction() );
     native->Kind = DeclKind::NativeFunc;
@@ -373,6 +392,11 @@ void BinderVisitor::VisitParamDecl( ParamDecl* paramDecl )
 
 void BinderVisitor::VisitProcDecl( ProcDecl* procDecl )
 {
+    if ( procDecl->Decl )
+        return;
+
+    mGlobalTable.erase( procDecl->Name );
+
     procDecl->Decl = AddForward( procDecl->Name );
 }
 
@@ -414,8 +438,10 @@ void BinderVisitor::VisitProc( ProcDecl* procDecl )
     auto func = (Function*) procDecl->Decl.get();
 
     if ( procDecl->Params.size() > ProcDecl::MaxArgs )
+    {
         mRep.ThrowError( CERR_SEMANTICS, procDecl, "'%s' has too many arguments. Max is %d",
             procDecl->Name.c_str(), ProcDecl::MaxArgs );
+    }
 
     for ( auto& parameter : procDecl->Params )
     {
@@ -428,8 +454,10 @@ void BinderVisitor::VisitProc( ProcDecl* procDecl )
     procDecl->Body.Accept( this );
 
     if ( mMaxLocalCount > ProcDecl::MaxLocals )
+    {
         mRep.ThrowError( CERR_SEMANTICS, procDecl, "'%s' has too many locals. Max is %d",
             procDecl->Name.c_str(), ProcDecl::MaxLocals );
+    }
 
     func->LocalCount = mMaxLocalCount;
     func->ArgCount = (int16_t) procDecl->Params.size();
@@ -464,6 +492,11 @@ void BinderVisitor::VisitUnit( Unit* unit )
 
 void BinderVisitor::VisitVarDecl( VarDecl* varDecl )
 {
+    if ( varDecl->Decl )
+        return;
+
+    mGlobalTable.erase( varDecl->Name );
+
     VisitStorage( varDecl, DeclKind::Global );
 }
 
@@ -641,4 +674,27 @@ void BinderVisitor::BindProcs( Unit* program )
     {
         BindNamedProc( elem.get() );
     }
+}
+
+void BinderVisitor::DeclareNode( DeclSyntax* node )
+{
+    CheckDuplicateGlobalSymbol( node->Name );
+
+    std::shared_ptr<UndefinedDeclaration> undef( new UndefinedDeclaration() );
+    undef->Kind = DeclKind::Undefined;
+    undef->Node = node;
+    mGlobalTable.insert( SymTable::value_type( node->Name, undef ) );
+}
+
+std::shared_ptr<Declaration> BinderVisitor::DefineNode( const std::string& name, UndefinedDeclaration* decl )
+{
+    // The first thing that the declaration nodes do is to erase the "undefined" declaration
+    // to make room for the defined declaration. This also prevents getting stuck in loops.
+    // Save the node that the undefined declaration refers to.
+
+    Syntax* node = decl->Node;
+
+    node->Accept( this );
+
+    return FindSymbol( name );
 }

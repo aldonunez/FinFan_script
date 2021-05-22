@@ -399,6 +399,7 @@ public:
 
 enum class DeclKind
 {
+    Undefined,
     Const,
     Global,
     Local,
@@ -413,6 +414,11 @@ struct Declaration
 {
     DeclKind  Kind;
     virtual ~Declaration() { }
+};
+
+struct UndefinedDeclaration : public Declaration
+{
+    Syntax* Node;
 };
 
 struct Constant : public Declaration

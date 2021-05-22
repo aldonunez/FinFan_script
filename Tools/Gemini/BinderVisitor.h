@@ -35,6 +35,7 @@ public:
         ICompilerEnv* env,
         ICompilerLog* log );
 
+    void Declare( Unit* unit );
     void Bind( Unit* unit );
 
     size_t GetDataSize();
@@ -93,4 +94,7 @@ private:
     void MakeStdEnv();
     void BindProcs( Unit* program );
     void BindNamedProc( ProcDecl* procDecl );
+
+    void DeclareNode( DeclSyntax* node );
+    std::shared_ptr<Declaration> DefineNode( const std::string& name, UndefinedDeclaration* decl );
 };
