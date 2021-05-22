@@ -91,5 +91,6 @@ private:
     void CheckDuplicateGlobalSymbol( const std::string& name );
 
     void MakeStdEnv();
-    void CollectFunctionForwards( Unit* program );
+    void BindProcs( Unit* program );
+    void BindNamedProc( ProcDecl* procDecl );
 };

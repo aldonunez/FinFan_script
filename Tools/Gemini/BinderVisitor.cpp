@@ -67,12 +67,12 @@ BinderVisitor::BinderVisitor(
 void BinderVisitor::Bind( Unit* unit )
 {
     MakeStdEnv();
-    CollectFunctionForwards( unit );
 
     mSymStack.push_back( &mGlobalTable );
 
     unit->Accept( this );
 
+    BindProcs( unit );
     BindLambdas();
 
     mSymStack.pop_back();
@@ -373,6 +373,11 @@ void BinderVisitor::VisitParamDecl( ParamDecl* paramDecl )
 
 void BinderVisitor::VisitProcDecl( ProcDecl* procDecl )
 {
+    procDecl->Decl = AddForward( procDecl->Name );
+}
+
+void BinderVisitor::BindNamedProc( ProcDecl* procDecl )
+{
     SymTable::iterator it = mGlobalTable.find( procDecl->Name );
     std::shared_ptr<Function> func;
 
@@ -398,8 +403,6 @@ void BinderVisitor::VisitProcDecl( ProcDecl* procDecl )
     {
         func = AddFunc( procDecl->Name, INT32_MAX );
     }
-
-    procDecl->Decl = func;
 
     VisitProc( procDecl );
 }
@@ -632,12 +635,10 @@ void BinderVisitor::MakeStdEnv()
     AddConst( "true", 1 );
 }
 
-void BinderVisitor::CollectFunctionForwards( Unit* program )
+void BinderVisitor::BindProcs( Unit* program )
 {
     for ( auto& elem : program->FuncDeclarations )
     {
-        auto funcDecl = (ProcDecl*) elem.get();
-
-        AddForward( funcDecl->Name );
+        BindNamedProc( elem.get() );
     }
 }
