@@ -351,7 +351,10 @@ int _tmain(int argc, _TCHAR* argv[])
         env.AddGlobal( "global2", 1 );
         env.AddGlobal( "global3", 2 );
         env.SetCurrentModule( &mod1 );
-        CompilerErr compilerErr = compiler1.Compile( progTree.get() );
+
+        compiler1.AddUnit( std::move( progTree ) );
+
+        CompilerErr compilerErr = compiler1.Compile();
         CompilerStats stats = { 0 };
         compiler1.GetStats( stats );
 
@@ -413,7 +416,8 @@ int _tmain(int argc, _TCHAR* argv[])
         Module mod1;
         mod1.CodeBase = bin1;
         env.SetCurrentModule( &mod1 );
-        compiler1.Compile( progTree.get() );
+        compiler1.AddUnit( std::move( progTree ) );
+        compiler1.Compile();
 
         lispyParser = LispyParser( progStr2, sizeof progStr2 - 1, nullptr );
         progTree = lispyParser.Parse();
@@ -421,7 +425,8 @@ int _tmain(int argc, _TCHAR* argv[])
         Module mod2;
         mod2.CodeBase = bin2;
         env.SetCurrentModule( &mod2 );
-        compiler2.Compile( progTree.get() );
+        compiler1.AddUnit( std::move( progTree ) );
+        compiler2.Compile();
 
         CELL stack[Machine::MIN_STACK];
         Machine machine;
@@ -456,7 +461,8 @@ int _tmain(int argc, _TCHAR* argv[])
         Unique<Unit> progTree( lispyParser.Parse() );
 
         Compiler compiler( bin, sizeof bin, &env, nullptr );
-        compiler.Compile( progTree.get() );
+        compiler.AddUnit( std::move( progTree ) );
+        compiler.Compile();
         CELL stack[Machine::MIN_STACK];
         Machine machine;
         machine.Init( stack, _countof( stack ), nullptr );

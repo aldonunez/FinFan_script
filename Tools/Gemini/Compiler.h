@@ -248,6 +248,7 @@ private:
 
     typedef std::vector<DeferredLambda> LambdaVec;
     typedef std::vector<AddrRef> AddrRefVec;
+    typedef std::vector<Unique<Unit>> UnitVec;
 
     using GlobalVec = std::vector<I32>;
 
@@ -280,19 +281,22 @@ private:
     bool            mCompiled = false;
     bool            mCalculatedStats = false;
     CompilerStats   mStats = {};
+    UnitVec         mUnits;
 
 public:
     Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex = 0 );
 
-    CompilerErr Compile( Unit* progTree );
+    void AddUnit( Unique<Unit>&& unit );
+    CompilerErr Compile();
+
     void GetStats( CompilerStats& stats );
     I32* GetData();
     size_t GetDataSize();
 
 private:
-    void BindAttributes( Unit* progTree );
-    void FoldConstants( Unit* progTree );
-    void GenerateCode( Unit* progTree );
+    void BindAttributes();
+    void FoldConstants();
+    void GenerateCode();
 
     // Code generation
 

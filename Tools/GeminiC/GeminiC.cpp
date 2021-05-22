@@ -297,7 +297,8 @@ int main( int argc, char* argv[] )
     }
 
     Compiler compiler( codeBin, codeBinLen, &env, &log );
-    CompilerErr error = compiler.Compile( progTree.get() );
+    compiler.AddUnit( std::move( progTree ) );
+    CompilerErr error = compiler.Compile();
 
     if ( error != 0 )
     {

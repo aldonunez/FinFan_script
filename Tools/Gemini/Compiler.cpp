@@ -17,13 +17,18 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
 {
 }
 
-CompilerErr Compiler::Compile( Unit* progTree )
+void Compiler::AddUnit( Unique<Unit>&& unit )
+{
+    mUnits.push_back( std::move( unit ) );
+}
+
+CompilerErr Compiler::Compile()
 {
     try
     {
-        BindAttributes( progTree );
-        FoldConstants( progTree );
-        GenerateCode( progTree );
+        BindAttributes();
+        FoldConstants();
+        GenerateCode();
 
         GenerateLambdas();
         GenerateSentinel();
@@ -62,26 +67,31 @@ size_t Compiler::GetDataSize()
     return mGlobals.size();
 }
 
-void Compiler::BindAttributes( Unit* progTree )
+void Compiler::BindAttributes()
 {
     BinderVisitor binder( mGlobalTable, mEnv, mRep.GetLog() );
 
-    binder.Declare( progTree );
-    binder.Bind( progTree );
+    for ( auto& unit : mUnits )
+        binder.Declare( unit.get() );
+
+    for ( auto& unit : mUnits )
+        binder.Bind( unit.get() );
 
     mGlobals.resize( binder.GetDataSize() );
 }
 
-void Compiler::FoldConstants( Unit* progTree )
+void Compiler::FoldConstants()
 {
     FolderVisitor folder( mRep.GetLog() );
 
-    folder.Fold( progTree );
+    for ( auto& unit : mUnits )
+        folder.Fold( unit.get() );
 }
 
-void Compiler::GenerateCode( Unit* progTree )
+void Compiler::GenerateCode()
 {
-    progTree->Accept( this );
+    for ( auto& unit : mUnits )
+        unit->Accept( this );
 }
 
 void Compiler::VisitUnit( Unit* unit )

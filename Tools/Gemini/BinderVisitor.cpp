@@ -63,6 +63,8 @@ BinderVisitor::BinderVisitor(
     mRep( log )
 {
     mSymStack.push_back( &mGlobalTable );
+
+    MakeStdEnv();
 }
 
 void BinderVisitor::Declare( Unit* unit )
@@ -76,14 +78,10 @@ void BinderVisitor::Declare( Unit* unit )
 
 void BinderVisitor::Bind( Unit* unit )
 {
-    MakeStdEnv();
-
     unit->Accept( this );
 
     BindProcs( unit );
     BindLambdas();
-
-    mSymStack.pop_back();
 }
 
 size_t BinderVisitor::GetDataSize()
