@@ -1009,7 +1009,8 @@ void AlgolyParser::ParseGlobalVars( Unit* unit )
         }
 
     } while ( mCurToken != TokenCode::Eol
-        && mCurToken != TokenCode::Separator );
+        && mCurToken != TokenCode::Separator
+        && mCurToken != TokenCode::Eof );
 
     SkipLineSeparators();
 }

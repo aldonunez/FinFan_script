@@ -51,19 +51,14 @@ InitList::InitList()
     Kind = SyntaxKind::ArrayInitializer;
 }
 
+Declaration* DeclSyntax::GetDecl()
+{
+    return Decl.get();
+}
+
 IndexExpr::IndexExpr()
 {
     Kind = SyntaxKind::Index;
-}
-
-Declaration* ProcDeclBase::GetDecl()
-{
-    return Decl.get();
-}
-
-Declaration* DataDecl::GetDecl()
-{
-    return Decl.get();
 }
 
 

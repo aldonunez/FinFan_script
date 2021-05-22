@@ -73,7 +73,7 @@ private:
     Unique<Syntax> ParseCall();
     Unique<Syntax> ParseEvalStar();
     Unique<Syntax> ParseLambda();
-    Unique<Syntax> ParseNative();
+    Unique<NativeDecl> ParseNative();
     Unique<Syntax> ParseFunction();
     Unique<Syntax> ParseFuncall();
     Unique<Syntax> ParseReturn();

@@ -513,7 +513,7 @@ Unique<Syntax> LispyParser::ParseLambda()
     return lambdaExpr;
 }
 
-Unique<Syntax> LispyParser::ParseNative()
+Unique<NativeDecl> LispyParser::ParseNative()
 {
     auto nativeDecl = Make<NativeDecl>();
 

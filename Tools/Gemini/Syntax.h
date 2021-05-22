@@ -103,16 +103,21 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
-class DataDecl : public Syntax
+class DeclSyntax : public Syntax
 {
 public:
     std::shared_ptr<Declaration> Decl;
 
     std::string Name;
-    Unique<TypeRef>    TypeRef;
-    Unique<Syntax>     Initializer;
 
     virtual Declaration* GetDecl() override;
+};
+
+class DataDecl : public DeclSyntax
+{
+public:
+    Unique<TypeRef>    TypeRef;
+    Unique<Syntax>     Initializer;
 };
 
 class ConstDecl : public DataDecl
@@ -315,18 +320,13 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
-class ProcDeclBase : public Syntax
+class ProcDeclBase : public DeclSyntax
 {
 public:
     constexpr static int16_t MaxArgs = 127;
     constexpr static int16_t MaxLocals = 127;
 
-    std::shared_ptr<Declaration> Decl;
-
-    std::string Name;
     std::vector<Unique<DataDecl>> Params;
-
-    virtual Declaration* GetDecl() override;
 };
 
 class ProcDecl : public ProcDeclBase
@@ -346,7 +346,7 @@ public:
 class Unit : public Syntax
 {
 public:
-    std::vector<Unique<Syntax>> DataDeclarations;
+    std::vector<Unique<DeclSyntax>> DataDeclarations;
     std::vector<Unique<ProcDecl>> FuncDeclarations;
 
     virtual void Accept( IVisitor* visitor ) override;
