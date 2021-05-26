@@ -60,6 +60,16 @@ IndexExpr::IndexExpr()
     Kind = SyntaxKind::Index;
 }
 
+DotExpr::DotExpr()
+{
+    Kind = SyntaxKind::DotExpr;
+}
+
+Declaration* DotExpr::GetDecl()
+{
+    return Decl.get();
+}
+
 Unit::Unit( const std::string& fileName )
 {
     mFileName.resize( fileName.size() + 1 );
@@ -141,9 +151,19 @@ void ConstDecl::Accept( IVisitor* visitor )
     visitor->VisitConstDecl( this );
 }
 
+void DotExpr::Accept( IVisitor* visitor )
+{
+    visitor->VisitDotExpr( this );
+}
+
 void ForStatement::Accept( IVisitor* visitor )
 {
     visitor->VisitForStatement( this );
+}
+
+void ImportDecl::Accept( IVisitor* visitor )
+{
+    visitor->VisitImportDecl( this );
 }
 
 void IndexExpr::Accept( IVisitor* visitor )
@@ -295,6 +315,11 @@ int32_t Type::GetSize() const
 
 TypeType::TypeType() :
     Type( TypeKind::Type )
+{
+}
+
+ModuleType::ModuleType() :
+    Type( TypeKind::Module )
 {
 }
 

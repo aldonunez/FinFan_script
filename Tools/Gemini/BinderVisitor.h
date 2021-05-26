@@ -6,8 +6,7 @@
 
 class BinderVisitor : public IVisitor
 {
-    using SymTable = Compiler::SymTable;
-    using SymStack = std::vector<Compiler::SymTable*>;
+    using SymStack = std::vector<SymTable*>;
 
     // This relies on the syntax nodes sticking around outside of its control.
     // But since shared_ptr is used, instead of internal ref counts,
@@ -20,11 +19,14 @@ class BinderVisitor : public IVisitor
     LambdaVec       mLambdas;
     SymStack        mSymStack;
     SymTable&       mGlobalTable;
+    SymTable&       mModuleTable;
+    SymTable&       mPublicTable;
     ICompilerEnv*   mEnv = nullptr;
     Reporter        mRep;
 
     Function*       mCurFunc = nullptr;
 
+    int             mModIndex = 0;
     int             mCurLevelLocalCount = 0;
     int             mCurLocalCount = 0;
     int             mMaxLocalCount = 0;
@@ -32,12 +34,16 @@ class BinderVisitor : public IVisitor
     int             mNextNativeId = 0;
 
     std::shared_ptr<TypeType>   mTypeType;
+    std::shared_ptr<ModuleType> mModuleType;
     std::shared_ptr<XferType>   mXferType;
     std::shared_ptr<IntType>    mIntType;
 
 public:
     BinderVisitor(
+        int modIndex,
         SymTable& globalTable,
+        SymTable& moduleTable,
+        SymTable& publicTable,
         ICompilerEnv* env,
         ICompilerLog* log );
 
@@ -57,7 +63,9 @@ public:
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
     virtual void VisitCondExpr( CondExpr* condExpr ) override;
     virtual void VisitConstDecl( ConstDecl* constDecl ) override;
+    virtual void VisitDotExpr( DotExpr* dotExpr ) override;
     virtual void VisitForStatement( ForStatement* forStmt ) override;
+    virtual void VisitImportDecl( ImportDecl* importDecl ) override;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
     virtual void VisitInitList( InitList* initList ) override;
     virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr ) override;
@@ -107,10 +115,11 @@ private:
     std::shared_ptr<Storage> AddLocal( const std::string& name, size_t size );
     std::shared_ptr<Storage> AddGlobal( const std::string& name, size_t size );
     std::shared_ptr<Storage> AddStorage( const std::string& name, size_t size, DeclKind declKind );
-    std::shared_ptr<Constant> AddConst( const std::string& name, int32_t value );
+    std::shared_ptr<Constant> AddConst( const std::string& name, int32_t value, bool isPublic );
     std::shared_ptr<Function> AddFunc( const std::string& name, int address );
     std::shared_ptr<Function> AddForward( const std::string& name );
     std::shared_ptr<TypeDeclaration> AddType( const std::string& name, std::shared_ptr<Type> type );
+    void AddModule( const std::string& name, std::shared_ptr<ModuleDeclaration> moduleDecl );
     void CheckDuplicateGlobalSymbol( const std::string& name );
 
     void MakeStdEnv();

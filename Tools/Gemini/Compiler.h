@@ -137,7 +137,6 @@ public:
         }
     };
 
-    using SymTable = std::map<std::string, std::shared_ptr<Declaration>>;
     using PatchMap = std::map<std::string, PatchChain>;
 
 private:
@@ -249,6 +248,7 @@ private:
     typedef std::vector<DeferredLambda> LambdaVec;
     typedef std::vector<AddrRef> AddrRefVec;
     typedef std::vector<Unique<Unit>> UnitVec;
+    typedef std::vector<std::shared_ptr<ModuleDeclaration>> ModVec;
 
     using GlobalVec = std::vector<I32>;
 
@@ -264,6 +264,8 @@ private:
     GlobalVec       mGlobals;
 
     SymTable        mGlobalTable;
+    SymTable        mModuleTable;
+    SymTable        mPublicTable;
     PatchMap        mPatchMap;
     LambdaVec       mLambdas;
     AddrRefVec      mLocalAddrRefs;
@@ -287,11 +289,13 @@ public:
     Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex = 0 );
 
     void AddUnit( Unique<Unit>&& unit );
+    void AddModule( std::shared_ptr<ModuleDeclaration> moduleDecl );
     CompilerErr Compile();
 
     void GetStats( CompilerStats& stats );
     I32* GetData();
     size_t GetDataSize();
+    std::shared_ptr<ModuleDeclaration> GetMetadata( const char* modName );
 
 private:
     void BindAttributes();
@@ -313,6 +317,7 @@ private:
     // Level 2 - S-expressions
     void GenerateNumber( NumberExpr* number, const GenConfig& config, GenStatus& status );
     void GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status );
+    void GenerateSymbol( Syntax* node, Declaration *decl, const GenConfig& config, GenStatus& status );
     void GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status );
     void GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status );
     void GenerateArrayElementRef( IndexExpr* indexExpr );
@@ -339,6 +344,7 @@ private:
     void AddLocalDataArray( Storage* global, Syntax* valueElem, size_t size );
 
     void GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status );
+    void GenerateCall( Declaration* decl, std::vector<Unique<Syntax>>& arguments, const GenConfig& config, GenStatus& status );
     void GenerateFor( ForStatement* forStmt, const GenConfig& config, GenStatus& status );
     void GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& config, GenStatus& status );
     void GenerateDo( WhileStatement* whileStmt, const GenConfig& config, GenStatus& status );
@@ -396,7 +402,9 @@ private:
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
     virtual void VisitCondExpr( CondExpr* condExpr ) override;
     virtual void VisitConstDecl( ConstDecl* constDecl ) override;
+    virtual void VisitDotExpr( DotExpr* dotExpr ) override;
     virtual void VisitForStatement( ForStatement* forStmt ) override;
+    virtual void VisitImportDecl( ImportDecl* importDecl ) override;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
     virtual void VisitInitList( InitList* initList ) override;
     virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr ) override;

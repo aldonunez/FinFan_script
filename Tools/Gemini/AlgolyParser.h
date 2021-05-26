@@ -18,6 +18,7 @@ class AlgolyParser
         LParen,
         RParen,
         Comma,
+        Dot,
         Ampersand,
         LBracket,
         RBracket,
@@ -37,6 +38,7 @@ class AlgolyParser
         GE,
         Above,
         And,
+        As,
         Below,
         Break,
         By,
@@ -50,6 +52,7 @@ class AlgolyParser
         End,
         For,
         If,
+        Import,
         Lambda,
         Loop,
         Native,
@@ -119,6 +122,7 @@ private:
     static bool IsSeparatorKeyword( TokenCode tokenCode );
     static bool IsStatementSeparator( TokenCode tokenCode );
 
+    Unique<ImportDecl> ParseImport();
     Unique<ProcDecl> ParseFunction();
     Unique<LambdaExpr> ParseLambda();
     Unique<NativeDecl> ParseNative();
@@ -159,6 +163,7 @@ private:
     Unique<Syntax> ParseUnary();
     Unique<Syntax> ParseSingle();
     Unique<Syntax> ParseIndexing( Unique<Syntax>&& head );
+    Unique<Syntax> ParseDotExpr( Unique<Syntax>&& head );
 
     bool IsTokenOrOp();
     bool IsTokenAndOp();

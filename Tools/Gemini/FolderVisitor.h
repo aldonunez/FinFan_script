@@ -28,7 +28,9 @@ public:
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
     virtual void VisitCondExpr( CondExpr* condExpr ) override;
     virtual void VisitConstDecl( ConstDecl* constDecl ) override;
+    virtual void VisitDotExpr( DotExpr* dotExpr ) override;
     virtual void VisitForStatement( ForStatement* forStmt ) override;
+    virtual void VisitImportDecl( ImportDecl* importDecl ) override;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
     virtual void VisitInitList( InitList* initList ) override;
     virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr ) override;

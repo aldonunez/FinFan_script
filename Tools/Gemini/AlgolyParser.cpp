@@ -14,6 +14,7 @@ static const char* gTokenNames[] =
     "(",
     ")",
     ",",
+    ".",
     "&",
     "[",
     "]",
@@ -33,6 +34,7 @@ static const char* gTokenNames[] =
     ">=",
     "Above",
     "And",
+    "As",
     "Below",
     "Break",
     "By",
@@ -46,6 +48,7 @@ static const char* gTokenNames[] =
     "End",
     "For",
     "If",
+    "Import",
     "Lambda",
     "Loop",
     "Native",
@@ -215,7 +218,7 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
         }
         else
         {
-            ThrowSyntaxError( "Bad character: U+%02X", '.' );
+            mCurToken = TokenCode::Dot;
         }
         break;
 
@@ -409,6 +412,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
     {
         { "above",  TokenCode::Above },
         { "and",    TokenCode::And },
+        { "as",     TokenCode::As },
         { "below",  TokenCode::Below },
         { "break",  TokenCode::Break },
         { "by",     TokenCode::By },
@@ -422,6 +426,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "end",    TokenCode::End },
         { "for",    TokenCode::For },
         { "if",     TokenCode::If },
+        { "import", TokenCode::Import },
         { "lambda", TokenCode::Lambda },
         { "loop",   TokenCode::Loop },
         { "native", TokenCode::Native },
@@ -495,6 +500,10 @@ Unique<Unit> AlgolyParser::Parse()
         {
             ParseGlobalVars( unit.get() );
         }
+        else if ( mCurToken == TokenCode::Import )
+        {
+            unit->DataDeclarations.push_back( ParseImport() );
+        }
         else
         {
             ThrowSyntaxError( "syntax error : expected function" );
@@ -504,6 +513,28 @@ Unique<Unit> AlgolyParser::Parse()
     }
 
     return unit;
+}
+
+Unique<ImportDecl> AlgolyParser::ParseImport()
+{
+    Unique<ImportDecl> import( Make<ImportDecl>() );
+
+    ScanToken();
+
+    import->OriginalName = ParseRawSymbol();
+
+    if ( mCurToken == TokenCode::As )
+    {
+        ScanToken();
+
+        import->Name = ParseRawSymbol();
+    }
+    else
+    {
+        import->Name = import->OriginalName;
+    }
+
+    return import;
 }
 
 Unique<ProcDecl> AlgolyParser::ParseFunction()
@@ -673,14 +704,15 @@ Unique<Syntax> AlgolyParser::ParseExprStatement()
     }
     else
     {
-        if ( expr->Kind == SyntaxKind::Name )
+        if ( expr->Kind == SyntaxKind::Name
+            || expr->Kind == SyntaxKind::DotExpr )
         {
             // The whole statement was a symbol. It can be a variable or a call without
             // parentheses and arguments. Use eval* to disambiguate them.
 
             Unique<CallOrSymbolExpr> eval = Make<CallOrSymbolExpr>();
 
-            eval->Symbol = std::move( (Unique<NameExpr>&) expr );
+            eval->Symbol = std::move( expr );
             expr = std::move( eval );
         }
     }
@@ -713,7 +745,8 @@ Unique<Syntax> AlgolyParser::ParseAssignment()
     if ( mCurToken == TokenCode::Assign )
     {
         if ( first->Kind != SyntaxKind::Name
-            && first->Kind != SyntaxKind::Index )
+            && first->Kind != SyntaxKind::Index
+            && first->Kind != SyntaxKind::DotExpr )
         {
             mRep.ThrowError( CERR_SYNTAX, first.get(), "Left side of assignment must be modifiable" );
         }
@@ -834,7 +867,7 @@ Unique<Syntax> AlgolyParser::ParseUnary()
 
         ScanToken();
 
-        addrOf->Inner = ParseSymbol();
+        addrOf->Inner = ParseSingle();
 
         return addrOf;
     }
@@ -859,8 +892,17 @@ Unique<Syntax> AlgolyParser::ParseSingle()
         indirect = true;
         break;
 
-    case TokenCode::Symbol: elem = ParseSymbol(); break;
-    case TokenCode::Number: elem = ParseNumber(); break;
+    case TokenCode::Symbol:
+        elem = ParseSymbol();
+        if ( mCurToken == TokenCode::Dot )
+        {
+            elem = ParseDotExpr( std::move( elem ) );
+        }
+        break;
+
+    case TokenCode::Number:
+        elem = ParseNumber();
+        break;
 
     default:
         ThrowSyntaxError( "Expected expression" );
@@ -940,6 +982,19 @@ Unique<Syntax> AlgolyParser::ParseIndexing( Unique<Syntax>&& head )
     ScanToken( TokenCode::RBracket );
 
     return indexing;
+}
+
+Unique<Syntax> AlgolyParser::ParseDotExpr( Unique<Syntax>&& head )
+{
+    auto dotExpr = Make<DotExpr>();
+
+    dotExpr->Head = std::move( head );
+
+    ScanToken();
+
+    dotExpr->Member = ParseRawSymbol();
+
+    return dotExpr;
 }
 
 Unique<Syntax> AlgolyParser::ParseLet()

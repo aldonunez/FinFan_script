@@ -160,6 +160,18 @@ void FolderVisitor::VisitConstDecl( ConstDecl* constDecl )
     mLastValue.reset();
 }
 
+void FolderVisitor::VisitDotExpr( DotExpr* dotExpr )
+{
+    if ( dotExpr->GetDecl()->Kind == DeclKind::Const )
+    {
+        mLastValue = ((Constant*) dotExpr->GetDecl())->Value;
+    }
+    else
+    {
+        mLastValue.reset();
+    }
+}
+
 void FolderVisitor::VisitForStatement( ForStatement* forStmt )
 {
     Fold( forStmt->First );
@@ -171,6 +183,11 @@ void FolderVisitor::VisitForStatement( ForStatement* forStmt )
     forStmt->Body.Accept( this );
 
     mLastValue.reset();
+}
+
+void FolderVisitor::VisitImportDecl( ImportDecl* importDecl )
+{
+    // Nothing
 }
 
 void FolderVisitor::VisitIndexExpr( IndexExpr* indexExpr )

@@ -22,6 +22,11 @@ void Compiler::AddUnit( Unique<Unit>&& unit )
     mUnits.push_back( std::move( unit ) );
 }
 
+void Compiler::AddModule( std::shared_ptr<ModuleDeclaration> moduleDecl )
+{
+    mModuleTable.insert( SymTable::value_type( moduleDecl->Name, moduleDecl ) );
+}
+
 CompilerErr Compiler::Compile()
 {
     try
@@ -67,9 +72,21 @@ size_t Compiler::GetDataSize()
     return mGlobals.size();
 }
 
+std::shared_ptr<ModuleDeclaration> Compiler::GetMetadata( const char* modName )
+{
+    std::shared_ptr<ModuleDeclaration> modDecl( new ModuleDeclaration() );
+
+    modDecl->Name = modName;
+    modDecl->Kind = DeclKind::Module;
+    modDecl->Table = std::move( mPublicTable );
+    modDecl->Type = std::shared_ptr<ModuleType>( new ModuleType() );
+
+    return modDecl;
+}
+
 void Compiler::BindAttributes()
 {
-    BinderVisitor binder( mGlobalTable, mEnv, mRep.GetLog() );
+    BinderVisitor binder( mModIndex, mGlobalTable, mModuleTable, mPublicTable, mEnv, mRep.GetLog() );
 
     for ( auto& unit : mUnits )
         binder.Declare( unit.get() );
@@ -101,6 +118,11 @@ void Compiler::VisitUnit( Unit* unit )
 
     for ( auto& funcNode : unit->FuncDeclarations )
         funcNode->Accept( this );
+}
+
+void Compiler::VisitImportDecl( ImportDecl* importDecl )
+{
+    // Nothing
 }
 
 void Compiler::VisitArrayTypeRef( ArrayTypeRef* typeRef )
@@ -232,19 +254,22 @@ void Compiler::VisitNameExpr( NameExpr* nameExpr )
 
 void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status )
 {
+    GenerateSymbol( symbol, symbol->GetDecl(), config, status );
+}
+
+void Compiler::GenerateSymbol( Syntax* node, Declaration* decl, const GenConfig& config, GenStatus& status )
+{
     if ( config.discard )
     {
         status.discarded = true;
         return;
     }
 
-    auto decl = symbol->Decl.get();
-
     switch ( decl->Kind )
     {
     case DeclKind::Global:
         mCodeBinPtr[0] = OP_LDMOD;
-        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr[1] = ((Storage*) decl)->ModIndex;
         mCodeBinPtr += 2;
         WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
         IncreaseExprDepth();
@@ -266,17 +291,11 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
 
     case DeclKind::Func:
     case DeclKind::Forward:
-        mRep.ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
+        mRep.ThrowError( CERR_SEMANTICS, node, "functions don't have values" );
         break;
 
     case DeclKind::Const:
-        {
-            Unique<NumberExpr> number( new NumberExpr() );
-            number->Line = symbol->Line;
-            number->Column = symbol->Column;
-            number->Value = ((Constant*) decl)->Value;
-            VisitNumberExpr( number.get() );
-        }
+        EmitLoadConstant( ((Constant*) decl)->Value );
         break;
 
     default:
@@ -288,24 +307,19 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
 void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status )
 {
     auto& symbol = callOrSymbol->Symbol;
-    auto decl = symbol->Decl.get();
+    auto decl = symbol->GetDecl();
 
     if ( decl->Kind == DeclKind::Func
         || decl->Kind == DeclKind::Forward
         || decl->Kind == DeclKind::NativeFunc )
     {
-        Unique<CallExpr> call( new CallExpr() );
-        Unique<NameExpr> nameExpr( new NameExpr() );
+        std::vector<Unique<Syntax>> args;
 
-        nameExpr->String = symbol->String;
-        nameExpr->Decl = symbol->Decl;
-        call->Head = std::move( nameExpr );
-
-        GenerateCall( call.get(), config, status );
+        GenerateCall( decl, args, config, status );
     }
     else
     {
-        GenerateSymbol( symbol.get(), config, status );
+        GenerateSymbol( symbol.get(), decl, config, status );
     }
 }
 
@@ -530,14 +544,13 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
         return;
     }
 
-    auto targetSym = (NameExpr*) assignment->Left.get();
-    auto decl = targetSym->Decl.get();
+    auto decl = assignment->Left->GetDecl();
 
     switch ( decl->Kind )
     {
     case DeclKind::Global:
         mCodeBinPtr[0] = OP_STMOD;
-        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr[1] = ((Storage*) decl)->ModIndex;
         mCodeBinPtr += 2;
         WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
         break;
@@ -556,13 +569,12 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
 
     case DeclKind::Func:
     case DeclKind::Forward:
-    case DeclKind::ExternalFunc:
     case DeclKind::NativeFunc:
-        mRep.ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
+        mRep.ThrowError( CERR_SEMANTICS, assignment->Left.get(), "functions can't be assigned a value" );
         break;
 
     case DeclKind::Const:
-        mRep.ThrowError( CERR_SEMANTICS, targetSym, "Constants can't be changed" );
+        mRep.ThrowError( CERR_SEMANTICS, assignment->Left.get(), "Constants can't be changed" );
         break;
 
     default:
@@ -631,13 +643,14 @@ void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, Ge
         return;
     }
 
-    U32 addr = 0;
+    U32 addr = 0, modIndex = 0;
 
-    auto func = (Function*) addrOf->Inner->Decl.get();
+    auto func = (Function*) addrOf->Inner->GetDecl();
 
     if ( func->Address != INT32_MAX )
     {
         addr = func->Address;
+        modIndex = func->ModIndex;
     }
     else
     {
@@ -646,12 +659,13 @@ void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, Ge
         AddrRef ref = { AddrRefKind::Inst };
         ref.InstPtr = &chain->First->Inst;
         mLocalAddrRefs.push_back( ref );
+        modIndex = mModIndex;
     }
 
     mCodeBinPtr[0] = OP_LDC;
     mCodeBinPtr++;
     WriteU24( mCodeBinPtr, addr );
-    mCodeBinPtr[0] = mModIndex;
+    mCodeBinPtr[0] = modIndex;
     mCodeBinPtr++;
 
     IncreaseExprDepth();
@@ -799,26 +813,25 @@ void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size
 
 void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status )
 {
-    if ( call->Head->Kind != SyntaxKind::Name )
-        mRep.ThrowError( CERR_SEMANTICS, call, "Direct call requires a named function" );
+    GenerateCall( call->Head->GetDecl(), call->Arguments, config, status );
+}
 
-    auto op = (NameExpr*) call->Head.get();
-
-    for ( int i = call->Arguments.size() - 1; i >= 0; i-- )
+void Compiler::GenerateCall( Declaration* decl, std::vector<Unique<Syntax>>& arguments, const GenConfig& config, GenStatus& status )
+{
+    for ( int i = arguments.size() - 1; i >= 0; i-- )
     {
-        Generate( call->Arguments[i].get() );
+        Generate( arguments[i].get() );
     }
 
-    int argCount = call->Arguments.size();
+    int argCount = arguments.size();
     U8 callFlags = CallFlags::Build( argCount, config.discard );
-
-    auto decl = call->Head->GetDecl();
 
     if ( decl == nullptr )
     {
         mRep.ThrowInternalError( "Call head has no declaration" );
     }
-    else if ( decl->Kind == DeclKind::Func )
+    else if ( decl->Kind == DeclKind::Func
+        && ((Function*) decl)->ModIndex == mModIndex )
     {
         Function* func = (Function*) decl;
         U32 addr = 0;
@@ -842,17 +855,19 @@ void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus&
         WriteU24( mCodeBinPtr, addr );
 
         if ( mInFunc )
-            mCurFunc->CalledFunctions.push_back( op->String );
+            mCurFunc->CalledFunctions.push_back( func->Name );
     }
     else
     {
         int opCode = 0;
         I32 id = 0;
 
-        if ( decl->Kind == DeclKind::ExternalFunc )
+        if ( decl->Kind == DeclKind::Func )
         {
+            auto func = (Function*) decl;
+
             opCode = OP_CALLM;
-            id = ((ExternalFunction*) decl)->Id;
+            id = CodeAddr::Build( func->Address, func->ModIndex );
 
             // TODO: Add this external call to the list of called functions
         }
@@ -1522,26 +1537,22 @@ void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const
 
 void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
 {
-    if ( indexExpr->Head->Kind != SyntaxKind::Name )
-        mRep.ThrowError( CERR_SEMANTICS, indexExpr, "Only named arrays can be indexed" );
-
     Generate( indexExpr->Index.get() );
 
-    auto symbol = (NameExpr*) indexExpr->Head.get();
     uint32_t addrWord;
 
-    auto decl = symbol->Decl.get();
+    auto decl = indexExpr->Head->GetDecl();
 
     if ( decl == nullptr )
     {
-        mRep.ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        mRep.ThrowInternalError( "Missing declaration" );
     }
     else
     {
         switch ( decl->Kind )
         {
         case DeclKind::Global:
-            addrWord = CodeAddr::Build( ((Storage*) decl)->Offset, mModIndex );
+            addrWord = CodeAddr::Build( ((Storage*) decl)->Offset, ((Storage*) decl)->ModIndex );
             mCodeBinPtr[0] = OP_LDC;
             mCodeBinPtr++;
             WriteU32( mCodeBinPtr, addrWord );
@@ -1554,7 +1565,7 @@ void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
             break;
 
         default:
-            mRep.ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals and locals" );
+            mRep.ThrowError( CERR_SEMANTICS, indexExpr->Head.get(), "'aref' supports only globals and locals" );
         }
     }
 
@@ -1587,6 +1598,11 @@ void Compiler::GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenS
 void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
 {
     GenerateAref( indexExpr, Config(), Status() );
+}
+
+void Compiler::VisitDotExpr( DotExpr* dotExpr )
+{
+    GenerateSymbol( dotExpr, dotExpr->GetDecl(), Config(), Status() );
 }
 
 void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )

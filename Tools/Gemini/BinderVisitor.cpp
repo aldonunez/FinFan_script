@@ -7,7 +7,7 @@
 
 class LocalScope
 {
-    Compiler::SymTable  mLocalTable;
+    SymTable            mLocalTable;
     BinderVisitor&      mBinder;
 
 public:
@@ -34,15 +34,15 @@ static bool IsFunctionDeclaration( DeclKind kind )
 {
     return kind == DeclKind::Func
         || kind == DeclKind::Forward
-        || kind == DeclKind::ExternalFunc;
+        ;
 }
 
 static bool IsCallableDeclaration( DeclKind kind )
 {
     return kind == DeclKind::Func
         || kind == DeclKind::Forward
-        || kind == DeclKind::ExternalFunc
-        || kind == DeclKind::NativeFunc;
+        || kind == DeclKind::NativeFunc
+        ;
 }
 
 static bool IsVarDeclaration( DeclKind kind )
@@ -102,13 +102,19 @@ std::shared_ptr<T> Make( Args&&... args )
 
 
 BinderVisitor::BinderVisitor(
+    int modIndex,
     SymTable& globalTable,
+    SymTable& moduleTable,
+    SymTable& publicTable,
     ICompilerEnv* env,
     ICompilerLog* log )
     :
     mGlobalTable( globalTable ),
+    mModuleTable( moduleTable ),
+    mPublicTable( publicTable ),
     mEnv( env ),
-    mRep( log )
+    mRep( log ),
+    mModIndex( modIndex )
 {
     mSymStack.push_back( &mGlobalTable );
 
@@ -147,7 +153,7 @@ void BinderVisitor::VisitAddrOfExpr( AddrOfExpr* addrOf )
     if ( !innerType || !IsAddressableType( innerType->GetKind() )
         || decl == nullptr || !IsAddressableDeclaration( decl->Kind ) )
     {
-        mRep.ThrowError( CERR_SEMANTICS, addrOf->Inner.get(), "'%s' is not a function", addrOf->Inner->String.c_str() );
+        mRep.ThrowError( CERR_SEMANTICS, addrOf->Inner.get(), "Expected a function" );
     }
 
     addrOf->Type = Make<PointerType>( innerType );
@@ -173,6 +179,8 @@ void BinderVisitor::VisitAssignmentExpr( AssignmentExpr* assignment )
 
     if ( assignment->Left->Kind == SyntaxKind::Name )
     {
+        // Don't allow constants
+
         auto decl = assignment->Left->GetDecl();
 
         if ( !IsVarDeclaration( decl->Kind ) )
@@ -243,12 +251,10 @@ void BinderVisitor::VisitCallExpr( CallExpr* call )
     }
     else
     {
-        auto decl = call->Head->GetDecl();
-
-        if ( decl == nullptr || !IsCallableDeclaration( decl->Kind ) )
+        if ( call->Head->Type->GetKind() != TypeKind::Func )
             mRep.ThrowError( CERR_SEMANTICS, call->Head.get(), "Expected a function" );
 
-        funcType = std::static_pointer_cast<FuncType>( decl->Type );
+        funcType = std::static_pointer_cast<FuncType>( call->Head->Type );
     }
 
     if ( call->Arguments.size() != funcType->ParamTypes.size() )
@@ -411,7 +417,7 @@ void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
             mRep.ThrowInternalError( "Missing constant initializer" );
         }
 
-        std::shared_ptr<Constant> constant = AddConst( constDecl->Name, value );
+        std::shared_ptr<Constant> constant = AddConst( constDecl->Name, value, true );
 
         constDecl->Decl = constant;
         constDecl->Decl->Type = mIntType;
@@ -419,6 +425,32 @@ void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
     else
     {
         mRep.ThrowError( CERR_SEMANTICS, constDecl->TypeRef.get(), "Only integer constants are supported" );
+    }
+}
+
+void BinderVisitor::VisitDotExpr( DotExpr* dotExpr )
+{
+    dotExpr->Head->Accept( this );
+
+    if ( dotExpr->Head->Type->GetKind() == TypeKind::Module )
+    {
+        auto decl = dotExpr->Head->GetDecl();
+
+        assert( decl->Kind == DeclKind::Module );
+
+        auto modDecl = (ModuleDeclaration*) decl;
+
+        auto it = modDecl->Table.find( dotExpr->Member );
+
+        if ( it == modDecl->Table.end() )
+            mRep.ThrowError( CERR_SEMANTICS, dotExpr, "Member not found: %s", dotExpr->Member.c_str() );
+
+        dotExpr->Decl = it->second;
+        dotExpr->Type = dotExpr->Decl->Type;
+    }
+    else
+    {
+        mRep.ThrowError( CERR_SEMANTICS, dotExpr->Head.get(), "Can only access members of a module" );
     }
 }
 
@@ -452,6 +484,21 @@ void BinderVisitor::VisitForStatement( ForStatement* forStmt )
     }
 
     forStmt->Type = mIntType;
+}
+
+void BinderVisitor::VisitImportDecl( ImportDecl* importDecl )
+{
+    if ( importDecl->Decl )
+        return;
+
+    mGlobalTable.erase( importDecl->Name );
+
+    auto it = mModuleTable.find( importDecl->OriginalName );
+
+    if ( it == mModuleTable.end() )
+        mRep.ThrowError( CERR_SEMANTICS, importDecl, "Module not found" );
+
+    AddModule( importDecl->Name, std::static_pointer_cast<ModuleDeclaration>( it->second ) );
 }
 
 void BinderVisitor::VisitIndexExpr( IndexExpr* indexExpr )
@@ -999,9 +1046,12 @@ std::shared_ptr<Storage> BinderVisitor::AddGlobal( const std::string& name, size
     std::shared_ptr<Storage> global( new Storage() );
     global->Kind = DeclKind::Global;
     global->Offset = mGlobalSize;
+    global->ModIndex = mModIndex;
     mGlobalTable.insert( SymTable::value_type( name, global ) );
 
     mGlobalSize += size;
+
+    mPublicTable.insert( SymTable::value_type( name, global ) );
 
     return global;
 }
@@ -1017,7 +1067,7 @@ std::shared_ptr<Storage> BinderVisitor::AddStorage( const std::string& name, siz
     }
 }
 
-std::shared_ptr<Constant> BinderVisitor::AddConst( const std::string& name, int32_t value )
+std::shared_ptr<Constant> BinderVisitor::AddConst( const std::string& name, int32_t value, bool isPublic )
 {
     CheckDuplicateGlobalSymbol( name );
 
@@ -1025,6 +1075,10 @@ std::shared_ptr<Constant> BinderVisitor::AddConst( const std::string& name, int3
     constant->Kind = DeclKind::Const;
     constant->Value = value;
     mGlobalTable.insert( SymTable::value_type( name, constant ) );
+
+    if ( isPublic )
+        mPublicTable.insert( SymTable::value_type( name, constant ) );
+
     return constant;
 }
 
@@ -1036,6 +1090,7 @@ std::shared_ptr<Function> BinderVisitor::AddFunc( const std::string& name, int a
     func->Kind = DeclKind::Func;
     func->Name = name;
     func->Address = address;
+    func->ModIndex = mModIndex;
     mGlobalTable.insert( SymTable::value_type( name, func ) );
     return func;
 }
@@ -1048,7 +1103,11 @@ std::shared_ptr<Function> BinderVisitor::AddForward( const std::string& name )
     func->Kind = DeclKind::Forward;
     func->Name = name;
     func->Address = INT32_MAX;
+    func->ModIndex = mModIndex;
     mGlobalTable.insert( SymTable::value_type( name, func ) );
+
+    mPublicTable.insert( SymTable::value_type( name, func ) );
+
     return func;
 }
 
@@ -1064,6 +1123,13 @@ std::shared_ptr<TypeDeclaration> BinderVisitor::AddType( const std::string& name
     return typeDecl;
 }
 
+void BinderVisitor::AddModule( const std::string& name, std::shared_ptr<ModuleDeclaration> moduleDecl )
+{
+    CheckDuplicateGlobalSymbol( name );
+
+    mGlobalTable.insert( SymTable::value_type( name, moduleDecl ) );
+}
+
 void BinderVisitor::CheckDuplicateGlobalSymbol( const std::string& name )
 {
     if ( mGlobalTable.find( name ) != mGlobalTable.end() )
@@ -1073,12 +1139,13 @@ void BinderVisitor::CheckDuplicateGlobalSymbol( const std::string& name )
 void BinderVisitor::MakeStdEnv()
 {
     mTypeType.reset( new TypeType() );
+    mModuleType.reset( new ModuleType() );
     mXferType.reset( new XferType() );
     mIntType.reset( new IntType() );
 
     AddType( "int", mIntType );
-    AddConst( "false", 0 )->Type = mIntType;
-    AddConst( "true", 1 )->Type = mIntType;
+    AddConst( "false", 0, false )->Type = mIntType;
+    AddConst( "true", 1, false )->Type = mIntType;
 }
 
 void BinderVisitor::BindProcs( Unit* program )

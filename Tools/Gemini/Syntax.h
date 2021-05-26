@@ -11,6 +11,7 @@ enum class SyntaxKind
     Number,
     Name,
     Index,
+    DotExpr,
     ArrayTypeRef,
     ArrayInitializer,
     Other,
@@ -245,7 +246,7 @@ public:
 class AddrOfExpr : public Syntax
 {
 public:
-    Unique<NameExpr> Inner;
+    Unique<Syntax> Inner;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -261,6 +262,20 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
+class DotExpr : public Syntax
+{
+public:
+    Unique<Syntax> Head;
+    std::string Member;
+
+    std::shared_ptr<Declaration> Decl;
+
+    DotExpr();
+
+    virtual void Accept( IVisitor* visitor ) override;
+    virtual Declaration* GetDecl() override;
+};
+
 class CallExpr : public Syntax
 {
 public:
@@ -274,7 +289,7 @@ public:
 class CallOrSymbolExpr : public Syntax
 {
 public:
-    Unique<NameExpr> Symbol;
+    Unique<Syntax> Symbol;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -373,6 +388,14 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
+class ImportDecl : public DeclSyntax
+{
+public:
+    std::string OriginalName;
+
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
 class Unit : public Syntax
 {
     // All nodes in the syntax tree rooted in this Unit refer to this string
@@ -409,7 +432,9 @@ public:
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) = 0;
     virtual void VisitCondExpr( CondExpr* condExpr ) = 0;
     virtual void VisitConstDecl( ConstDecl* constDecl ) = 0;
+    virtual void VisitDotExpr( DotExpr* dotExpr ) = 0;
     virtual void VisitForStatement( ForStatement* forStmt ) = 0;
+    virtual void VisitImportDecl( ImportDecl* importDecl ) = 0;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) = 0;
     virtual void VisitInitList( InitList* initList ) = 0;
     virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr ) = 0;
@@ -446,9 +471,9 @@ enum class DeclKind
     Arg,
     Func,
     Forward,
-    ExternalFunc,
     NativeFunc,
     Type,
+    Module,
 };
 
 struct Declaration
@@ -457,6 +482,8 @@ struct Declaration
     std::shared_ptr<Type>   Type;
     virtual ~Declaration() { }
 };
+
+using SymTable = std::map<std::string, std::shared_ptr<Declaration>>;
 
 struct UndefinedDeclaration : public Declaration
 {
@@ -471,12 +498,14 @@ struct Constant : public Declaration
 struct Storage : public Declaration
 {
     int Offset;
+    int ModIndex;
 };
 
 struct Function : public Declaration
 {
     std::string Name;
     int         Address;
+    int         ModIndex;
 
     int16_t     LocalCount;
     int16_t     ArgCount;
@@ -494,11 +523,6 @@ struct Function : public Declaration
     std::list<std::string> CalledFunctions;
 };
 
-struct ExternalFunction : public Declaration
-{
-    int32_t Id;
-};
-
 struct NativeFunction : public Declaration
 {
     int32_t Id;
@@ -509,6 +533,12 @@ struct TypeDeclaration : public Declaration
     std::shared_ptr<::Type> ReferentType;
 };
 
+struct ModuleDeclaration : public Declaration
+{
+    std::string Name;
+    SymTable    Table;
+};
+
 
 //----------------------------------------------------------------------------
 //  Types
@@ -517,6 +547,7 @@ struct TypeDeclaration : public Declaration
 enum class TypeKind
 {
     Type,
+    Module,
     Xfer,
     Int,
     Array,
@@ -541,6 +572,12 @@ class TypeType : public Type
 {
 public:
     TypeType();
+};
+
+class ModuleType : public Type
+{
+public:
+    ModuleType();
 };
 
 class XferType : public Type
