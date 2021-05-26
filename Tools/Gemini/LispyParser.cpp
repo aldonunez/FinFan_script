@@ -632,9 +632,68 @@ Unique<DataDecl> LispyParser::ParseLetBinding( Unique<DataDecl>&& varDecl, bool 
     return varDecl;
 }
 
-Unique<TypeRef> LispyParser::ParseTypeRef()
+Unique<TypeRef> LispyParser::ParseTypeRef( bool embedded )
 {
-    return ParseArrayTypeRef();
+    if ( !embedded )
+    {
+        if ( mCurToken == TokenCode::LParen )
+        {
+            ScanToken();
+            // Now it's embedded
+        }
+        else
+        {
+            return ParseNameTypeRef( false );
+        }
+    }
+
+    AssertToken( TokenCode::Symbol );
+
+    if ( mCurString == "array" )
+    {
+        return ParseArrayTypeRef();
+    }
+    else if ( mCurString == "->" )
+    {
+        return ParsePtrFuncTypeRef();
+    }
+    else
+    {
+        return ParseNameTypeRef( true );
+    }
+}
+
+Unique<TypeRef> LispyParser::ParseNameTypeRef( bool embedded )
+{
+    auto nameTypeRef = Make<NameTypeRef>();
+
+    nameTypeRef->Symbol = ParseSymbol();
+
+    if ( embedded )
+        ScanRParen();
+
+    return nameTypeRef;
+}
+
+Unique<TypeRef> LispyParser::ParsePtrFuncTypeRef()
+{
+    auto procTypeRef = Make<ProcTypeRef>();
+
+    ScanToken();
+
+    do
+    {
+        procTypeRef->Params.push_back( ParseTypeRef( false ) );
+
+    } while ( mCurToken != TokenCode::RParen );
+
+    ScanRParen();
+
+    Unique<PointerTypeRef> pointerTypeRef( new PointerTypeRef() );
+
+    pointerTypeRef->Target = std::move( procTypeRef );
+
+    return pointerTypeRef;
 }
 
 Unique<TypeRef> LispyParser::ParseArrayTypeRef()

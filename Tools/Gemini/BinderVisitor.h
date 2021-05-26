@@ -23,11 +23,17 @@ class BinderVisitor : public IVisitor
     ICompilerEnv*   mEnv = nullptr;
     Reporter        mRep;
 
+    Function*       mCurFunc = nullptr;
+
     int             mCurLevelLocalCount = 0;
     int             mCurLocalCount = 0;
     int             mMaxLocalCount = 0;
     int             mGlobalSize = 0;
     int             mNextNativeId = 0;
+
+    std::shared_ptr<TypeType>   mTypeType;
+    std::shared_ptr<XferType>   mXferType;
+    std::shared_ptr<IntType>    mIntType;
 
 public:
     BinderVisitor(
@@ -58,11 +64,14 @@ public:
     virtual void VisitLetStatement( LetStatement* letStmt ) override;
     virtual void VisitLoopStatement( LoopStatement* loopStmt ) override;
     virtual void VisitNameExpr( NameExpr* nameExpr ) override;
+    virtual void VisitNameTypeRef( NameTypeRef* nameTypeRef ) override;
     virtual void VisitNativeDecl( NativeDecl* nativeDecl ) override;
     virtual void VisitNextStatement( NextStatement* nextStmt ) override;
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) override;
     virtual void VisitParamDecl( ParamDecl* paramDecl ) override;
+    virtual void VisitPointerTypeRef( PointerTypeRef* pointerTypeRef ) override;
     virtual void VisitProcDecl( ProcDecl* procDecl ) override;
+    virtual void VisitProcTypeRef( ProcTypeRef* procTypeRef ) override;
     virtual void VisitReturnStatement( ReturnStatement* retStmt ) override;
     virtual void VisitStatementList( StatementList* stmtList ) override;
     virtual void VisitUnaryExpr( UnaryExpr* unary ) override;
@@ -76,8 +85,20 @@ private:
     void VisitProc( ProcDecl* procDecl );
     void VisitLetBinding( DataDecl* varDecl );
     void VisitStorage( DataDecl* varDecl, DeclKind declKind );
+    std::shared_ptr<Type> VisitParamTypeRef( Unique<TypeRef>& typeRef );
 
-    I32 GetFoldedSyntaxValue( Syntax* node, const char* message = nullptr );
+    I32 Evaluate( Syntax* node, const char* message = nullptr );
+    void CheckType(
+        const std::shared_ptr<Type>& left,
+        const std::shared_ptr<Type>& right,
+        Syntax* node );
+    void CheckType(
+        Type* site,
+        Type* type,
+        Syntax* node );
+    void CheckAssignableType( Syntax* node );
+    void CheckAndConsolidateClauseType( StatementList& clause, std::shared_ptr<Type>& bodyType );
+    void CheckAndConsolidateClauseType( Syntax* clause, std::shared_ptr<Type>& bodyType );
 
     // Symbol table
     std::shared_ptr<Declaration> FindSymbol( const std::string& symbol );
@@ -89,6 +110,7 @@ private:
     std::shared_ptr<Constant> AddConst( const std::string& name, int32_t value );
     std::shared_ptr<Function> AddFunc( const std::string& name, int address );
     std::shared_ptr<Function> AddForward( const std::string& name );
+    std::shared_ptr<TypeDeclaration> AddType( const std::string& name, std::shared_ptr<Type> type );
     void CheckDuplicateGlobalSymbol( const std::string& name );
 
     void MakeStdEnv();
@@ -97,4 +119,5 @@ private:
 
     void DeclareNode( DeclSyntax* node );
     std::shared_ptr<Declaration> DefineNode( const std::string& name, UndefinedDeclaration* decl );
+    std::shared_ptr<FuncType> MakeFuncType( ProcDeclBase* procDecl );
 };

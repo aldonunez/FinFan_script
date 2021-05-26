@@ -703,8 +703,10 @@ void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenS
 void Compiler::GenerateLetBinding( DataDecl* binding )
 {
     auto local = (Storage*) binding->GetDecl();
+    auto type = local->Type.get();
 
-    if ( binding->TypeRef == nullptr )
+    if ( type->GetKind() == TypeKind::Int
+        || type->GetKind() == TypeKind::Pointer )
     {
         if ( binding->Initializer != nullptr )
         {
@@ -715,13 +717,13 @@ void Compiler::GenerateLetBinding( DataDecl* binding )
             DecreaseExprDepth();
         }
     }
-    else if ( binding->TypeRef->Kind == SyntaxKind::ArrayTypeRef )
+    else if ( type->GetKind() == TypeKind::Array )
     {
-        auto type = (ArrayTypeRef*) binding->TypeRef.get();
+        auto arrayType = (ArrayType*) type;
 
         if ( binding->Initializer != nullptr )
         {
-            AddLocalDataArray( local, binding->Initializer.get(), type->Size );
+            AddLocalDataArray( local, binding->Initializer.get(), arrayType->Size );
         }
     }
     else
@@ -1590,21 +1592,23 @@ void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
 void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )
 {
     auto global = (Storage*) varDecl->GetDecl();
+    auto type = global->Type.get();
 
-    if ( varDecl->TypeRef == nullptr )
+    if ( type->GetKind() == TypeKind::Int
+        || type->GetKind() == TypeKind::Pointer )
     {
         if ( varDecl->Initializer != nullptr )
         {
             AddGlobalData( global->Offset, varDecl->Initializer.get() );
         }
     }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::ArrayTypeRef )
+    else if ( type->GetKind() == TypeKind::Array )
     {
-        auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
+        auto arrayType = (ArrayType*) type;
 
         if ( varDecl->Initializer != nullptr )
         {
-            AddGlobalDataArray( global, varDecl->Initializer.get(), type->Size );
+            AddGlobalDataArray( global, varDecl->Initializer.get(), arrayType->Size );
         }
     }
     else
@@ -1668,6 +1672,21 @@ void Compiler::VisitConstDecl( ConstDecl* constDecl )
 }
 
 void Compiler::VisitNativeDecl( NativeDecl* nativeDecl )
+{
+    // Nothing
+}
+
+void Compiler::VisitNameTypeRef( NameTypeRef* nameTypeRef )
+{
+    // Nothing
+}
+
+void Compiler::VisitPointerTypeRef( PointerTypeRef* pointerTypeRef )
+{
+    // Nothing
+}
+
+void Compiler::VisitProcTypeRef( ProcTypeRef* procTypeRef )
 {
     // Nothing
 }

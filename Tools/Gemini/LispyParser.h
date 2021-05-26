@@ -82,7 +82,9 @@ private:
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseLet();
     Unique<DataDecl> ParseLetBinding( Unique<DataDecl>&& newVarDecl, bool isParam = false );
-    Unique<TypeRef> ParseTypeRef();
+    Unique<TypeRef> ParseTypeRef( bool embedded = true );
+    Unique<TypeRef> ParseNameTypeRef( bool embedded );
+    Unique<TypeRef> ParsePtrFuncTypeRef();
     Unique<TypeRef> ParseArrayTypeRef();
     Unique<Syntax> ParseArrayInitializer();
     Unique<Syntax> ParseAref();

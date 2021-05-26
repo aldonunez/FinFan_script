@@ -56,6 +56,7 @@ class AlgolyParser
         Next,
         Not,
         Or,
+        Proc,
         Return,
         Then,
         To,
@@ -130,6 +131,8 @@ private:
     Unique<DataDecl> ParseVar( Unique<DataDecl>&& newVarDecl, std::optional<TokenCode> assignToken );
 
     Unique<TypeRef> ParseTypeRef();
+    Unique<TypeRef> ParseNameTypeRef();
+    Unique<TypeRef> ParsePtrFuncTypeRef();
     Unique<TypeRef> ParseArrayTypeRef();
     Unique<Syntax> ParseArrayInitializer();
     Unique<Syntax> ParseInitExpr();

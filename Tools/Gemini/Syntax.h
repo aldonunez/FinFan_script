@@ -24,6 +24,8 @@ class ProcDecl;
 
 struct Declaration;
 
+class Type;
+
 
 template <class T = Syntax>
 using Unique = std::unique_ptr<T, std::default_delete<Syntax>>;
@@ -38,6 +40,8 @@ public:
     const char* FileName = nullptr;
 
     // All nodes in the same syntax tree refer to the file name string in the root Unit
+
+    std::shared_ptr<Type>   Type;
 
     virtual ~Syntax() {}
     virtual void Accept( IVisitor* visitor ) = 0;
@@ -80,16 +84,39 @@ public:
 class TypeRef : public Syntax
 {
 public:
+    std::shared_ptr<::Type> ReferentType;
+};
+
+class NameTypeRef : public TypeRef
+{
+public:
+    Unique<NameExpr> Symbol;
+
+    virtual void Accept( IVisitor* visitor ) override;
 };
 
 class ArrayTypeRef : public TypeRef
 {
 public:
-    int32_t Size;
-
     Unique<Syntax> SizeExpr;
 
-    ArrayTypeRef( int32_t size = 0 );
+    ArrayTypeRef();
+
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class ProcTypeRef : public TypeRef
+{
+public:
+    std::vector<Unique<TypeRef>> Params;
+
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class PointerTypeRef : public TypeRef
+{
+public:
+    Unique<TypeRef> Target;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -389,11 +416,14 @@ public:
     virtual void VisitLetStatement( LetStatement* letStmt ) = 0;
     virtual void VisitLoopStatement( LoopStatement* loopStmt ) = 0;
     virtual void VisitNameExpr( NameExpr* nameExpr ) = 0;
+    virtual void VisitNameTypeRef( NameTypeRef* nameTypeRef ) = 0;
     virtual void VisitNativeDecl( NativeDecl* nativeDecl ) = 0;
     virtual void VisitNextStatement( NextStatement* nextStmt ) = 0;
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) = 0;
     virtual void VisitParamDecl( ParamDecl* paramDecl ) = 0;
+    virtual void VisitPointerTypeRef( PointerTypeRef* pointerTypeRef ) = 0;
     virtual void VisitProcDecl( ProcDecl* procDecl ) = 0;
+    virtual void VisitProcTypeRef( ProcTypeRef* procTypeRef ) = 0;
     virtual void VisitReturnStatement( ReturnStatement* retStmt ) = 0;
     virtual void VisitStatementList( StatementList* stmtmList ) = 0;
     virtual void VisitUnaryExpr( UnaryExpr* unary ) = 0;
@@ -418,11 +448,13 @@ enum class DeclKind
     Forward,
     ExternalFunc,
     NativeFunc,
+    Type,
 };
 
 struct Declaration
 {
     DeclKind  Kind;
+    std::shared_ptr<Type>   Type;
     virtual ~Declaration() { }
 };
 
@@ -470,4 +502,94 @@ struct ExternalFunction : public Declaration
 struct NativeFunction : public Declaration
 {
     int32_t Id;
+};
+
+struct TypeDeclaration : public Declaration
+{
+    std::shared_ptr<::Type> ReferentType;
+};
+
+
+//----------------------------------------------------------------------------
+//  Types
+//----------------------------------------------------------------------------
+
+enum class TypeKind
+{
+    Type,
+    Xfer,
+    Int,
+    Array,
+    Func,
+    Pointer,
+};
+
+class Type
+{
+    TypeKind    mKind;
+
+protected:
+    Type( TypeKind kind );
+
+public:
+    TypeKind GetKind() const;
+    virtual bool IsAssignableFrom( Type* other ) const;
+    virtual int32_t GetSize() const;
+};
+
+class TypeType : public Type
+{
+public:
+    TypeType();
+};
+
+class XferType : public Type
+{
+public:
+    XferType();
+
+    virtual bool IsAssignableFrom( Type* other ) const override;
+};
+
+class IntType : public Type
+{
+public:
+    IntType();
+
+    virtual bool IsAssignableFrom( Type* other ) const override;
+    virtual int32_t GetSize() const override;
+};
+
+class ArrayType : public Type
+{
+public:
+    int32_t Size;
+    std::shared_ptr<Type> ElemType;
+
+    ArrayType( int32_t size, std::shared_ptr<Type> elemType );
+
+    virtual bool IsAssignableFrom( Type* other ) const override;
+    virtual int32_t GetSize() const override;
+};
+
+class FuncType : public Type
+{
+public:
+    std::shared_ptr<Type>               ReturnType;
+    std::vector<std::shared_ptr<Type>>  ParamTypes;
+
+    FuncType( std::shared_ptr<Type> returnType );
+
+    virtual bool IsAssignableFrom( Type* other ) const override;
+};
+
+class PointerType : public Type
+{
+public:
+    std::shared_ptr<Type>   TargetType;
+
+    PointerType( std::shared_ptr<Type> target );
+
+    virtual bool IsAssignableFrom( Type* other ) const override;
+    virtual int32_t GetSize() const override;
 };

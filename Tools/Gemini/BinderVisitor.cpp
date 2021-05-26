@@ -30,14 +30,14 @@ public:
 };
 
 
-bool IsFunctionDeclaration( DeclKind kind )
+static bool IsFunctionDeclaration( DeclKind kind )
 {
     return kind == DeclKind::Func
         || kind == DeclKind::Forward
         || kind == DeclKind::ExternalFunc;
 }
 
-bool IsCallableDeclaration( DeclKind kind )
+static bool IsCallableDeclaration( DeclKind kind )
 {
     return kind == DeclKind::Func
         || kind == DeclKind::Forward
@@ -45,11 +45,59 @@ bool IsCallableDeclaration( DeclKind kind )
         || kind == DeclKind::NativeFunc;
 }
 
-bool IsVarDeclaration( DeclKind kind )
+static bool IsVarDeclaration( DeclKind kind )
 {
     return kind == DeclKind::Arg
         || kind == DeclKind::Global
         || kind == DeclKind::Local;
+}
+
+static bool IsAddressableDeclaration( DeclKind kind )
+{
+    return kind == DeclKind::Func
+        || kind == DeclKind::Forward
+        ;
+}
+
+static bool IsAddressableType( TypeKind kind )
+{
+    return kind == TypeKind::Func;
+}
+
+static bool IsAssignableType( TypeKind kind )
+{
+    return kind == TypeKind::Int
+        || kind == TypeKind::Pointer
+        || kind == TypeKind::Xfer;
+}
+
+static bool IsEquatable( TypeKind kind )
+{
+    return kind == TypeKind::Int
+        || kind == TypeKind::Pointer;
+}
+
+static bool IsBoolean( TypeKind kind )
+{
+    return kind == TypeKind::Int;
+}
+
+static bool IsAllowedPointerTarget( TypeKind kind )
+{
+    return kind == TypeKind::Func;
+}
+
+static bool IsAllowedParamType( TypeKind kind )
+{
+    return kind == TypeKind::Int
+        || kind == TypeKind::Pointer;
+}
+
+template <typename T, typename... Args>
+std::shared_ptr<T> Make( Args&&... args )
+{
+    T* type = new T( std::forward<Args>( args )... );
+    return std::shared_ptr<T>( type );
 }
 
 
@@ -93,20 +141,29 @@ void BinderVisitor::VisitAddrOfExpr( AddrOfExpr* addrOf )
 {
     addrOf->Inner->Accept( this );
 
-    if ( !IsFunctionDeclaration( addrOf->Inner->Decl->Kind ) )
+    auto innerType = addrOf->Inner->Type;
+    auto decl = addrOf->Inner->GetDecl();
+
+    if ( !innerType || !IsAddressableType( innerType->GetKind() )
+        || decl == nullptr || !IsAddressableDeclaration( decl->Kind ) )
     {
         mRep.ThrowError( CERR_SEMANTICS, addrOf->Inner.get(), "'%s' is not a function", addrOf->Inner->String.c_str() );
     }
+
+    addrOf->Type = Make<PointerType>( innerType );
 }
 
 void BinderVisitor::VisitArrayTypeRef( ArrayTypeRef* typeRef )
 {
     typeRef->SizeExpr->Accept( this );
 
-    typeRef->Size = GetFoldedSyntaxValue( typeRef->SizeExpr.get(), "Expected a constant array size" );
+    int32_t size = Evaluate( typeRef->SizeExpr.get(), "Expected a constant array size" );
 
-    if ( typeRef->Size <= 0 )
+    if ( size <= 0 )
         mRep.ThrowError( CERR_SEMANTICS, typeRef->SizeExpr.get(), "Array size must be positive" );
+
+    typeRef->Type = mTypeType;
+    typeRef->ReferentType = Make<ArrayType>( size, mIntType );
 }
 
 void BinderVisitor::VisitAssignmentExpr( AssignmentExpr* assignment )
@@ -122,41 +179,113 @@ void BinderVisitor::VisitAssignmentExpr( AssignmentExpr* assignment )
             mRep.ThrowError( CERR_SEMANTICS, assignment->Left.get(), "Left side is not a variable object" );
     }
 
+    CheckAssignableType( assignment->Left.get() );
+
     // An indexing expression would have checked itself already
+
+    CheckType( assignment->Left->Type, assignment->Right->Type, assignment );
+
+    assignment->Type = assignment->Left->Type;
 }
 
 void BinderVisitor::VisitBinaryExpr( BinaryExpr* binary )
 {
     binary->Left->Accept( this );
     binary->Right->Accept( this );
+
+    if ( binary->Op == "=" || binary->Op == "<>" )
+    {
+        if ( !IsEquatable( binary->Left->Type->GetKind() )
+            || !IsEquatable( binary->Right->Type->GetKind() ) )
+        {
+            mRep.ThrowError( CERR_SEMANTICS, binary, "Equality expressions only support scalars" );
+        }
+
+        CheckType( binary->Left->Type, binary->Right->Type, binary );
+
+        binary->Type = mIntType;
+    }
+    else
+    {
+        if ( binary->Left->Type->GetKind() != TypeKind::Int
+            || binary->Right->Type->GetKind() != TypeKind::Int )
+        {
+            mRep.ThrowError( CERR_SEMANTICS, binary, "Binary expressions only support integers" );
+        }
+
+        binary->Type = binary->Left->Type;
+    }
 }
 
 void BinderVisitor::VisitBreakStatement( BreakStatement* breakStmt )
 {
-    // Nothing
+    breakStmt->Type = mXferType;
 }
 
 void BinderVisitor::VisitCallExpr( CallExpr* call )
 {
     call->Head->Accept( this );
 
-    if ( !call->IsIndirect )
+    std::shared_ptr<FuncType> funcType;
+
+    if ( call->IsIndirect )
+    {
+        auto type = call->Head->Type.get();
+
+        if ( type == nullptr
+            || type->GetKind() != TypeKind::Pointer
+            || ((PointerType*) type)->TargetType->GetKind() != TypeKind::Func )
+        {
+            mRep.ThrowError( CERR_SEMANTICS, call->Head.get(), "Expected a function pointer" );
+        }
+
+        funcType = std::static_pointer_cast<FuncType>( ((PointerType*) type)->TargetType );
+    }
+    else
     {
         auto decl = call->Head->GetDecl();
 
         if ( decl == nullptr || !IsCallableDeclaration( decl->Kind ) )
             mRep.ThrowError( CERR_SEMANTICS, call->Head.get(), "Expected a function" );
+
+        funcType = std::static_pointer_cast<FuncType>( decl->Type );
     }
+
+    if ( call->Arguments.size() != funcType->ParamTypes.size() )
+        mRep.ThrowError( CERR_SEMANTICS, call, "Function does not take %u arguments", call->Arguments.size() );
+
+    int i = 0;
 
     for ( auto& arg : call->Arguments )
     {
         arg->Accept( this );
+
+        CheckType( funcType->ParamTypes[i], arg->Type, arg.get() );
+        i++;
     }
+
+    call->Type = funcType->ReturnType;
 }
 
 void BinderVisitor::VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol )
 {
     callOrSymbol->Symbol->Accept( this );
+
+    auto decl = callOrSymbol->Symbol->GetDecl();
+
+    if ( IsCallableDeclaration( decl->Kind ) )
+    {
+        auto funcType = (FuncType*) decl->Type.get();
+
+        if ( funcType->ParamTypes.size() > 0 )
+            mRep.ThrowError( CERR_SEMANTICS, callOrSymbol, "Too few arguments" );
+
+        callOrSymbol->Type = funcType->ReturnType;
+    }
+    else
+    {
+        callOrSymbol->Type = decl->Type;
+    }
 }
 
 void BinderVisitor::VisitCaseExpr( CaseExpr* caseExpr )
@@ -165,34 +294,96 @@ void BinderVisitor::VisitCaseExpr( CaseExpr* caseExpr )
 
     caseExpr->TestKey->Accept( this );
 
+    if ( caseExpr->TestKey->Type->GetKind() != TypeKind::Int )
+        mRep.ThrowError( CERR_SEMANTICS, caseExpr->TestKey.get(), "Case only supports integers" );
+
     if ( caseExpr->TestKey->Kind != SyntaxKind::Name
         && caseExpr->TestKey->Kind != SyntaxKind::Number )
     {
         // TODO: Ideally simplify a complex test key in one place
         caseExpr->TestKeyDecl = AddLocal( "$testKey", 1 );
+        caseExpr->TestKeyDecl->Type = caseExpr->TestKey->Type;
     }
+
+    std::shared_ptr<Type> bodyType;
 
     for ( auto& clause : caseExpr->Clauses )
     {
         for ( auto& key : clause->Keys )
         {
             key->Accept( this );
+
+            if ( key->Type->GetKind() != TypeKind::Int )
+                mRep.ThrowError( CERR_SEMANTICS, key.get(), "Case key only supports integers" );
         }
 
         clause->Body.Accept( this );
+
+        CheckAndConsolidateClauseType( clause->Body, bodyType );
     }
 
-    if ( caseExpr->Fallback != nullptr )
+    if ( caseExpr->Fallback )
+    {
         caseExpr->Fallback->Body.Accept( this );
+
+        CheckAndConsolidateClauseType( caseExpr->Fallback->Body, bodyType );
+    }
+    else if ( caseExpr->Clauses.size() > 0 )
+    {
+        if ( bodyType->GetKind() != TypeKind::Int
+            && bodyType->GetKind() != TypeKind::Xfer )
+            mRep.ThrowError( CERR_SEMANTICS, caseExpr, "Case without else must yield integers or nothing" );
+    }
+    else
+    {
+        bodyType = mIntType;
+    }
+
+    caseExpr->Type = bodyType;
 }
 
 void BinderVisitor::VisitCondExpr( CondExpr* condExpr )
 {
+    std::shared_ptr<Type> bodyType;
+
     for ( auto& clause : condExpr->Clauses )
     {
         clause->Condition->Accept( this );
+
+        if ( !IsBoolean( clause->Condition->Type->GetKind() ) )
+            mRep.ThrowError( CERR_SEMANTICS, clause->Condition.get(), "Expected scalar type" );
+
         clause->Body.Accept( this );
+
+        Syntax* sourceNode = nullptr;
+
+        if ( clause->Body.Statements.size() == 0 && !condExpr->IsIf )
+            sourceNode = clause->Condition.get();
+        else
+            sourceNode = &clause->Body;
+
+        CheckAndConsolidateClauseType( sourceNode, bodyType );
     }
+
+    if ( condExpr->Clauses.size() > 0 )
+    {
+        auto optVal = GetOptionalSyntaxValue( condExpr->Clauses.back()->Condition.get() );
+
+        if ( !optVal.has_value() || optVal.value() == 0 )
+        {
+            if ( bodyType->GetKind() != TypeKind::Int
+                && bodyType->GetKind() != TypeKind::Xfer )
+            {
+                mRep.ThrowError( CERR_SEMANTICS, condExpr, "If without else must yield integers or nothing" );
+            }
+        }
+    }
+    else
+    {
+        bodyType = mIntType;
+    }
+
+    condExpr->Type = bodyType;
 }
 
 void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
@@ -213,7 +404,7 @@ void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
         {
             constDecl->Initializer->Accept( this );
 
-            value = GetFoldedSyntaxValue( constDecl->Initializer.get(), "Constant initializer is not constant" );
+            value = Evaluate( constDecl->Initializer.get(), "Constant initializer is not constant" );
         }
         else
         {
@@ -223,6 +414,7 @@ void BinderVisitor::VisitConstDecl( ConstDecl* constDecl )
         std::shared_ptr<Constant> constant = AddConst( constDecl->Name, value );
 
         constDecl->Decl = constant;
+        constDecl->Decl->Type = mIntType;
     }
     else
     {
@@ -234,7 +426,8 @@ void BinderVisitor::VisitForStatement( ForStatement* forStmt )
 {
     LocalScope localScope( *this );
 
-    std::shared_ptr<Storage> local = AddLocal( forStmt->IndexName, 1 );
+    auto local = AddLocal( forStmt->IndexName, 1 );
+    local->Type = mIntType;
 
     forStmt->IndexDecl = local;
 
@@ -245,6 +438,20 @@ void BinderVisitor::VisitForStatement( ForStatement* forStmt )
         forStmt->Step->Accept( this );
 
     forStmt->Body.Accept( this );
+
+    if ( forStmt->First->Type->GetKind() != TypeKind::Int )
+        mRep.ThrowError( CERR_SEMANTICS, forStmt->First.get(), "For bounds only support integers" );
+
+    if ( forStmt->Last->Type->GetKind() != TypeKind::Int )
+        mRep.ThrowError( CERR_SEMANTICS, forStmt->Last.get(), "For bounds only support integers" );
+
+    if ( forStmt->Step )
+    {
+        if ( forStmt->Step->Type->GetKind() != TypeKind::Int )
+            mRep.ThrowError( CERR_SEMANTICS, forStmt->Step.get(), "For step only supports integers" );
+    }
+
+    forStmt->Type = mIntType;
 }
 
 void BinderVisitor::VisitIndexExpr( IndexExpr* indexExpr )
@@ -256,14 +463,36 @@ void BinderVisitor::VisitIndexExpr( IndexExpr* indexExpr )
 
     if ( decl == nullptr || (decl->Kind != DeclKind::Local && decl->Kind != DeclKind::Global) )
         mRep.ThrowError( CERR_SEMANTICS, indexExpr->Head.get(), "Only named arrays can be indexed" );
+
+    if ( indexExpr->Head->Type->GetKind() != TypeKind::Array )
+        mRep.ThrowError( CERR_SEMANTICS, indexExpr->Head.get(), "Only arrays can be indexed" );
+
+    if ( indexExpr->Index->Type->GetKind() != TypeKind::Int )
+        mRep.ThrowError( CERR_SEMANTICS, indexExpr->Index.get(), "Index only supports integers" );
+
+    auto arrayType = (ArrayType*) indexExpr->Head->Type.get();
+
+    indexExpr->Type = arrayType->ElemType;
 }
 
 void BinderVisitor::VisitInitList( InitList* initList )
 {
+    std::shared_ptr<Type> elemType;
+
     for ( auto& value : initList->Values )
     {
         value->Accept( this );
+
+        if ( !elemType )
+            elemType = value->Type;
+        else
+            CheckType( elemType, value->Type, value.get() );
     }
+
+    if ( !elemType )
+        elemType = mIntType;
+
+    initList->Type = Make<ArrayType>( initList->Values.size(), elemType );
 }
 
 void BinderVisitor::VisitLambdaExpr( LambdaExpr* lambdaExpr )
@@ -273,6 +502,10 @@ void BinderVisitor::VisitLambdaExpr( LambdaExpr* lambdaExpr )
     // a top level procedure
 
     mLambdas.push_back( lambdaExpr );
+
+    auto funcType = MakeFuncType( lambdaExpr->Proc.get() );
+
+    lambdaExpr->Type = Make<PointerType>( funcType );
 }
 
 void BinderVisitor::VisitLetStatement( LetStatement* letStmt )
@@ -285,6 +518,10 @@ void BinderVisitor::VisitLetStatement( LetStatement* letStmt )
     }
 
     letStmt->Body.Accept( this );
+
+    CheckAssignableType( &letStmt->Body );
+
+    letStmt->Type = letStmt->Body.Type;
 }
 
 void BinderVisitor::VisitLetBinding( DataDecl* varDecl )
@@ -300,32 +537,36 @@ void BinderVisitor::VisitStorage( DataDecl* varDecl, DeclKind declKind )
     if ( varDecl->Initializer != nullptr )
         varDecl->Initializer->Accept( this );
 
-    if ( varDecl->TypeRef == nullptr
-        && varDecl->Initializer != nullptr
-        && varDecl->Initializer->Kind == SyntaxKind::ArrayInitializer )
-    {
-        int32_t size = ((InitList*) varDecl->Initializer.get())->Values.size();
-
-        varDecl->TypeRef = Unique<ArrayTypeRef>( new ArrayTypeRef( size ) );
-    }
-    else if ( varDecl->TypeRef != nullptr
-        && varDecl->TypeRef->Kind == SyntaxKind::ArrayTypeRef
-        && varDecl->Initializer != nullptr
-        && varDecl->Initializer->Kind != SyntaxKind::ArrayInitializer )
-    {
-        mRep.ThrowError( CERR_SEMANTICS, varDecl->Initializer.get(), "Arrays are initialized with arrays" );
-    }
+    std::shared_ptr<Type> type;
 
     if ( varDecl->TypeRef == nullptr )
     {
-        varDecl->Decl = AddStorage( varDecl->Name, 1, declKind );
+        if ( varDecl->Initializer == nullptr )
+            type = mIntType;
+        else
+            type = varDecl->Initializer->Type;
     }
-    else if ( varDecl->TypeRef->Kind == SyntaxKind::ArrayTypeRef )
+    else
     {
-        auto type = (ArrayTypeRef*) varDecl->TypeRef.get();
+        type = varDecl->TypeRef->ReferentType;
 
-        varDecl->Decl = AddStorage( varDecl->Name, type->Size, declKind );
+        if ( varDecl->Initializer != nullptr )
+            CheckType( type, varDecl->Initializer->Type, varDecl->Initializer.get() );
+
+        if ( varDecl->Initializer == nullptr && type->GetKind() == TypeKind::Pointer )
+            mRep.ThrowError( CERR_SEMANTICS, varDecl, "Pointers must be initialized" );
     }
+
+    int32_t size = type->GetSize();
+
+    if ( size == 0 )
+    {
+        mRep.ThrowInternalError( "Bad type" );
+    }
+
+    varDecl->Decl = AddStorage( varDecl->Name, size, declKind );
+    varDecl->Decl->Type = type;
+    varDecl->Type = type;
 }
 
 void BinderVisitor::VisitLoopStatement( LoopStatement* loopStmt )
@@ -333,7 +574,14 @@ void BinderVisitor::VisitLoopStatement( LoopStatement* loopStmt )
     loopStmt->Body.Accept( this );
 
     if ( loopStmt->Condition != nullptr )
+    {
         loopStmt->Condition->Accept( this );
+
+        if ( !IsBoolean( loopStmt->Condition->Type->GetKind() ) )
+            mRep.ThrowError( CERR_SEMANTICS, loopStmt->Condition.get(), "Loop condition only supports integers" );
+    }
+
+    loopStmt->Type = mIntType;
 }
 
 void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
@@ -351,6 +599,21 @@ void BinderVisitor::VisitNameExpr( NameExpr* nameExpr )
     {
         mRep.ThrowError( CERR_SEMANTICS, nameExpr, "symbol not found '%s'", nameExpr->String.c_str() );
     }
+
+    nameExpr->Type = nameExpr->Decl->Type;
+}
+
+void BinderVisitor::VisitNameTypeRef( NameTypeRef* nameTypeRef )
+{
+    nameTypeRef->Symbol->Accept( this );
+
+    auto decl = nameTypeRef->Symbol->GetDecl();
+
+    if ( decl->Kind != DeclKind::Type )
+        mRep.ThrowError( CERR_SEMANTICS, nameTypeRef, "Expected a type name" );
+
+    nameTypeRef->Type = mTypeType;
+    nameTypeRef->ReferentType = ((TypeDeclaration*) decl)->ReferentType;
 }
 
 void BinderVisitor::VisitNativeDecl( NativeDecl* nativeDecl )
@@ -367,25 +630,61 @@ void BinderVisitor::VisitNativeDecl( NativeDecl* nativeDecl )
 
     mNextNativeId++;
 
+    native->Type = MakeFuncType( nativeDecl );
+
     nativeDecl->Decl = native;
 }
 
 void BinderVisitor::VisitNextStatement( NextStatement* nextStmt )
 {
-    // Nothing
+    nextStmt->Type = mXferType;
 }
 
 void BinderVisitor::VisitNumberExpr( NumberExpr* numberExpr )
 {
-    // Nothing
+    numberExpr->Type = mIntType;
 }
 
 void BinderVisitor::VisitParamDecl( ParamDecl* paramDecl )
 {
-    if ( paramDecl->TypeRef != nullptr )
-        mRep.ThrowError( CERR_UNSUPPORTED, paramDecl->TypeRef.get(), "only simple parameters are supported" );
+    auto type = VisitParamTypeRef( paramDecl->TypeRef );
 
     paramDecl->Decl = AddArg( paramDecl->Name );
+    paramDecl->Decl->Type = type;
+}
+
+std::shared_ptr<Type> BinderVisitor::VisitParamTypeRef( Unique<TypeRef>& typeRef )
+{
+    std::shared_ptr<Type> type;
+
+    if ( typeRef )
+    {
+        typeRef->Accept( this );
+
+        if ( !IsAllowedParamType( typeRef->ReferentType->GetKind() ) )
+            mRep.ThrowError( CERR_SEMANTICS, typeRef.get(), "This type is not allowed for parameters" );
+
+        type = typeRef->ReferentType;
+    }
+    else
+    {
+        type = mIntType;
+    }
+
+    return type;
+}
+
+void BinderVisitor::VisitPointerTypeRef( PointerTypeRef* pointerTypeRef )
+{
+    pointerTypeRef->Target->Accept( this );
+
+    if ( !IsAllowedPointerTarget( pointerTypeRef->Target->ReferentType->GetKind() ) )
+        mRep.ThrowError( CERR_SEMANTICS, pointerTypeRef->Target.get(), "This type is not allowed for pointers" );
+
+    auto pointerType = Make<PointerType>( pointerTypeRef->Target->ReferentType );
+
+    pointerTypeRef->Type = mTypeType;
+    pointerTypeRef->ReferentType = pointerType;
 }
 
 void BinderVisitor::VisitProcDecl( ProcDecl* procDecl )
@@ -395,7 +694,11 @@ void BinderVisitor::VisitProcDecl( ProcDecl* procDecl )
 
     mGlobalTable.erase( procDecl->Name );
 
-    procDecl->Decl = AddForward( procDecl->Name );
+    auto forward = AddForward( procDecl->Name );
+
+    forward->Type = MakeFuncType( procDecl );
+
+    procDecl->Decl = forward;
 }
 
 void BinderVisitor::BindNamedProc( ProcDecl* procDecl )
@@ -423,7 +726,7 @@ void BinderVisitor::BindNamedProc( ProcDecl* procDecl )
     }
     else
     {
-        func = AddFunc( procDecl->Name, INT32_MAX );
+        mRep.ThrowInternalError( "Function wasn't previously declared" );
     }
 
     VisitProc( procDecl );
@@ -449,7 +752,11 @@ void BinderVisitor::VisitProc( ProcDecl* procDecl )
     mMaxLocalCount = 0;
     mCurLocalCount = 0;
 
+    mCurFunc = func;
+
     procDecl->Body.Accept( this );
+
+    mCurFunc = nullptr;
 
     if ( mMaxLocalCount > ProcDecl::MaxLocals )
     {
@@ -459,11 +766,36 @@ void BinderVisitor::VisitProc( ProcDecl* procDecl )
 
     func->LocalCount = mMaxLocalCount;
     func->ArgCount = (int16_t) procDecl->Params.size();
+
+    auto funcType = (FuncType*) func->Type.get();
+
+    CheckType( funcType->ReturnType, procDecl->Body.Type, &procDecl->Body );
+}
+
+void BinderVisitor::VisitProcTypeRef( ProcTypeRef* procTypeRef )
+{
+    auto funcType = Make<FuncType>( mIntType );
+
+    for ( auto& param : procTypeRef->Params )
+    {
+        param->Accept( this );
+
+        funcType->ParamTypes.push_back( param->ReferentType );
+    }
+
+    procTypeRef->Type = mTypeType;
+    procTypeRef->ReferentType = funcType;
 }
 
 void BinderVisitor::VisitReturnStatement( ReturnStatement* retStmt )
 {
     retStmt->Inner->Accept( this );
+
+    auto funcType = (FuncType*) mCurFunc->Type.get();
+
+    CheckType( funcType->ReturnType, retStmt->Inner->Type, retStmt );
+
+    retStmt->Type = mXferType;
 }
 
 void BinderVisitor::VisitStatementList( StatementList* stmtList )
@@ -471,12 +803,24 @@ void BinderVisitor::VisitStatementList( StatementList* stmtList )
     for ( auto& stmt : stmtList->Statements )
     {
         stmt->Accept( this );
+
+        CheckAssignableType( stmt.get() );
     }
+
+    if ( stmtList->Statements.size() == 0 )
+        stmtList->Type = mIntType;
+    else
+        stmtList->Type = stmtList->Statements.back()->Type;
 }
 
 void BinderVisitor::VisitUnaryExpr( UnaryExpr* unary )
 {
     unary->Inner->Accept( this );
+
+    if ( unary->Inner->Type->GetKind() != TypeKind::Int )
+        mRep.ThrowError( CERR_SEMANTICS, unary->Inner.get(), "Unary expression only supports integers" );
+
+    unary->Type = unary->Inner->Type;
 }
 
 void BinderVisitor::VisitUnit( Unit* unit )
@@ -501,7 +845,13 @@ void BinderVisitor::VisitVarDecl( VarDecl* varDecl )
 void BinderVisitor::VisitWhileStatement( WhileStatement* whileStmt )
 {
     whileStmt->Condition->Accept( this );
+
+    if ( !IsBoolean( whileStmt->Condition->Type->GetKind() ) )
+        mRep.ThrowError( CERR_SEMANTICS, whileStmt->Condition.get(), "While condition only supports integers" );
+
     whileStmt->Body.Accept( this );
+
+    whileStmt->Type = mIntType;
 }
 
 
@@ -521,12 +871,60 @@ void BinderVisitor::BindLambdas()
         lambdaExpr->Proc->Name = name;
         lambdaExpr->Proc->Decl = func;
 
+        // Lambda expressions were already visited. So they have a type
+
+        auto pointerType = (PointerType*) lambdaExpr->Type.get();
+
+        func->Type = pointerType->TargetType;
+
         VisitProc( lambdaExpr->Proc.get() );
     }
 }
 
 
-I32 BinderVisitor::GetFoldedSyntaxValue( Syntax* node, const char* message )
+void BinderVisitor::CheckType(
+    const std::shared_ptr<Type>& site,
+    const std::shared_ptr<Type>& type,
+    Syntax* node )
+{
+    CheckType( site.get(), type.get(), node );
+}
+
+void BinderVisitor::CheckType(
+    Type* site,
+    Type* type,
+    Syntax* node )
+{
+    if ( site->GetKind() != TypeKind::Xfer
+        && type->GetKind() != TypeKind::Xfer
+        && !site->IsAssignableFrom( type ) )
+    {
+        mRep.ThrowError( CERR_SEMANTICS, node, "Incompatible assignment" );
+    }
+}
+
+void BinderVisitor::CheckAssignableType( Syntax* node )
+{
+    if ( !IsAssignableType( node->Type->GetKind() ) )
+        mRep.ThrowError( CERR_SEMANTICS, node, "Expected scalar type" );
+}
+
+void BinderVisitor::CheckAndConsolidateClauseType( StatementList& clause, std::shared_ptr<Type>& bodyType )
+{
+    CheckAndConsolidateClauseType( &clause, bodyType );
+}
+
+void BinderVisitor::CheckAndConsolidateClauseType( Syntax* clause, std::shared_ptr<Type>& bodyType )
+{
+    CheckAssignableType( clause );
+
+    if ( !bodyType || bodyType->GetKind() == TypeKind::Xfer )
+        bodyType = clause->Type;
+    else
+        CheckType( bodyType, clause->Type, clause );
+}
+
+I32 BinderVisitor::Evaluate( Syntax* node, const char* message )
 {
     FolderVisitor folder( mRep.GetLog() );
 
@@ -654,6 +1052,18 @@ std::shared_ptr<Function> BinderVisitor::AddForward( const std::string& name )
     return func;
 }
 
+std::shared_ptr<TypeDeclaration> BinderVisitor::AddType( const std::string& name, std::shared_ptr<Type> type )
+{
+    CheckDuplicateGlobalSymbol( name );
+
+    std::shared_ptr<TypeDeclaration> typeDecl( new TypeDeclaration() );
+    typeDecl->Kind = DeclKind::Type;
+    typeDecl->Type = mTypeType;
+    typeDecl->ReferentType = type;
+    mGlobalTable.insert( SymTable::value_type( name, typeDecl ) );
+    return typeDecl;
+}
+
 void BinderVisitor::CheckDuplicateGlobalSymbol( const std::string& name )
 {
     if ( mGlobalTable.find( name ) != mGlobalTable.end() )
@@ -662,8 +1072,13 @@ void BinderVisitor::CheckDuplicateGlobalSymbol( const std::string& name )
 
 void BinderVisitor::MakeStdEnv()
 {
-    AddConst( "false", 0 );
-    AddConst( "true", 1 );
+    mTypeType.reset( new TypeType() );
+    mXferType.reset( new XferType() );
+    mIntType.reset( new IntType() );
+
+    AddType( "int", mIntType );
+    AddConst( "false", 0 )->Type = mIntType;
+    AddConst( "true", 1 )->Type = mIntType;
 }
 
 void BinderVisitor::BindProcs( Unit* program )
@@ -695,4 +1110,18 @@ std::shared_ptr<Declaration> BinderVisitor::DefineNode( const std::string& name,
     node->Accept( this );
 
     return FindSymbol( name );
+}
+
+std::shared_ptr<FuncType> BinderVisitor::MakeFuncType( ProcDeclBase* procDecl )
+{
+    auto funcType = Make<FuncType>( mIntType );
+
+    for ( auto& paramDecl : procDecl->Params )
+    {
+        auto type = VisitParamTypeRef( paramDecl->TypeRef );
+
+        funcType->ParamTypes.push_back( type );
+    }
+
+    return funcType;
 }

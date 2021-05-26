@@ -40,8 +40,7 @@ NumberExpr::NumberExpr( int32_t value ) :
     Kind = SyntaxKind::Number;
 }
 
-ArrayTypeRef::ArrayTypeRef( int32_t size ) :
-    Size( size )
+ArrayTypeRef::ArrayTypeRef()
 {
     Kind = SyntaxKind::ArrayTypeRef;
 }
@@ -177,6 +176,11 @@ void NameExpr::Accept( IVisitor* visitor )
     visitor->VisitNameExpr( this );
 }
 
+void NameTypeRef::Accept( IVisitor* visitor )
+{
+    visitor->VisitNameTypeRef( this );
+}
+
 void NextStatement::Accept( IVisitor* visitor )
 {
     visitor->VisitNextStatement( this );
@@ -197,9 +201,19 @@ void ParamDecl::Accept( IVisitor* visitor )
     visitor->VisitParamDecl( this );
 }
 
+void PointerTypeRef::Accept( IVisitor* visitor )
+{
+    visitor->VisitPointerTypeRef( this );
+}
+
 void ProcDecl::Accept( IVisitor* visitor )
 {
     visitor->VisitProcDecl( this );
+}
+
+void ProcTypeRef::Accept( IVisitor* visitor )
+{
+    visitor->VisitProcTypeRef( this );
 }
 
 void ReturnStatement::Accept( IVisitor* visitor )
@@ -252,4 +266,132 @@ std::optional<int32_t> GetOptionalSyntaxValue( Syntax* node )
     }
 
     return std::optional<int32_t>();
+}
+
+
+//----------------------------------------------------------------------------
+//  Types
+//----------------------------------------------------------------------------
+
+Type::Type( TypeKind kind ) :
+    mKind( kind )
+{
+}
+
+TypeKind Type::GetKind() const
+{
+    return mKind;
+}
+
+bool Type::IsAssignableFrom( Type* other ) const
+{
+    return false;
+}
+
+int32_t Type::GetSize() const
+{
+    return 0;
+}
+
+TypeType::TypeType() :
+    Type( TypeKind::Type )
+{
+}
+
+XferType::XferType() :
+    Type( TypeKind::Xfer )
+{
+}
+
+bool XferType::IsAssignableFrom( Type* other ) const
+{
+    return other != nullptr
+        && other->GetKind() == TypeKind::Xfer;
+}
+
+IntType::IntType() :
+    Type( TypeKind::Int )
+{
+}
+
+bool IntType::IsAssignableFrom( Type* other ) const
+{
+    return other != nullptr
+        && (other->GetKind() == TypeKind::Int
+            || other->GetKind() == TypeKind::Xfer);
+}
+
+int32_t IntType::GetSize() const
+{
+    return 1;
+}
+
+ArrayType::ArrayType( int32_t size, std::shared_ptr<Type> elemType ) :
+    Type( TypeKind::Array ),
+    Size( size ),
+    ElemType( elemType )
+{
+}
+
+bool ArrayType::IsAssignableFrom( Type* other ) const
+{
+    if ( other == nullptr || other->GetKind() != TypeKind::Array )
+        return false;
+
+    auto otherArray = (ArrayType*) other;
+
+    return Size >= otherArray->Size
+        && ElemType->IsAssignableFrom( otherArray->ElemType.get() );
+}
+
+int32_t ArrayType::GetSize() const
+{
+    return Size;
+}
+
+FuncType::FuncType( std::shared_ptr<Type> returnType ) :
+    Type( TypeKind::Func ),
+    ReturnType( returnType )
+{
+}
+
+bool FuncType::IsAssignableFrom( Type* other ) const
+{
+    if ( other == nullptr || other->GetKind() != TypeKind::Func )
+        return false;
+
+    auto otherFunc = (FuncType*) other;
+
+    if ( !ReturnType->IsAssignableFrom( otherFunc->ReturnType.get() )
+        || ParamTypes.size() != otherFunc->ParamTypes.size() )
+        return false;
+
+    for ( int i = 0; i < (int) ParamTypes.size(); i++ )
+    {
+        if ( !ParamTypes[i]->IsAssignableFrom( otherFunc->ParamTypes[i].get() ) )
+            return false;
+    }
+
+    return true;
+}
+
+PointerType::PointerType( std::shared_ptr<Type> target ) :
+    Type( TypeKind::Pointer ),
+    TargetType( target )
+{
+}
+
+bool PointerType::IsAssignableFrom( Type* other ) const
+{
+    if ( other == nullptr || other->GetKind() != TypeKind::Pointer )
+        return false;
+
+    auto otherPointer = (PointerType*) other;
+
+    return TargetType->IsAssignableFrom( otherPointer->TargetType.get() );
+}
+
+int32_t PointerType::GetSize() const
+{
+    return 1;
 }

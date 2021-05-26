@@ -52,6 +52,7 @@ static const char* gTokenNames[] =
     "Next",
     "Not",
     "Or",
+    "Proc",
     "Return",
     "Then",
     "To",
@@ -427,6 +428,7 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "next",   TokenCode::Next },
         { "not",    TokenCode::Not },
         { "or",     TokenCode::Or },
+        { "proc",   TokenCode::Proc },
         { "return", TokenCode::Return },
         { "then",   TokenCode::Then },
         { "to",     TokenCode::To },
@@ -1046,7 +1048,61 @@ Unique<DataDecl> AlgolyParser::ParseVar( Unique<DataDecl>&& varDecl, std::option
 
 Unique<TypeRef> AlgolyParser::ParseTypeRef()
 {
-    return ParseArrayTypeRef();
+    switch ( mCurToken )
+    {
+    case TokenCode::LBracket:   return ParseArrayTypeRef();
+    case TokenCode::Ampersand:  return ParsePtrFuncTypeRef();
+    case TokenCode::Symbol:     return ParseNameTypeRef();
+    default:
+        ThrowSyntaxError( "Expected type denoter" );
+    }
+}
+
+Unique<TypeRef> AlgolyParser::ParseNameTypeRef()
+{
+    auto nameTypeRef = Make<NameTypeRef>();
+
+    nameTypeRef->Symbol = ParseSymbol();
+
+    return nameTypeRef;
+}
+
+Unique<TypeRef> AlgolyParser::ParsePtrFuncTypeRef()
+{
+    auto procTypeRef = Make<ProcTypeRef>();
+
+    ScanToken( TokenCode::Ampersand );
+    ScanToken( TokenCode::Proc );
+
+    if ( mCurToken == TokenCode::LParen )
+    {
+        ScanToken();
+
+        bool first = true;
+
+        while ( mCurToken != TokenCode::RParen )
+        {
+            if ( !first )
+            {
+                ScanToken( TokenCode::Comma );
+                SkipLineEndings();
+            }
+
+            first = false;
+
+            procTypeRef->Params.push_back( ParseTypeRef() );
+
+            SkipLineEndings();
+        }
+
+        ScanToken();
+    }
+
+    Unique<PointerTypeRef> pointerTypeRef( new PointerTypeRef() );
+
+    pointerTypeRef->Target = std::move( procTypeRef );
+
+    return pointerTypeRef;
 }
 
 Unique<TypeRef> AlgolyParser::ParseArrayTypeRef()
