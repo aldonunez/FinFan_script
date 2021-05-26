@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2021 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #include "stdafx.h"
 #include "AlgolyParser.h"
 #include <stdarg.h>
@@ -14,11 +20,14 @@ static const char* gTokenNames[] =
     "(",
     ")",
     ",",
+    "->",
+    ".",
     "&",
     "[",
     "]",
     ":=",
     ":",
+    "..",
     "...",
     "+",
     "-",
@@ -33,11 +42,13 @@ static const char* gTokenNames[] =
     ">=",
     "Above",
     "And",
+    "As",
     "Below",
     "Break",
     "By",
     "Case",
     "Const",
+    "countof",
     "Def",
     "Do",
     "Downto",
@@ -46,16 +57,19 @@ static const char* gTokenNames[] =
     "End",
     "For",
     "If",
+    "Import",
     "Lambda",
     "Loop",
     "Native",
     "Next",
     "Not",
+    "of",
     "Or",
     "Proc",
     "Return",
     "Then",
     "To",
+    "type",
     "Var",
     "When",
     "While",
@@ -213,9 +227,14 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
             NextChar();
             mCurToken = TokenCode::Ellipsis;
         }
+        else if ( PeekChar() == '.' )
+        {
+            NextChar();
+            mCurToken = TokenCode::DotDot;
+        }
         else
         {
-            ThrowSyntaxError( "Bad character: U+%02X", '.' );
+            mCurToken = TokenCode::Dot;
         }
         break;
 
@@ -226,7 +245,16 @@ AlgolyParser::TokenCode AlgolyParser::ScanToken()
 
     case '-':
         CollectChar();
-        mCurToken = TokenCode::Minus;
+
+        if ( PeekChar() == '>' )
+        {
+            NextChar();
+            mCurToken = TokenCode::RArrow;
+        }
+        else
+        {
+            mCurToken = TokenCode::Minus;
+        }
         break;
 
     case '*':
@@ -379,14 +407,6 @@ bool AlgolyParser::IsIdentifierCoda( int c )
 
 void AlgolyParser::ReadNumber()
 {
-    bool negate = false;
-
-    if ( PeekChar() == '-' )
-    {
-        negate = true;
-        NextChar();
-    }
-
     while ( isdigit( PeekChar() ) )
     {
         mCurString.append( 1, PeekChar() );
@@ -396,9 +416,13 @@ void AlgolyParser::ReadNumber()
     if ( IsIdentifierInitial( PeekChar() ) )
         ThrowSyntaxError( "syntax error : bad number" );
 
-    mCurNumber = atoi( mCurString.c_str() );
-    if ( negate )
-        mCurNumber = -mCurNumber;
+    unsigned long value = strtoul( mCurString.c_str(), NULL, 10 );
+
+    if ( value == ULONG_MAX && errno == ERANGE
+        || value > (uint32_t) INT32_MAX + 1 )
+        ThrowSyntaxError( "Number out of range" );
+
+    mCurNumber = value;
 
     mCurToken = TokenCode::Number;
 }
@@ -409,11 +433,13 @@ void AlgolyParser::ReadSymbolOrKeyword()
     {
         { "above",  TokenCode::Above },
         { "and",    TokenCode::And },
+        { "as",     TokenCode::As },
         { "below",  TokenCode::Below },
         { "break",  TokenCode::Break },
         { "by",     TokenCode::By },
         { "case",   TokenCode::Case },
         { "const",  TokenCode::Const },
+        { "countof",TokenCode::Countof },
         { "def",    TokenCode::Def },
         { "do",     TokenCode::Do },
         { "downto", TokenCode::Downto },
@@ -422,16 +448,19 @@ void AlgolyParser::ReadSymbolOrKeyword()
         { "end",    TokenCode::End },
         { "for",    TokenCode::For },
         { "if",     TokenCode::If },
+        { "import", TokenCode::Import },
         { "lambda", TokenCode::Lambda },
         { "loop",   TokenCode::Loop },
         { "native", TokenCode::Native },
         { "next",   TokenCode::Next },
         { "not",    TokenCode::Not },
+        { "of",     TokenCode::Of },
         { "or",     TokenCode::Or },
         { "proc",   TokenCode::Proc },
         { "return", TokenCode::Return },
         { "then",   TokenCode::Then },
         { "to",     TokenCode::To },
+        { "type",   TokenCode::Type },
         { "var",    TokenCode::Var },
         { "when",   TokenCode::When },
         { "while",  TokenCode::While },
@@ -482,28 +511,60 @@ Unique<Unit> AlgolyParser::Parse()
 
     while ( mCurToken != TokenCode::Eof )
     {
-        if ( mCurToken == TokenCode::Def )
+        switch ( mCurToken )
         {
+        case TokenCode::Def:
             unit->FuncDeclarations.push_back( ParseFunction() );
-        }
-        else if ( mCurToken == TokenCode::Native )
-        {
+            break;
+
+        case TokenCode::Native:
             unit->DataDeclarations.push_back( ParseNative() );
-        }
-        else if ( mCurToken == TokenCode::Var
-            || mCurToken == TokenCode::Const )
-        {
+            break;
+
+        case TokenCode::Var:
+        case TokenCode::Const:
             ParseGlobalVars( unit.get() );
-        }
-        else
-        {
+            break;
+
+        case TokenCode::Import:
+            unit->DataDeclarations.push_back( ParseImport() );
+            break;
+
+        case TokenCode::Type:
+            ParseTypeDecls( unit.get() );
+            break;
+
+        default:
             ThrowSyntaxError( "syntax error : expected function" );
+            break;
         }
 
         SkipLineSeparators();
     }
 
     return unit;
+}
+
+Unique<ImportDecl> AlgolyParser::ParseImport()
+{
+    Unique<ImportDecl> import( Make<ImportDecl>() );
+
+    ScanToken();
+
+    import->OriginalName = ParseRawSymbol();
+
+    if ( mCurToken == TokenCode::As )
+    {
+        ScanToken();
+
+        import->Name = ParseRawSymbol();
+    }
+    else
+    {
+        import->Name = import->OriginalName;
+    }
+
+    return import;
 }
 
 Unique<ProcDecl> AlgolyParser::ParseFunction()
@@ -554,6 +615,13 @@ Unique<ProcDecl> AlgolyParser::ParseProc( bool hasName )
         proc->Params = ParseParamList();
     }
 
+    if ( mCurToken == TokenCode::RArrow )
+    {
+        ScanToken();
+
+        proc->ReturnTypeRef = ParseTypeRef();
+    }
+
     SkipLineSeparators();
 
     ParseStatements( proc->Body );
@@ -587,7 +655,7 @@ std::vector<Unique<DataDecl>> AlgolyParser::ParseParamList()
 
         first = false;
 
-        paramList.push_back( ParseVar( Make<ParamDecl>(), std::nullopt ) );
+        paramList.push_back( ParseParameter() );
 
         SkipLineEndings();
     }
@@ -596,6 +664,11 @@ std::vector<Unique<DataDecl>> AlgolyParser::ParseParamList()
     ScanToken();
 
     return paramList;
+}
+
+Unique<DataDecl> AlgolyParser::ParseParameter()
+{
+    return ParseVar( Make<ParamDecl>(), std::nullopt );
 }
 
 void AlgolyParser::ParseStatements( StatementList& container )
@@ -615,6 +688,7 @@ Unique<Syntax> AlgolyParser::ParseStatement()
 
     switch ( mCurToken )
     {
+    case TokenCode::Const:
     case TokenCode::Var:
         elem = ParseLet();
         break;
@@ -673,14 +747,15 @@ Unique<Syntax> AlgolyParser::ParseExprStatement()
     }
     else
     {
-        if ( expr->Kind == SyntaxKind::Name )
+        if ( expr->Kind == SyntaxKind::Name
+            || expr->Kind == SyntaxKind::DotExpr )
         {
             // The whole statement was a symbol. It can be a variable or a call without
             // parentheses and arguments. Use eval* to disambiguate them.
 
             Unique<CallOrSymbolExpr> eval = Make<CallOrSymbolExpr>();
 
-            eval->Symbol = std::move( (Unique<NameExpr>&) expr );
+            eval->Symbol = std::move( expr );
             expr = std::move( eval );
         }
     }
@@ -713,7 +788,8 @@ Unique<Syntax> AlgolyParser::ParseAssignment()
     if ( mCurToken == TokenCode::Assign )
     {
         if ( first->Kind != SyntaxKind::Name
-            && first->Kind != SyntaxKind::Index )
+            && first->Kind != SyntaxKind::Index
+            && first->Kind != SyntaxKind::DotExpr )
         {
             mRep.ThrowError( CERR_SYNTAX, first.get(), "Left side of assignment must be modifiable" );
         }
@@ -824,7 +900,7 @@ Unique<Syntax> AlgolyParser::ParseUnary()
         auto unary = Make<UnaryExpr>();
 
         unary->Op = ParseAsRawSymbol();
-        unary->Inner = ParseSingle();
+        unary->Inner = ParseUnary();
 
         return unary;
     }
@@ -834,7 +910,7 @@ Unique<Syntax> AlgolyParser::ParseUnary()
 
         ScanToken();
 
-        addrOf->Inner = ParseSymbol();
+        addrOf->Inner = ParseSingle();
 
         return addrOf;
     }
@@ -859,16 +935,26 @@ Unique<Syntax> AlgolyParser::ParseSingle()
         indirect = true;
         break;
 
-    case TokenCode::Symbol: elem = ParseSymbol(); break;
-    case TokenCode::Number: elem = ParseNumber(); break;
+    case TokenCode::Symbol:
+        elem = ParseSymbol();
+        break;
+
+    case TokenCode::Number:
+        elem = ParseNumber();
+        break;
+
+    case TokenCode::Countof:
+        elem = ParseCountof();
+        break;
 
     default:
         ThrowSyntaxError( "Expected expression" );
     }
 
-    if ( mCurToken == TokenCode::LBracket )
+    if ( mCurToken == TokenCode::LBracket
+        || mCurToken == TokenCode::Dot )
     {
-        elem = ParseIndexing( std::move( elem ) );
+        elem = ParseIndexingOrDot( std::move( elem ) );
     }
 
     if ( mCurToken == TokenCode::LParen )
@@ -929,50 +1015,131 @@ Unique<Syntax> AlgolyParser::ParseCall( Unique<Syntax>&& head, bool indirect, bo
 
 Unique<Syntax> AlgolyParser::ParseIndexing( Unique<Syntax>&& head )
 {
-    auto indexing = Make<IndexExpr>();
-
-    indexing->Head = std::move( head );
+    Unique<Syntax> expr;
 
     ScanToken();
 
-    indexing->Index = ParseExpr();
+    auto index = ParseExpr();
+
+    if ( mCurToken == TokenCode::DotDot )
+    {
+        auto slice = Make<SliceExpr>();
+
+        ScanToken();
+
+        slice->Head = std::move( head );
+        slice->FirstIndex = std::move( index );
+        slice->LastIndex = ParseExpr();
+
+        expr = std::move( slice );
+    }
+    else
+    {
+        auto indexing = Make<IndexExpr>();
+
+        indexing->Head = std::move( head );
+        indexing->Index = std::move( index );
+
+        expr = std::move( indexing );
+    }
 
     ScanToken( TokenCode::RBracket );
 
-    return indexing;
+    return expr;
+}
+
+Unique<Syntax> AlgolyParser::ParseDotExpr( Unique<Syntax>&& head )
+{
+    auto dotExpr = Make<DotExpr>();
+
+    dotExpr->Head = std::move( head );
+
+    ScanToken();
+
+    dotExpr->Member = ParseRawSymbol();
+
+    return dotExpr;
+}
+
+Unique<Syntax> AlgolyParser::ParseIndexingOrDot( Unique<Syntax>&& head )
+{
+    auto expr = std::move( head );
+
+    while ( true )
+    {
+        if ( mCurToken == TokenCode::Dot )
+        {
+            expr = ParseDotExpr( std::move( expr ) );
+        }
+        else if ( mCurToken == TokenCode::LBracket )
+        {
+            expr = ParseIndexing( std::move( expr ) );
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return expr;
+}
+
+Unique<Syntax> AlgolyParser::ParseCountof()
+{
+    auto countofExpr = Make<CountofExpr>();
+
+    ScanToken();
+    ScanToken( TokenCode::LParen );
+
+    countofExpr->Expr = ParseExpr();
+
+    ScanToken( TokenCode::RParen );
+
+    return countofExpr;
 }
 
 Unique<Syntax> AlgolyParser::ParseLet()
 {
     auto letNode = Make<LetStatement>();
 
-    ScanToken();
-    SkipLineEndings();
-
-    bool first = true;
-
     do
     {
-        if ( !first )
+        TokenCode keyword = mCurToken;
+
+        ScanToken();
+        SkipLineEndings();
+
+        bool first = true;
+
+        do
         {
-            if ( mCurToken != TokenCode::Comma )
-                ThrowSyntaxError( "Expected , or line separator" );
+            if ( !first )
+            {
+                if ( mCurToken != TokenCode::Comma )
+                    ThrowSyntaxError( "Expected , or line separator" );
 
-            ScanToken();
-            SkipLineEndings();
-        }
+                ScanToken();
+                SkipLineEndings();
+            }
 
-        first = false;
+            first = false;
 
-        auto varDecl = ParseVar( Make<VarDecl>(), TokenCode::Assign );
+            Unique<DataDecl> varDecl;
 
-        letNode->Variables.push_back( std::move( varDecl ) );
+            if ( keyword == TokenCode::Var )
+                varDecl = ParseVarDecl();
+            else
+                varDecl = ParseConstDecl();
 
-    } while ( mCurToken != TokenCode::Eol
-        && mCurToken != TokenCode::Separator
-        && mCurToken != TokenCode::End );
+            letNode->Variables.push_back( std::move( varDecl ) );
 
-    SkipLineSeparators();
+        } while ( mCurToken != TokenCode::Eol
+            && mCurToken != TokenCode::Separator
+            && mCurToken != TokenCode::End );
+
+        SkipLineSeparators();
+
+    } while ( mCurToken == TokenCode::Var || mCurToken == TokenCode::Const );
 
     while ( mCurToken != TokenCode::End )
     {
@@ -1003,11 +1170,11 @@ void AlgolyParser::ParseGlobalVars( Unit* unit )
 
         if ( declToken == TokenCode::Var )
         {
-            unit->DataDeclarations.push_back( ParseVar( Make<VarDecl>(), TokenCode::Assign ) );
+            unit->DataDeclarations.push_back( ParseVarDecl() );
         }
         else if ( declToken == TokenCode::Const )
         {
-            unit->DataDeclarations.push_back( ParseVar( Make<ConstDecl>(), TokenCode::EQ ) );
+            unit->DataDeclarations.push_back( ParseConstDecl() );
         }
         else
         {
@@ -1046,6 +1213,64 @@ Unique<DataDecl> AlgolyParser::ParseVar( Unique<DataDecl>&& varDecl, std::option
     return varDecl;
 }
 
+Unique<DataDecl> AlgolyParser::ParseVarDecl()
+{
+    return ParseVar( Make<VarDecl>(), TokenCode::Assign );
+}
+
+Unique<DataDecl> AlgolyParser::ParseConstDecl()
+{
+    return ParseVar( Make<ConstDecl>(), TokenCode::EQ );
+}
+
+Unique<DeclSyntax> AlgolyParser::ParseTypeDecl()
+{
+    auto typeDecl = Make<TypeDecl>();
+
+    typeDecl->Name = ParseRawSymbol();
+
+    ScanToken( TokenCode::EQ );
+
+    typeDecl->TypeRef = ParseTypeDef();
+
+    return typeDecl;
+}
+
+void AlgolyParser::ParseTypeDecls( Unit* unit )
+{
+    ScanToken();
+    SkipLineEndings();
+
+    bool first = true;
+
+    do
+    {
+        if ( !first )
+        {
+            ScanToken( TokenCode::Comma );
+            SkipLineEndings();
+        }
+
+        first = false;
+
+        unit->DataDeclarations.push_back( ParseTypeDecl() );
+
+    } while ( mCurToken != TokenCode::Eol
+        && mCurToken != TokenCode::Separator
+        && mCurToken != TokenCode::Eof );
+
+    SkipLineSeparators();
+}
+
+Unique<TypeRef> AlgolyParser::ParseTypeDef()
+{
+    switch ( mCurToken )
+    {
+    default:
+        return ParseTypeRef();
+    }
+}
+
 Unique<TypeRef> AlgolyParser::ParseTypeRef()
 {
     switch ( mCurToken )
@@ -1062,7 +1287,16 @@ Unique<TypeRef> AlgolyParser::ParseNameTypeRef()
 {
     auto nameTypeRef = Make<NameTypeRef>();
 
-    nameTypeRef->Symbol = ParseSymbol();
+    auto name = ParseSymbol();
+
+    if ( mCurToken == TokenCode::Dot )
+    {
+        nameTypeRef->QualifiedName = ParseDotExpr( std::move( name ) );
+    }
+    else
+    {
+        nameTypeRef->QualifiedName = std::move( name );
+    }
 
     return nameTypeRef;
 }
@@ -1098,6 +1332,13 @@ Unique<TypeRef> AlgolyParser::ParsePtrFuncTypeRef()
         ScanToken();
     }
 
+    if ( mCurToken == TokenCode::RArrow )
+    {
+        ScanToken();
+
+        procTypeRef->ReturnTypeRef = ParseTypeRef();
+    }
+
     Unique<PointerTypeRef> pointerTypeRef( new PointerTypeRef() );
 
     pointerTypeRef->Target = std::move( procTypeRef );
@@ -1115,12 +1356,20 @@ Unique<TypeRef> AlgolyParser::ParseArrayTypeRef()
 
     ScanToken( TokenCode::RBracket );
 
+    if ( mCurToken == TokenCode::Of )
+    {
+        ScanToken();
+
+        arrayTypeRef->ElementTypeRef = ParseTypeRef();
+    }
+
     return arrayTypeRef;
 }
 
 Unique<Syntax> AlgolyParser::ParseArrayInitializer()
 {
     ScanToken( TokenCode::LBracket );
+    SkipLineEndings();
 
     auto initList = Make<InitList>();
     bool first = true;
@@ -1130,7 +1379,19 @@ Unique<Syntax> AlgolyParser::ParseArrayInitializer()
         if ( mCurToken == TokenCode::Ellipsis )
         {
             ScanToken();
-            initList->HasExtra = true;
+
+            if ( mCurToken == TokenCode::Plus )
+            {
+                ScanToken();
+
+                initList->Fill = ArrayFill::Extrapolate;
+            }
+            else
+            {
+                initList->Fill = ArrayFill::Repeat;
+            }
+
+            SkipLineEndings();
             break;
         }
         else if ( !first )
@@ -1141,7 +1402,9 @@ Unique<Syntax> AlgolyParser::ParseArrayInitializer()
 
         first = false;
 
-        initList->Values.push_back( ParseExpr() );
+        initList->Values.push_back( ParseInitExpr() );
+
+        SkipLineEndings();
     }
 
     ScanToken( TokenCode::RBracket );
@@ -1399,16 +1662,6 @@ Unique<Syntax> AlgolyParser::ParseNext()
     return Make<NextStatement>();
 }
 
-I32 AlgolyParser::ParseRawNumber()
-{
-    if ( mCurToken != TokenCode::Number )
-        ThrowSyntaxError( "Expected number" );
-
-    I32 number = mCurNumber;
-    ScanToken();
-    return number;
-}
-
 Unique<NumberExpr> AlgolyParser::ParseNumber()
 {
     if ( mCurToken != TokenCode::Number )
@@ -1459,7 +1712,7 @@ Unique<NameExpr> AlgolyParser::WrapSymbol()
     return MakeSymbol( mCurString.c_str() );
 }
 
-Unique<NumberExpr> AlgolyParser::MakeNumber( int32_t value )
+Unique<NumberExpr> AlgolyParser::MakeNumber( int64_t value )
 {
     NumberExpr* number = new NumberExpr();
     number->Kind = SyntaxKind::Number;

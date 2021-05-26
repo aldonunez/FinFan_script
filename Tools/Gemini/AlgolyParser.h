@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2021 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #pragma once
 
 #include "Compiler.h"
@@ -18,11 +24,14 @@ class AlgolyParser
         LParen,
         RParen,
         Comma,
+        RArrow,
+        Dot,
         Ampersand,
         LBracket,
         RBracket,
         Assign,
         Colon,
+        DotDot,
         Ellipsis,
         Plus,
         Minus,
@@ -37,11 +46,13 @@ class AlgolyParser
         GE,
         Above,
         And,
+        As,
         Below,
         Break,
         By,
         Case,
         Const,
+        Countof,
         Def,
         Do,
         Downto,
@@ -50,16 +61,19 @@ class AlgolyParser
         End,
         For,
         If,
+        Import,
         Lambda,
         Loop,
         Native,
         Next,
         Not,
+        Of,
         Or,
         Proc,
         Return,
         Then,
         To,
+        Type,
         Var,
         When,
         While,
@@ -80,7 +94,7 @@ class AlgolyParser
 
     TokenCode       mCurToken;
     std::string     mCurString;
-    int             mCurNumber;
+    int64_t         mCurNumber;
 
     int             mTokLine;
     int             mTokCol;
@@ -119,17 +133,24 @@ private:
     static bool IsSeparatorKeyword( TokenCode tokenCode );
     static bool IsStatementSeparator( TokenCode tokenCode );
 
+    Unique<ImportDecl> ParseImport();
     Unique<ProcDecl> ParseFunction();
     Unique<LambdaExpr> ParseLambda();
     Unique<NativeDecl> ParseNative();
     Unique<ProcDecl> ParseProc( bool hasName );
     std::vector<Unique<DataDecl>> ParseParamList();
+    Unique<DataDecl> ParseParameter();
     Unique<Syntax> ParseCall( Unique<Syntax>&& head, bool indirect, bool parens = true );
     Unique<Syntax> ParseLet();
 
     void ParseGlobalVars( Unit* unit );
     Unique<DataDecl> ParseVar( Unique<DataDecl>&& newVarDecl, std::optional<TokenCode> assignToken );
+    Unique<DataDecl> ParseVarDecl();
+    Unique<DataDecl> ParseConstDecl();
+    Unique<DeclSyntax> ParseTypeDecl();
+    void ParseTypeDecls( Unit* unit );
 
+    Unique<TypeRef> ParseTypeDef();
     Unique<TypeRef> ParseTypeRef();
     Unique<TypeRef> ParseNameTypeRef();
     Unique<TypeRef> ParsePtrFuncTypeRef();
@@ -159,6 +180,9 @@ private:
     Unique<Syntax> ParseUnary();
     Unique<Syntax> ParseSingle();
     Unique<Syntax> ParseIndexing( Unique<Syntax>&& head );
+    Unique<Syntax> ParseDotExpr( Unique<Syntax>&& head );
+    Unique<Syntax> ParseIndexingOrDot( Unique<Syntax>&& head );
+    Unique<Syntax> ParseCountof();
 
     bool IsTokenOrOp();
     bool IsTokenAndOp();
@@ -167,7 +191,6 @@ private:
     bool IsTokenAdditiveOp();
     bool IsTokenMultiplicativeOp();
 
-    I32 ParseRawNumber();
     std::string ParseRawSymbol();
     std::string ParseAsRawSymbol();
 
@@ -177,7 +200,7 @@ private:
     Unique<NumberExpr> WrapNumber();
     Unique<NameExpr> WrapSymbol();
 
-    Unique<NumberExpr> MakeNumber( int32_t value );
+    Unique<NumberExpr> MakeNumber( int64_t value );
     Unique<NameExpr> MakeSymbol( const char* string );
 
     template <typename T, typename... Args>

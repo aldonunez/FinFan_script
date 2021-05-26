@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2021 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #include "stdafx.h"
 #include "FolderVisitor.h"
 
@@ -160,6 +166,34 @@ void FolderVisitor::VisitConstDecl( ConstDecl* constDecl )
     mLastValue.reset();
 }
 
+void FolderVisitor::VisitCountofExpr( CountofExpr* countofExpr )
+{
+    Fold( countofExpr->Expr );
+
+    auto& arrayType = (ArrayType&) *countofExpr->Expr->Type;
+
+    if ( arrayType.Count != 0 )
+    {
+        mLastValue = arrayType.Count;
+    }
+    else
+    {
+        mLastValue.reset();
+    }
+}
+
+void FolderVisitor::VisitDotExpr( DotExpr* dotExpr )
+{
+    if ( dotExpr->GetDecl()->Kind == DeclKind::Const )
+    {
+        mLastValue = ((Constant*) dotExpr->GetDecl())->Value;
+    }
+    else
+    {
+        mLastValue.reset();
+    }
+}
+
 void FolderVisitor::VisitForStatement( ForStatement* forStmt )
 {
     Fold( forStmt->First );
@@ -235,16 +269,6 @@ void FolderVisitor::VisitNameExpr( NameExpr* nameExpr )
     }
 }
 
-void FolderVisitor::VisitNameTypeRef( NameTypeRef* nameTypeRef )
-{
-    // Nothing
-}
-
-void FolderVisitor::VisitNativeDecl( NativeDecl* nativeDecl )
-{
-    // Nothing
-}
-
 void FolderVisitor::VisitNextStatement( NextStatement* nextStmt )
 {
     mLastValue.reset();
@@ -252,17 +276,17 @@ void FolderVisitor::VisitNextStatement( NextStatement* nextStmt )
 
 void FolderVisitor::VisitNumberExpr( NumberExpr* numberExpr )
 {
-    mLastValue = numberExpr->Value;
+    assert( numberExpr->Value >= INT32_MIN );
+
+    if ( numberExpr->Value > INT32_MAX )
+        mRep.ThrowError( CERR_SEMANTICS, numberExpr, "Number out of range" );
+
+    mLastValue = (int32_t) numberExpr->Value;
 }
 
 void FolderVisitor::VisitParamDecl( ParamDecl* paramDecl )
 {
     mLastValue.reset();
-}
-
-void FolderVisitor::VisitPointerTypeRef( PointerTypeRef* pointerTypeRef )
-{
-    // Nothing
 }
 
 void FolderVisitor::VisitProcDecl( ProcDecl* procDecl )
@@ -282,14 +306,17 @@ void FolderVisitor::VisitProc( ProcDecl* procDecl )
     mLastValue.reset();
 }
 
-void FolderVisitor::VisitProcTypeRef( ProcTypeRef* procTypeRef )
-{
-    // Nothing
-}
-
 void FolderVisitor::VisitReturnStatement( ReturnStatement* retStmt )
 {
     Fold( retStmt->Inner );
+    mLastValue.reset();
+}
+
+void FolderVisitor::VisitSliceExpr( SliceExpr* sliceExpr )
+{
+    sliceExpr->Head->Accept( this );
+    Fold( sliceExpr->FirstIndex );
+    Fold( sliceExpr->LastIndex );
     mLastValue.reset();
 }
 
@@ -303,8 +330,22 @@ void FolderVisitor::VisitStatementList( StatementList* stmtList )
     mLastValue.reset();
 }
 
+void FolderVisitor::VisitTypeDecl( TypeDecl* typeDecl )
+{
+}
+
 void FolderVisitor::VisitUnaryExpr( UnaryExpr* unary )
 {
+    if ( unary->Op == "-" && unary->Inner->Kind == SyntaxKind::Number )
+    {
+        int64_t value = ((NumberExpr&) *unary->Inner).Value;
+
+        assert( value >= 0 && value <= (uint32_t) INT32_MAX + 1 );
+
+        mLastValue = (int32_t) -value;
+        return;
+    }
+
     Fold( unary->Inner );
 
     if ( mLastValue.has_value() )
@@ -347,10 +388,14 @@ void FolderVisitor::Fold( Unique<Syntax>& child )
 {
     child->Accept( this );
 
-    if ( mFoldNodes && mLastValue.has_value() )
+    if ( mFoldNodes && mLastValue.has_value() && child->Kind != SyntaxKind::Number )
     {
         Unique<NumberExpr> number( new NumberExpr( mLastValue.value() ) );
 
+        if ( !mIntType )
+            mIntType = std::shared_ptr<IntType>( new IntType() );
+
         child = std::move( number );
+        child->Type = mIntType;
     }
 }

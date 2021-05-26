@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2021 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #pragma once
 
 #include <memory>
@@ -6,13 +12,24 @@
 #include <vector>
 
 
+enum class ScopeKind
+{
+    Global,
+    Local,
+};
+
+
 enum class SyntaxKind
 {
     Number,
     Name,
+    AddrOfExpr,
     Index,
+    DotExpr,
     ArrayTypeRef,
     ArrayInitializer,
+    ConstDecl,
+    VarDecl,
     Other,
 };
 
@@ -73,10 +90,10 @@ public:
 class NumberExpr : public Syntax
 {
 public:
-    int32_t Value;
+    int64_t Value;
 
     NumberExpr();
-    NumberExpr( int32_t value );
+    NumberExpr( int64_t value );
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -90,7 +107,7 @@ public:
 class NameTypeRef : public TypeRef
 {
 public:
-    Unique<NameExpr> Symbol;
+    Unique<Syntax>  QualifiedName;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -98,7 +115,8 @@ public:
 class ArrayTypeRef : public TypeRef
 {
 public:
-    Unique<Syntax> SizeExpr;
+    Unique<Syntax>  SizeExpr;
+    Unique<TypeRef> ElementTypeRef;
 
     ArrayTypeRef();
 
@@ -109,6 +127,7 @@ class ProcTypeRef : public TypeRef
 {
 public:
     std::vector<Unique<TypeRef>> Params;
+    Unique<TypeRef>              ReturnTypeRef;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -121,10 +140,17 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
+enum class ArrayFill
+{
+    None,
+    Repeat,
+    Extrapolate,
+};
+
 class InitList : public Syntax
 {
 public:
-    bool HasExtra = false;
+    ArrayFill Fill = ArrayFill::None;
 
     std::vector<Unique<Syntax>> Values;
 
@@ -153,18 +179,30 @@ public:
 class ConstDecl : public DataDecl
 {
 public:
+    ConstDecl();
+
     virtual void Accept( IVisitor* visitor ) override;
 };
 
 class VarDecl : public DataDecl
 {
 public:
+    VarDecl();
+
     virtual void Accept( IVisitor* visitor ) override;
 };
 
 class ParamDecl : public DataDecl
 {
 public:
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class TypeDecl : public DeclSyntax
+{
+public:
+    Unique<TypeRef>    TypeRef;
+
     virtual void Accept( IVisitor* visitor ) override;
 };
 
@@ -245,7 +283,9 @@ public:
 class AddrOfExpr : public Syntax
 {
 public:
-    Unique<NameExpr> Inner;
+    Unique<Syntax> Inner;
+
+    AddrOfExpr();
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -261,6 +301,30 @@ public:
     virtual void Accept( IVisitor* visitor ) override;
 };
 
+class SliceExpr : public Syntax
+{
+public:
+    Unique<Syntax> Head;
+    Unique<Syntax> FirstIndex;
+    Unique<Syntax> LastIndex;
+
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class DotExpr : public Syntax
+{
+public:
+    Unique<Syntax> Head;
+    std::string Member;
+
+    std::shared_ptr<Declaration> Decl;
+
+    DotExpr();
+
+    virtual void Accept( IVisitor* visitor ) override;
+    virtual Declaration* GetDecl() override;
+};
+
 class CallExpr : public Syntax
 {
 public:
@@ -274,7 +338,7 @@ public:
 class CallOrSymbolExpr : public Syntax
 {
 public:
-    Unique<NameExpr> Symbol;
+    Unique<Syntax> Symbol;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -284,6 +348,14 @@ class AssignmentExpr : public Syntax
 public:
     Unique<Syntax> Left;
     Unique<Syntax> Right;
+
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class CountofExpr : public Syntax
+{
+public:
+    Unique<Syntax>      Expr;
 
     virtual void Accept( IVisitor* visitor ) override;
 };
@@ -353,10 +425,11 @@ public:
 class ProcDeclBase : public DeclSyntax
 {
 public:
-    constexpr static int16_t MaxArgs = 127;
+    constexpr static int16_t MaxParams = 127;
     constexpr static int16_t MaxLocals = 127;
 
-    std::vector<Unique<DataDecl>> Params;
+    std::vector<Unique<DataDecl>>   Params;
+    Unique<TypeRef>                 ReturnTypeRef;
 };
 
 class ProcDecl : public ProcDeclBase
@@ -370,6 +443,14 @@ public:
 class NativeDecl : public ProcDeclBase
 {
 public:
+    virtual void Accept( IVisitor* visitor ) override;
+};
+
+class ImportDecl : public DeclSyntax
+{
+public:
+    std::string OriginalName;
+
     virtual void Accept( IVisitor* visitor ) override;
 };
 
@@ -399,37 +480,42 @@ std::optional<int32_t> GetOptionalSyntaxValue( Syntax* node );
 class IVisitor
 {
 public:
-    virtual void VisitAddrOfExpr( AddrOfExpr* addrOf ) = 0;
-    virtual void VisitArrayTypeRef( ArrayTypeRef* typeRef ) = 0;
-    virtual void VisitAssignmentExpr( AssignmentExpr* assignment ) = 0;
-    virtual void VisitBinaryExpr( BinaryExpr* binary ) = 0;
-    virtual void VisitBreakStatement( BreakStatement* breakStmt ) = 0;
-    virtual void VisitCallExpr( CallExpr* call ) = 0;
-    virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol ) = 0;
-    virtual void VisitCaseExpr( CaseExpr* caseExpr ) = 0;
-    virtual void VisitCondExpr( CondExpr* condExpr ) = 0;
-    virtual void VisitConstDecl( ConstDecl* constDecl ) = 0;
-    virtual void VisitForStatement( ForStatement* forStmt ) = 0;
-    virtual void VisitIndexExpr( IndexExpr* indexExpr ) = 0;
-    virtual void VisitInitList( InitList* initList ) = 0;
-    virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr ) = 0;
-    virtual void VisitLetStatement( LetStatement* letStmt ) = 0;
-    virtual void VisitLoopStatement( LoopStatement* loopStmt ) = 0;
-    virtual void VisitNameExpr( NameExpr* nameExpr ) = 0;
-    virtual void VisitNameTypeRef( NameTypeRef* nameTypeRef ) = 0;
-    virtual void VisitNativeDecl( NativeDecl* nativeDecl ) = 0;
-    virtual void VisitNextStatement( NextStatement* nextStmt ) = 0;
-    virtual void VisitNumberExpr( NumberExpr* numberExpr ) = 0;
-    virtual void VisitParamDecl( ParamDecl* paramDecl ) = 0;
-    virtual void VisitPointerTypeRef( PointerTypeRef* pointerTypeRef ) = 0;
-    virtual void VisitProcDecl( ProcDecl* procDecl ) = 0;
-    virtual void VisitProcTypeRef( ProcTypeRef* procTypeRef ) = 0;
-    virtual void VisitReturnStatement( ReturnStatement* retStmt ) = 0;
-    virtual void VisitStatementList( StatementList* stmtmList ) = 0;
-    virtual void VisitUnaryExpr( UnaryExpr* unary ) = 0;
-    virtual void VisitUnit( Unit* unit ) = 0;
-    virtual void VisitVarDecl( VarDecl* varDecl ) = 0;
-    virtual void VisitWhileStatement( WhileStatement* whileStmt ) = 0;
+    virtual void VisitAddrOfExpr( AddrOfExpr* addrOf );
+    virtual void VisitArrayTypeRef( ArrayTypeRef* typeRef );
+    virtual void VisitAssignmentExpr( AssignmentExpr* assignment );
+    virtual void VisitBinaryExpr( BinaryExpr* binary );
+    virtual void VisitBreakStatement( BreakStatement* breakStmt );
+    virtual void VisitCallExpr( CallExpr* call );
+    virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol );
+    virtual void VisitCaseExpr( CaseExpr* caseExpr );
+    virtual void VisitCondExpr( CondExpr* condExpr );
+    virtual void VisitConstDecl( ConstDecl* constDecl );
+    virtual void VisitCountofExpr( CountofExpr* countofExpr );
+    virtual void VisitDotExpr( DotExpr* dotExpr );
+    virtual void VisitForStatement( ForStatement* forStmt );
+    virtual void VisitImportDecl( ImportDecl* importDecl );
+    virtual void VisitIndexExpr( IndexExpr* indexExpr );
+    virtual void VisitInitList( InitList* initList );
+    virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr );
+    virtual void VisitLetStatement( LetStatement* letStmt );
+    virtual void VisitLoopStatement( LoopStatement* loopStmt );
+    virtual void VisitNameExpr( NameExpr* nameExpr );
+    virtual void VisitNameTypeRef( NameTypeRef* nameTypeRef );
+    virtual void VisitNativeDecl( NativeDecl* nativeDecl );
+    virtual void VisitNextStatement( NextStatement* nextStmt );
+    virtual void VisitNumberExpr( NumberExpr* numberExpr );
+    virtual void VisitParamDecl( ParamDecl* paramDecl );
+    virtual void VisitPointerTypeRef( PointerTypeRef* pointerTypeRef );
+    virtual void VisitProcDecl( ProcDecl* procDecl );
+    virtual void VisitProcTypeRef( ProcTypeRef* procTypeRef );
+    virtual void VisitReturnStatement( ReturnStatement* retStmt );
+    virtual void VisitSliceExpr( SliceExpr* sliceExpr );
+    virtual void VisitStatementList( StatementList* stmtmList );
+    virtual void VisitTypeDecl( TypeDecl* typeDecl );
+    virtual void VisitUnaryExpr( UnaryExpr* unary );
+    virtual void VisitUnit( Unit* unit );
+    virtual void VisitVarDecl( VarDecl* varDecl );
+    virtual void VisitWhileStatement( WhileStatement* whileStmt );
 };
 
 
@@ -443,20 +529,24 @@ enum class DeclKind
     Const,
     Global,
     Local,
-    Arg,
+    Param,
     Func,
     Forward,
-    ExternalFunc,
     NativeFunc,
     Type,
+    Module,
+    LoadedAddress,
 };
 
 struct Declaration
 {
     DeclKind  Kind;
     std::shared_ptr<Type>   Type;
+
     virtual ~Declaration() { }
 };
+
+using SymTable = std::map<std::string, std::shared_ptr<Declaration>>;
 
 struct UndefinedDeclaration : public Declaration
 {
@@ -468,18 +558,37 @@ struct Constant : public Declaration
     int Value;
 };
 
-struct Storage : public Declaration
+struct GlobalStorage : public Declaration
 {
     int Offset;
+    int ModIndex;
+};
+
+struct LocalStorage : public Declaration
+{
+    int Offset;
+};
+
+struct ParamStorage : public Declaration
+{
+    int Offset;
+};
+
+struct CallSite
+{
+    int16_t     ExprDepth;
+    std::string FunctionName;
 };
 
 struct Function : public Declaration
 {
     std::string Name;
     int         Address;
+    int         ModIndex;
+    bool        IsLambda;
 
     int16_t     LocalCount;
-    int16_t     ArgCount;
+    int16_t     ParamCount;
     int16_t     ExprDepth;
 
     int16_t     CallDepth;
@@ -491,12 +600,7 @@ struct Function : public Declaration
     bool        IsDepthKnown;
     bool        CallsIndirectly;
 
-    std::list<std::string> CalledFunctions;
-};
-
-struct ExternalFunction : public Declaration
-{
-    int32_t Id;
+    std::list<CallSite> CalledFunctions;
 };
 
 struct NativeFunction : public Declaration
@@ -509,6 +613,16 @@ struct TypeDeclaration : public Declaration
     std::shared_ptr<::Type> ReferentType;
 };
 
+struct ModuleDeclaration : public Declaration
+{
+    std::string Name;
+    SymTable    Table;
+};
+
+struct LoadedAddressDeclaration : public Declaration
+{
+};
+
 
 //----------------------------------------------------------------------------
 //  Types
@@ -517,6 +631,7 @@ struct TypeDeclaration : public Declaration
 enum class TypeKind
 {
     Type,
+    Module,
     Xfer,
     Int,
     Array,
@@ -533,6 +648,7 @@ protected:
 
 public:
     TypeKind GetKind() const;
+    virtual bool IsEqual( Type* other ) const;
     virtual bool IsAssignableFrom( Type* other ) const;
     virtual int32_t GetSize() const;
 };
@@ -543,12 +659,18 @@ public:
     TypeType();
 };
 
+class ModuleType : public Type
+{
+public:
+    ModuleType();
+};
+
 class XferType : public Type
 {
 public:
     XferType();
 
-    virtual bool IsAssignableFrom( Type* other ) const override;
+    virtual bool IsEqual( Type* other ) const override;
 };
 
 class IntType : public Type
@@ -556,6 +678,7 @@ class IntType : public Type
 public:
     IntType();
 
+    virtual bool IsEqual( Type* other ) const override;
     virtual bool IsAssignableFrom( Type* other ) const override;
     virtual int32_t GetSize() const override;
 };
@@ -563,11 +686,12 @@ public:
 class ArrayType : public Type
 {
 public:
-    int32_t Size;
+    int32_t Count;
     std::shared_ptr<Type> ElemType;
 
-    ArrayType( int32_t size, std::shared_ptr<Type> elemType );
+    ArrayType( int32_t count, std::shared_ptr<Type> elemType );
 
+    virtual bool IsEqual( Type* other ) const override;
     virtual bool IsAssignableFrom( Type* other ) const override;
     virtual int32_t GetSize() const override;
 };
@@ -580,7 +704,7 @@ public:
 
     FuncType( std::shared_ptr<Type> returnType );
 
-    virtual bool IsAssignableFrom( Type* other ) const override;
+    virtual bool IsEqual( Type* other ) const override;
 };
 
 class PointerType : public Type
@@ -590,6 +714,6 @@ public:
 
     PointerType( std::shared_ptr<Type> target );
 
-    virtual bool IsAssignableFrom( Type* other ) const override;
+    virtual bool IsEqual( Type* other ) const override;
     virtual int32_t GetSize() const override;
 };

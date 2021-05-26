@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2019 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #include "stdafx.h"
 #include "Compiler.h"
 #include "OpCodes.h"
@@ -15,11 +21,18 @@ Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog
     mRep( log ),
     mModIndex( modIndex )
 {
+    mLoadedAddrDecl.reset( new LoadedAddressDeclaration() );
+    mLoadedAddrDecl->Kind = DeclKind::LoadedAddress;
 }
 
 void Compiler::AddUnit( Unique<Unit>&& unit )
 {
     mUnits.push_back( std::move( unit ) );
+}
+
+void Compiler::AddModule( std::shared_ptr<ModuleDeclaration> moduleDecl )
+{
+    mModuleTable.insert( SymTable::value_type( moduleDecl->Name, moduleDecl ) );
 }
 
 CompilerErr Compiler::Compile()
@@ -67,9 +80,21 @@ size_t Compiler::GetDataSize()
     return mGlobals.size();
 }
 
+std::shared_ptr<ModuleDeclaration> Compiler::GetMetadata( const char* modName )
+{
+    std::shared_ptr<ModuleDeclaration> modDecl( new ModuleDeclaration() );
+
+    modDecl->Name = modName;
+    modDecl->Kind = DeclKind::Module;
+    modDecl->Table = std::move( mPublicTable );
+    modDecl->Type = std::shared_ptr<ModuleType>( new ModuleType() );
+
+    return modDecl;
+}
+
 void Compiler::BindAttributes()
 {
-    BinderVisitor binder( mGlobalTable, mEnv, mRep.GetLog() );
+    BinderVisitor binder( mModIndex, mGlobalTable, mModuleTable, mPublicTable, mEnv, mRep.GetLog() );
 
     for ( auto& unit : mUnits )
         binder.Declare( unit.get() );
@@ -101,18 +126,6 @@ void Compiler::VisitUnit( Unit* unit )
 
     for ( auto& funcNode : unit->FuncDeclarations )
         funcNode->Accept( this );
-}
-
-void Compiler::VisitArrayTypeRef( ArrayTypeRef* typeRef )
-{
-}
-
-void Compiler::VisitInitList( InitList* initList )
-{
-}
-
-void Compiler::VisitParamDecl( ParamDecl* paramDecl )
-{
 }
 
 void Compiler::Generate( Syntax* elem )
@@ -204,7 +217,7 @@ void Compiler::GenerateNumber( NumberExpr* number, const GenConfig& config, GenS
         return;
     }
 
-    EmitLoadConstant( number->Value );
+    EmitLoadConstant( (int32_t) number->Value );
 }
 
 void Compiler::EmitLoadConstant( int32_t value )
@@ -232,51 +245,69 @@ void Compiler::VisitNameExpr( NameExpr* nameExpr )
 
 void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status )
 {
+    GenerateValue( symbol, symbol->GetDecl(), config, status );
+}
+
+void Compiler::GenerateValue( Syntax* node, Declaration* decl, const GenConfig& config, GenStatus& status )
+{
     if ( config.discard )
     {
         status.discarded = true;
         return;
     }
+    else if ( config.calcAddr )
+    {
+        status.baseDecl = decl;
+        return;
+    }
 
-    auto decl = symbol->Decl.get();
+    EmitLoadScalar( node, decl, 0 );
+}
 
+void Compiler::EmitLoadScalar( Syntax* node, Declaration* decl, int32_t offset )
+{
     switch ( decl->Kind )
     {
     case DeclKind::Global:
         mCodeBinPtr[0] = OP_LDMOD;
-        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr[1] = ((GlobalStorage*) decl)->ModIndex;
         mCodeBinPtr += 2;
-        WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
+        WriteU16( mCodeBinPtr, ((GlobalStorage*) decl)->Offset + offset );
         IncreaseExprDepth();
         break;
 
     case DeclKind::Local:
         mCodeBinPtr[0] = OP_LDLOC;
-        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr[1] = ((LocalStorage*) decl)->Offset - offset;
         mCodeBinPtr += 2;
         IncreaseExprDepth();
         break;
 
-    case DeclKind::Arg:
+    case DeclKind::Param:
         mCodeBinPtr[0] = OP_LDARG;
-        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr[1] = ((ParamStorage*) decl)->Offset + offset;
         mCodeBinPtr += 2;
         IncreaseExprDepth();
         break;
 
     case DeclKind::Func:
     case DeclKind::Forward:
-        mRep.ThrowError( CERR_SEMANTICS, symbol, "functions don't have values" );
+        mRep.ThrowError( CERR_SEMANTICS, node, "functions don't have values" );
         break;
 
     case DeclKind::Const:
-        {
-            Unique<NumberExpr> number( new NumberExpr() );
-            number->Line = symbol->Line;
-            number->Column = symbol->Column;
-            number->Value = ((Constant*) decl)->Value;
-            VisitNumberExpr( number.get() );
-        }
+        assert( offset == 0 );
+        EmitLoadConstant( ((Constant*) decl)->Value );
+        break;
+
+    case DeclKind::LoadedAddress:
+        if ( offset > 0 )
+            EmitSpilledAddrOffset( offset );
+
+        mCodeBinPtr[0] = OP_LOADI;
+        mCodeBinPtr++;
+        DecreaseExprDepth();
+        IncreaseExprDepth();
         break;
 
     default:
@@ -285,27 +316,33 @@ void Compiler::GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenSta
     }
 }
 
+void Compiler::EmitSpilledAddrOffset( int32_t offset )
+{
+    EmitLoadConstant( offset );
+
+    mCodeBinPtr[0] = OP_PRIM;
+    mCodeBinPtr[1] = PRIM_ADD;
+    mCodeBinPtr += 2;
+
+    DecreaseExprDepth();
+}
+
 void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status )
 {
     auto& symbol = callOrSymbol->Symbol;
-    auto decl = symbol->Decl.get();
+    auto decl = symbol->GetDecl();
 
     if ( decl->Kind == DeclKind::Func
         || decl->Kind == DeclKind::Forward
         || decl->Kind == DeclKind::NativeFunc )
     {
-        Unique<CallExpr> call( new CallExpr() );
-        Unique<NameExpr> nameExpr( new NameExpr() );
+        std::vector<Unique<Syntax>> args;
 
-        nameExpr->String = symbol->String;
-        nameExpr->Decl = symbol->Decl;
-        call->Head = std::move( nameExpr );
-
-        GenerateCall( call.get(), config, status );
+        GenerateCall( decl, args, config, status );
     }
     else
     {
-        GenerateSymbol( symbol.get(), config, status );
+        Generate( symbol.get() );
     }
 }
 
@@ -385,6 +422,28 @@ void Compiler::GenerateReturn( ReturnStatement* retStmt, const GenConfig& config
 void Compiler::VisitReturnStatement( ReturnStatement* retStmt )
 {
     GenerateReturn( retStmt, Config(), Status() );
+}
+
+// TODO: move
+void Compiler::VisitCountofExpr( CountofExpr* countofExpr )
+{
+    if ( Config().discard )
+    {
+        Status().discarded = true;
+        return;
+    }
+
+    auto& arrayType = (ArrayType&) *countofExpr->Expr->Type;
+
+    if ( arrayType.Count != 0 )
+    {
+        EmitLoadConstant( arrayType.Count );
+    }
+    else
+    {
+        assert( false );
+        mRep.ThrowInternalError();
+    }
 }
 
 void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenStatus& status )
@@ -472,6 +531,9 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
 
     if ( !foundCatchAll )
     {
+        // Restore the expression depth, so that it doesn't accumulate
+        mCurExprDepth = exprDepth;
+
         if ( !config.discard )
         {
             mCodeBinPtr[0] = OP_LDC_S;
@@ -517,52 +579,54 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
         IncreaseExprDepth();
     }
 
-    if ( assignment->Left->Kind == SyntaxKind::Index )
-    {
-        auto indexExpr = (IndexExpr*) assignment->Left.get();
+    int32_t         offset = 0;
+    Declaration*    decl = nullptr;
 
-        GenerateArrayElementRef( indexExpr );
+    CalcAddress( assignment->Left.get(), decl, offset );
 
-        mCodeBinPtr[0] = OP_STOREI;
-        mCodeBinPtr++;
+    EmitStoreScalar( assignment->Left.get(), decl, offset );
+}
 
-        DecreaseExprDepth( 2 );
-        return;
-    }
-
-    auto targetSym = (NameExpr*) assignment->Left.get();
-    auto decl = targetSym->Decl.get();
-
+void Compiler::EmitStoreScalar( Syntax* node, Declaration* decl, int32_t offset )
+{
     switch ( decl->Kind )
     {
     case DeclKind::Global:
         mCodeBinPtr[0] = OP_STMOD;
-        mCodeBinPtr[1] = mModIndex;
+        mCodeBinPtr[1] = ((GlobalStorage*) decl)->ModIndex;
         mCodeBinPtr += 2;
-        WriteU16( mCodeBinPtr, ((Storage*) decl)->Offset );
+        WriteU16( mCodeBinPtr, ((GlobalStorage*) decl)->Offset + offset );
         break;
 
     case DeclKind::Local:
         mCodeBinPtr[0] = OP_STLOC;
-        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr[1] = ((LocalStorage*) decl)->Offset - offset;
         mCodeBinPtr += 2;
         break;
 
-    case DeclKind::Arg:
+    case DeclKind::Param:
         mCodeBinPtr[0] = OP_STARG;
-        mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+        mCodeBinPtr[1] = ((ParamStorage*) decl)->Offset + offset;
         mCodeBinPtr += 2;
         break;
 
     case DeclKind::Func:
     case DeclKind::Forward:
-    case DeclKind::ExternalFunc:
     case DeclKind::NativeFunc:
-        mRep.ThrowError( CERR_SEMANTICS, targetSym, "functions can't be assigned a value" );
+        mRep.ThrowError( CERR_SEMANTICS, node, "functions can't be assigned a value" );
         break;
 
     case DeclKind::Const:
-        mRep.ThrowError( CERR_SEMANTICS, targetSym, "Constants can't be changed" );
+        mRep.ThrowError( CERR_SEMANTICS, node, "Constants can't be changed" );
+        break;
+
+    case DeclKind::LoadedAddress:
+        if ( offset > 0 )
+            EmitSpilledAddrOffset( offset );
+
+        mCodeBinPtr[0] = OP_STOREI;
+        mCodeBinPtr++;
+        DecreaseExprDepth();
         break;
 
     default:
@@ -631,30 +695,42 @@ void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, Ge
         return;
     }
 
-    U32 addr = 0;
+    auto func = (Function*) addrOf->Inner->GetDecl();
 
-    auto func = (Function*) addrOf->Inner->Decl.get();
+    mCodeBinPtr[0] = OP_LDC;
+    mCodeBinPtr++;
+
+    EmitFuncAddress( (Function*) addrOf->Inner->GetDecl(), mCodeBinPtr );
+
+    IncreaseExprDepth();
+}
+
+void Compiler::EmitFuncAddress( Function* func, uint8_t*& dstPtr )
+{
+    U32 addr = 0, modIndex = 0;
 
     if ( func->Address != INT32_MAX )
     {
         addr = func->Address;
+        modIndex = func->ModIndex;
     }
     else
     {
-        PatchChain* chain = PushFuncPatch( func->Name );
+        PatchChain* chain = PushFuncPatch( func->Name, dstPtr );
 
-        AddrRef ref = { AddrRefKind::Inst };
-        ref.InstPtr = &chain->First->Inst;
-        mLocalAddrRefs.push_back( ref );
+        if ( mInFunc )
+        {
+            AddrRef ref = { AddrRefKind::Inst };
+            ref.InstPtr = &chain->First->Inst;
+            mLocalAddrRefs.push_back( ref );
+        }
+
+        modIndex = mModIndex;
     }
 
-    mCodeBinPtr[0] = OP_LDC;
-    mCodeBinPtr++;
-    WriteU24( mCodeBinPtr, addr );
-    mCodeBinPtr[0] = mModIndex;
-    mCodeBinPtr++;
-
-    IncreaseExprDepth();
+    WriteU24( dstPtr, addr );
+    dstPtr[0] = modIndex;
+    dstPtr++;
 }
 
 void Compiler::VisitAddrOfExpr( AddrOfExpr* addrOf )
@@ -664,10 +740,7 @@ void Compiler::VisitAddrOfExpr( AddrOfExpr* addrOf )
 
 void Compiler::GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status )
 {
-    for ( int i = call->Arguments.size() - 1; i >= 0; i-- )
-    {
-        Generate( call->Arguments[i].get() );
-    }
+    GenerateCallArgs( call->Arguments );
 
     Generate( call->Head.get() );
 
@@ -694,7 +767,8 @@ void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenS
 {
     for ( auto& binding : letStmt->Variables )
     {
-        GenerateLetBinding( binding.get() );
+        if ( binding->Kind == SyntaxKind::VarDecl )
+            GenerateLetBinding( binding.get() );
     }
 
     GenerateImplicitProgn( &letStmt->Body, config, status );
@@ -702,33 +776,35 @@ void Compiler::GenerateLet( LetStatement* letStmt, const GenConfig& config, GenS
 
 void Compiler::GenerateLetBinding( DataDecl* binding )
 {
-    auto local = (Storage*) binding->GetDecl();
-    auto type = local->Type.get();
+    auto local = (LocalStorage*) binding->GetDecl();
 
-    if ( type->GetKind() == TypeKind::Int
-        || type->GetKind() == TypeKind::Pointer )
+    GenerateLocalInit( local->Offset, binding->Initializer.get() );
+}
+
+void Compiler::GenerateLocalInit( int32_t offset, Syntax* initializer )
+{
+    if ( initializer == nullptr )
+        return;
+
+    auto type = initializer->Type.get();
+
+    if ( IsScalarType( type->GetKind() ) )
     {
-        if ( binding->Initializer != nullptr )
-        {
-            Generate( binding->Initializer.get() );
-            mCodeBinPtr[0] = OP_STLOC;
-            mCodeBinPtr[1] = local->Offset;
-            mCodeBinPtr += 2;
-            DecreaseExprDepth();
-        }
+        Generate( initializer );
+        mCodeBinPtr[0] = OP_STLOC;
+        mCodeBinPtr[1] = offset;
+        mCodeBinPtr += 2;
+        DecreaseExprDepth();
     }
     else if ( type->GetKind() == TypeKind::Array )
     {
         auto arrayType = (ArrayType*) type;
 
-        if ( binding->Initializer != nullptr )
-        {
-            AddLocalDataArray( local, binding->Initializer.get(), arrayType->Size );
-        }
+        AddLocalDataArray( offset, initializer, arrayType->Count );
     }
     else
     {
-        mRep.ThrowError( CERR_SEMANTICS, binding, "'let' binding takes a name or name and type" );
+        mRep.ThrowError( CERR_SEMANTICS, initializer, "'let' binding takes a name or name and type" );
     }
 }
 
@@ -739,89 +815,99 @@ void Compiler::VisitLetStatement( LetStatement* letStmt )
 
 // TODO: try to merge this with AddGlobalDataArray. Separate the array processing from the code generation
 
-void Compiler::AddLocalDataArray( Storage* local, Syntax* valueElem, size_t size )
+void Compiler::AddLocalDataArray( int32_t offset, Syntax* valueElem, size_t size )
 {
     if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
         mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
-    Syntax* lastTwoElems[2] = {};
-    size_t locIndex = local->Offset;
-    size_t i = 0;
-
-    auto initList = (InitList*) valueElem;
+    auto    initList = (InitList*) valueElem;
+    size_t  locIndex = offset;
+    size_t  i = 0;
 
     for ( auto& entry : initList->Values )
     {
         if ( i == size )
             mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
 
-        lastTwoElems[0] = lastTwoElems[1];
-        lastTwoElems[1] = entry.get();
-
-        Generate( entry.get() );
-        mCodeBinPtr[0] = OP_STLOC;
-        mCodeBinPtr[1] = (U8) locIndex;
-        mCodeBinPtr += 2;
+        GenerateLocalInit( locIndex, entry.get() );
         i++;
-        locIndex--;
-        DecreaseExprDepth();
+        locIndex -= entry->Type->GetSize();
     }
 
-    I32 prevValue = 0;
-    I32 step = 0;
-
-    if ( initList->HasExtra && lastTwoElems[1] != nullptr )
+    if ( initList->Fill == ArrayFill::Extrapolate && initList->Values.size() > 0 )
     {
-        prevValue = GetSyntaxValue( lastTwoElems[1], "Array initializer extrapolation requires a constant" );
+        size_t count = initList->Values.size();
+        I32 prevValue = 0;
+        I32 step = 0;
 
-        if ( lastTwoElems[0] != nullptr )
+        prevValue = GetSyntaxValue( initList->Values.back().get(), "Array initializer extrapolation requires a constant" );
+
+        if ( initList->Values.size() > 1 )
         {
-            auto prevValue2 = GetOptionalSyntaxValue( lastTwoElems[0] );
+            auto prevValue2 = GetOptionalSyntaxValue( initList->Values[count - 2].get() );
             if ( prevValue2.has_value() )
                 step = prevValue - prevValue2.value();
         }
+
+        for ( ; i < size; i++ )
+        {
+            I32 newValue = prevValue + step;
+
+            EmitLoadConstant( newValue );
+            mCodeBinPtr[0] = OP_STLOC;
+            mCodeBinPtr[1] = (U8) locIndex;
+            mCodeBinPtr += 2;
+            locIndex--;
+            DecreaseExprDepth();
+
+            prevValue = newValue;
+        }
     }
-
-    for ( ; i < size; i++ )
+    else if ( initList->Fill == ArrayFill::Repeat && initList->Values.size() > 0 )
     {
-        I32 newValue = prevValue + step;
+        Syntax* lastNode = initList->Values.back().get();
 
-        EmitLoadConstant( newValue );
-        mCodeBinPtr[0] = OP_STLOC;
-        mCodeBinPtr[1] = (U8) locIndex;
-        mCodeBinPtr += 2;
-        locIndex--;
-        DecreaseExprDepth();
-
-        prevValue = newValue;
+        for ( ; i < size; i++ )
+        {
+            GenerateLocalInit( locIndex, lastNode );
+            locIndex -= lastNode->Type->GetSize();
+        }
     }
 }
 
 void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status )
 {
-    if ( call->Head->Kind != SyntaxKind::Name )
-        mRep.ThrowError( CERR_SEMANTICS, call, "Direct call requires a named function" );
+    GenerateCall( call->Head->GetDecl(), call->Arguments, config, status );
+}
 
-    auto op = (NameExpr*) call->Head.get();
-
-    for ( int i = call->Arguments.size() - 1; i >= 0; i-- )
+void Compiler::GenerateCallArgs( std::vector<Unique<Syntax>>& arguments )
+{
+    for ( int i = arguments.size() - 1; i >= 0; i-- )
     {
-        Generate( call->Arguments[i].get() );
+        Generate( arguments[i].get() );
     }
+}
 
-    int argCount = call->Arguments.size();
+void Compiler::GenerateCall( Declaration* decl, std::vector<Unique<Syntax>>& arguments, const GenConfig& config, GenStatus& status )
+{
+    GenerateCallArgs( arguments );
+
+    int argCount = arguments.size();
     U8 callFlags = CallFlags::Build( argCount, config.discard );
-
-    auto decl = call->Head->GetDecl();
 
     if ( decl == nullptr )
     {
         mRep.ThrowInternalError( "Call head has no declaration" );
     }
-    else if ( decl->Kind == DeclKind::Func )
+    else if ( decl->Kind == DeclKind::Func
+        && ((Function*) decl)->ModIndex == mModIndex )
     {
         Function* func = (Function*) decl;
         U32 addr = 0;
+
+        mCodeBinPtr[0] = OP_CALL;
+        mCodeBinPtr[1] = callFlags;
+        mCodeBinPtr += 2;
 
         if ( func->Address != INT32_MAX )
         {
@@ -829,30 +915,29 @@ void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus&
         }
         else
         {
-            PatchChain* chain = PushFuncPatch( func->Name );
+            PatchChain* chain = PushFuncPatch( func->Name, mCodeBinPtr );
 
             AddrRef ref = { AddrRefKind::Inst };
             ref.InstPtr = &chain->First->Inst;
             mLocalAddrRefs.push_back( ref );
         }
 
-        mCodeBinPtr[0] = OP_CALL;
-        mCodeBinPtr[1] = callFlags;
-        mCodeBinPtr += 2;
         WriteU24( mCodeBinPtr, addr );
 
         if ( mInFunc )
-            mCurFunc->CalledFunctions.push_back( op->String );
+            mCurFunc->CalledFunctions.push_back( { mCurExprDepth, func->Name } );
     }
     else
     {
         int opCode = 0;
         I32 id = 0;
 
-        if ( decl->Kind == DeclKind::ExternalFunc )
+        if ( decl->Kind == DeclKind::Func )
         {
+            auto func = (Function*) decl;
+
             opCode = OP_CALLM;
-            id = ((ExternalFunction*) decl)->Id;
+            id = CodeAddr::Build( func->Address, func->ModIndex );
 
             // TODO: Add this external call to the list of called functions
         }
@@ -909,7 +994,7 @@ void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenS
 {
     // Variable name
 
-    auto local = (Storage*) forStmt->IndexDecl.get();
+    auto local = (LocalStorage*) forStmt->IndexDecl.get();
 
     int primitive;
     int step;
@@ -1127,13 +1212,14 @@ void Compiler::GenerateCase( CaseExpr* caseExpr, const GenConfig& config, GenSta
 
 void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
 {
-    PatchChain exitChain;
+    PatchChain  exitChain;
+    int         exprDepth = mCurExprDepth;
 
     const GenConfig& statementConfig = config;
 
     if ( caseExpr->TestKeyDecl != nullptr )
     {
-        auto local = (Storage*) caseExpr->TestKeyDecl.get();
+        auto local = (LocalStorage*) caseExpr->TestKeyDecl.get();
 
         Generate( caseExpr->TestKey.get() );
         mCodeBinPtr[0] = OP_STLOC;
@@ -1145,6 +1231,7 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
         Unique<NameExpr> localSym( new NameExpr() );
         localSym->String = "$testKey";
         localSym->Decl = caseExpr->TestKeyDecl;
+        localSym->Type = localSym->Decl->Type;
         caseExpr->TestKey = std::move( localSym );
     }
 
@@ -1152,6 +1239,9 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
     {
         PatchChain falseChain;
         PatchChain trueChain;
+
+        // Restore the expression depth, so that it doesn't accumulate
+        mCurExprDepth = exprDepth;
 
         int i = 0;
 
@@ -1193,6 +1283,9 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
 
         Patch( &falseChain );
     }
+
+    // Restore the expression depth, so that it doesn't accumulate
+    mCurExprDepth = exprDepth;
 
     if ( caseExpr->Fallback != nullptr )
     {
@@ -1374,8 +1467,13 @@ U8 Compiler::InvertJump( U8 opCode )
 
 void Compiler::PushPatch( PatchChain* chain )
 {
+    PushPatch( chain, mCodeBinPtr );
+}
+
+void Compiler::PushPatch( PatchChain* chain, U8* patchPtr )
+{
     InstPatch* link = new InstPatch;
-    link->Inst = mCodeBinPtr;
+    link->Inst = patchPtr;
     link->Next = chain->First;
     chain->First = link;
 }
@@ -1389,7 +1487,7 @@ void Compiler::PopPatch( PatchChain* chain )
     delete link;
 }
 
-Compiler::PatchChain* Compiler::PushFuncPatch( const std::string& name )
+Compiler::PatchChain* Compiler::PushFuncPatch( const std::string& name, U8* patchPtr )
 {
     auto patchIt = mPatchMap.find( name );
     if ( patchIt == mPatchMap.end() )
@@ -1398,7 +1496,7 @@ Compiler::PatchChain* Compiler::PushFuncPatch( const std::string& name )
         patchIt = std::move( result.first );
     }
 
-    PushPatch( &patchIt->second );
+    PushPatch( &patchIt->second, patchPtr );
 
     return &patchIt->second;
 }
@@ -1463,16 +1561,7 @@ void Compiler::PatchCalls( PatchChain* chain, U32 addr )
 {
     for ( InstPatch* link = chain->First; link != nullptr; link = link->Next )
     {
-        int offset = 0;
-
-        switch ( link->Inst[0] )
-        {
-        case OP_CALL:   offset = 2; break;
-        case OP_LDC:    offset = 1; break;
-        default:        assert( false ); break;
-        }
-
-        StoreU24( &link->Inst[offset], addr );
+        StoreU24( link->Inst, addr );
     }
 }
 
@@ -1520,28 +1609,22 @@ void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const
     }
 }
 
-void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
+void Compiler::EmitLoadAddress( Syntax* node, Declaration* baseDecl, I32 offset )
 {
-    if ( indexExpr->Head->Kind != SyntaxKind::Name )
-        mRep.ThrowError( CERR_SEMANTICS, indexExpr, "Only named arrays can be indexed" );
-
-    Generate( indexExpr->Index.get() );
-
-    auto symbol = (NameExpr*) indexExpr->Head.get();
-    uint32_t addrWord;
-
-    auto decl = symbol->Decl.get();
-
-    if ( decl == nullptr )
+    if ( baseDecl == nullptr )
     {
-        mRep.ThrowError( CERR_SEMANTICS, symbol, "symbol not found '%s'", symbol->String.c_str() );
+        mRep.ThrowInternalError( "Missing declaration" );
     }
     else
     {
-        switch ( decl->Kind )
+        uint32_t addrWord;
+
+        switch ( baseDecl->Kind )
         {
         case DeclKind::Global:
-            addrWord = CodeAddr::Build( ((Storage*) decl)->Offset, mModIndex );
+            addrWord = CodeAddr::Build(
+                ((GlobalStorage*) baseDecl)->Offset + offset,
+                ((GlobalStorage*) baseDecl)->ModIndex );
             mCodeBinPtr[0] = OP_LDC;
             mCodeBinPtr++;
             WriteU32( mCodeBinPtr, addrWord );
@@ -1549,20 +1632,74 @@ void Compiler::GenerateArrayElementRef( IndexExpr* indexExpr )
 
         case DeclKind::Local:
             mCodeBinPtr[0] = OP_LDLOCA;
-            mCodeBinPtr[1] = ((Storage*) decl)->Offset;
+            mCodeBinPtr[1] = ((LocalStorage*) baseDecl)->Offset - offset;
             mCodeBinPtr += 2;
             break;
 
         default:
-            mRep.ThrowError( CERR_SEMANTICS, symbol, "'aref' supports only globals and locals" );
+            mRep.ThrowError( CERR_SEMANTICS, node, "'aref' supports only globals and locals" );
         }
     }
 
     IncreaseExprDepth();
+}
 
-    mCodeBinPtr[0] = OP_PRIM;
-    mCodeBinPtr[1] = PRIM_ADD;
-    mCodeBinPtr += 2;
+void Compiler::GenerateArefAddr( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status )
+{
+    assert( config.calcAddr );
+
+    auto arrayType = (ArrayType&) *indexExpr->Head->Type;
+
+    Generate( indexExpr->Head.get(), config, status );
+
+    std::optional<int32_t> optIndexVal;
+
+    optIndexVal = GetOptionalSyntaxValue( indexExpr->Index.get() );
+
+    if ( optIndexVal.has_value() )
+    {
+        status.offset += optIndexVal.value() * arrayType.ElemType->GetSize();
+        return;
+    }
+
+    if ( !status.spilledAddr )
+    {
+        EmitLoadAddress( indexExpr, status.baseDecl, status.offset );
+
+        // Set this after emitting the original decl's address above
+        status.baseDecl = mLoadedAddrDecl.get();
+        status.offset = 0;
+        status.spilledAddr = true;
+    }
+
+    if ( status.offset > 0 )
+    {
+        EmitSpilledAddrOffset( status.offset );
+
+        status.offset = 0;
+    }
+
+    Generate( indexExpr->Index.get() );
+
+    if ( arrayType.ElemType->GetSize() > 255 )
+    {
+        mCodeBinPtr[0] = OP_INDEX;
+        mCodeBinPtr += 1;
+        WriteU32( mCodeBinPtr, arrayType.ElemType->GetSize() );
+    }
+    else if ( arrayType.ElemType->GetSize() > 1 )
+    {
+        mCodeBinPtr[0] = OP_INDEX_S;
+        mCodeBinPtr[1] = arrayType.ElemType->GetSize();
+        mCodeBinPtr += 2;
+    }
+    else
+    {
+        // TODO: Do we need an add-address primitive that doesn't overwrite the module byte?
+        mCodeBinPtr[0] = OP_PRIM;
+        mCodeBinPtr[1] = PRIM_ADD;
+        mCodeBinPtr += 2;
+    }
 
     DecreaseExprDepth();
 }
@@ -1574,14 +1711,18 @@ void Compiler::GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenS
         status.discarded = true;
         return;
     }
+    else if ( config.calcAddr )
+    {
+        GenerateArefAddr( indexExpr, config, status );
+        return;
+    }
 
-    GenerateArrayElementRef( indexExpr );
+    Declaration* baseDecl = nullptr;
+    int32_t offset = 0;
 
-    mCodeBinPtr[0] = OP_LOADI;
-    mCodeBinPtr++;
+    CalcAddress( indexExpr, baseDecl, offset );
 
-    DecreaseExprDepth();
-    IncreaseExprDepth();
+    EmitLoadScalar( indexExpr, baseDecl, offset );
 }
 
 void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
@@ -1589,31 +1730,76 @@ void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
     GenerateAref( indexExpr, Config(), Status() );
 }
 
+void Compiler::CalcAddress( Syntax* expr, Declaration*& baseDecl, int32_t& offset )
+{
+    GenConfig config{};
+    GenStatus status{};
+
+    config.calcAddr = true;
+
+    Generate( expr, config, status );
+
+    baseDecl = status.baseDecl;
+    offset = status.offset;
+}
+
+void Compiler::VisitSliceExpr( SliceExpr* sliceExpr )
+{
+    const GenConfig& config = Config();
+    GenStatus& status = Status();
+
+    if ( config.discard )
+    {
+        status.discarded = true;
+        return;
+    }
+    else if ( config.calcAddr )
+    {
+        Generate( sliceExpr->Head.get(), config, status );
+
+        auto arrayType = (ArrayType&) *sliceExpr->Head->Type;
+
+        int32_t indexVal = GetSyntaxValue( sliceExpr->FirstIndex.get(), "" );
+
+        status.offset += indexVal * arrayType.ElemType->GetSize();
+        return;
+    }
+
+    assert( false );
+}
+
+void Compiler::VisitDotExpr( DotExpr* dotExpr )
+{
+    GenerateValue( dotExpr, dotExpr->GetDecl(), Config(), Status() );
+}
+
 void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )
 {
-    auto global = (Storage*) varDecl->GetDecl();
-    auto type = global->Type.get();
+    auto global = (GlobalStorage*) varDecl->GetDecl();
 
-    if ( type->GetKind() == TypeKind::Int
-        || type->GetKind() == TypeKind::Pointer )
+    GenerateGlobalInit( global->Offset, varDecl->Initializer.get() );
+}
+
+void Compiler::GenerateGlobalInit( int32_t offset, Syntax* initializer )
+{
+    if ( initializer == nullptr )
+        return;
+
+    auto type = initializer->Type.get();
+
+    if ( IsScalarType( type->GetKind() ) )
     {
-        if ( varDecl->Initializer != nullptr )
-        {
-            AddGlobalData( global->Offset, varDecl->Initializer.get() );
-        }
+        AddGlobalData( offset, initializer );
     }
     else if ( type->GetKind() == TypeKind::Array )
     {
         auto arrayType = (ArrayType*) type;
 
-        if ( varDecl->Initializer != nullptr )
-        {
-            AddGlobalDataArray( global, varDecl->Initializer.get(), arrayType->Size );
-        }
+        AddGlobalDataArray( offset, initializer, arrayType->Count );
     }
     else
     {
-        mRep.ThrowError( CERR_SEMANTICS, varDecl, "'defvar' takes a name or name and type" );
+        mRep.ThrowError( CERR_SEMANTICS, initializer, "'defvar' takes a name or name and type" );
     }
 }
 
@@ -1624,71 +1810,74 @@ void Compiler::VisitVarDecl( VarDecl* varDecl )
 
 void Compiler::AddGlobalData( U32 offset, Syntax* valueElem )
 {
-    mGlobals[offset] = GetSyntaxValue( valueElem, "Globals must be initialized with constant data" );
+    if ( valueElem->Type->GetKind() == TypeKind::Pointer )
+    {
+        if ( valueElem->Kind == SyntaxKind::AddrOfExpr )
+        {
+            auto addrOf = (AddrOfExpr*) valueElem;
+
+            uint8_t* dstPtr = (uint8_t*) &mGlobals[offset];
+
+            EmitFuncAddress( (Function*) addrOf->Inner->GetDecl(), dstPtr );
+        }
+        else
+        {
+            mRep.ThrowInternalError();
+        }
+    }
+    else
+    {
+        mGlobals[offset] = GetSyntaxValue( valueElem, "Globals must be initialized with constant data" );
+    }
 }
 
-void Compiler::AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size )
+void Compiler::AddGlobalDataArray( int32_t offset, Syntax* valueElem, size_t size )
 {
     if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
         mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
 
-    size_t i = 0;
-
-    auto initList = (InitList*) valueElem;
+    auto    initList = (InitList*) valueElem;
+    size_t  i = 0;
+    size_t  globalIndex = offset;
 
     for ( auto& entry : initList->Values )
     {
         if ( i == size )
             mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
 
-        AddGlobalData( global->Offset + i, entry.get() );
+        GenerateGlobalInit( globalIndex, entry.get() );
         i++;
+        globalIndex += entry->Type->GetSize();
     }
 
-    I32 prevValue = 0;
-    I32 step = 0;
-
-    if ( initList->HasExtra )
+    if ( initList->Fill == ArrayFill::Extrapolate && i >= 1 )
     {
-        if ( i >= 1 )
-            prevValue = mGlobals[global->Offset + i - 1];
+        I32 prevValue = mGlobals[offset + i - 1];
+        I32 step = 0;
 
         if ( i >= 2 )
-            step = prevValue - mGlobals[global->Offset + i - 2];
-    }
+        {
+            step = prevValue - mGlobals[offset + i - 2];
+        }
 
-    for ( ; i < size; i++ )
+        for ( ; i < size; i++ )
+        {
+            I32 newValue = prevValue + step;
+
+            mGlobals[offset + i] = newValue;
+            prevValue = newValue;
+        }
+    }
+    else if ( initList->Fill == ArrayFill::Repeat && i >= 1 )
     {
-        I32 newValue = prevValue + step;
+        Syntax* lastNode = initList->Values.back().get();
 
-        mGlobals[global->Offset + i] = newValue;
-        prevValue = newValue;
+        for ( ; i < size; i++ )
+        {
+            GenerateGlobalInit( globalIndex, lastNode );
+            globalIndex += lastNode->Type->GetSize();
+        }
     }
-}
-
-void Compiler::VisitConstDecl( ConstDecl* constDecl )
-{
-    // Nothing
-}
-
-void Compiler::VisitNativeDecl( NativeDecl* nativeDecl )
-{
-    // Nothing
-}
-
-void Compiler::VisitNameTypeRef( NameTypeRef* nameTypeRef )
-{
-    // Nothing
-}
-
-void Compiler::VisitPointerTypeRef( PointerTypeRef* pointerTypeRef )
-{
-    // Nothing
-}
-
-void Compiler::VisitProcTypeRef( ProcTypeRef* procTypeRef )
-{
-    // Nothing
 }
 
 void Compiler::GenerateLambdas()
@@ -1910,7 +2099,7 @@ void Compiler::CalculateStackDepth()
 
             // Only count parameters of publics, if that's ever a distinction
 
-            int16_t stackUsage = func->TreeStackUsage + func->ArgCount;
+            int16_t stackUsage = func->TreeStackUsage + func->ParamCount;
 
             callStats->MaxCallDepth  = std::max( callStats->MaxCallDepth,  func->CallDepth );
             callStats->MaxStackUsage = std::max( callStats->MaxStackUsage, stackUsage );
@@ -1935,14 +2124,14 @@ void Compiler::CalculateStackDepth( Function* func )
     // TODO: Put Machine::FRAME_WORDS somewhere common, and use it here.
 
     func->IsCalculating = true;
-    func->IndividualStackUsage = 2 + func->LocalCount + func->ExprDepth;
+    func->IndividualStackUsage = 2 + func->LocalCount;
 
     int16_t maxChildDepth = 0;
-    int16_t maxChildStackUsage = 0;
+    int16_t maxChildStackUsage = func->ExprDepth;
 
-    for ( const auto& name : func->CalledFunctions )
+    for ( const auto& site : func->CalledFunctions )
     {
-        if ( auto it = mGlobalTable.find( name );
+        if ( auto it = mGlobalTable.find( site.FunctionName );
             it != mGlobalTable.end() )
         {
             if ( it->second->Kind != DeclKind::Func )
@@ -1952,8 +2141,10 @@ void Compiler::CalculateStackDepth( Function* func )
 
             CalculateStackDepth( childFunc );
 
+            int16_t childStackUsage = childFunc->TreeStackUsage + site.ExprDepth;
+
             maxChildDepth = std::max( maxChildDepth, childFunc->CallDepth );
-            maxChildStackUsage = std::max( maxChildStackUsage, childFunc->TreeStackUsage );
+            maxChildStackUsage = std::max( maxChildStackUsage, childStackUsage );
 
             if ( childFunc->CallsIndirectly )
                 func->CallsIndirectly = true;
@@ -2021,7 +2212,7 @@ void Reporter::ThrowInternalError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    ThrowError( CERR_INTERNAL, 0, 0, format, args );
+    ThrowError( CERR_INTERNAL, "", 0, 0, format, args );
     va_end( args );
 }
 

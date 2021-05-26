@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2019 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #include "stdafx.h"
 #include "Disassembler.h"
 #include "OpCodes.h"
@@ -30,6 +36,8 @@ static const char* gOpCodes[] =
     "CALLM",
     "CALLNATIVE",
     "CALLNATIVE.S",
+    "INDEX",
+    "INDEX.S",
 };
 
 static const char* gPrimitives[] = 
@@ -104,6 +112,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
         break;
 
     case OP_LDC_S:
+    case OP_INDEX_S:
         {
             int value = *(I8*) mCodePtr++;
             charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " %d", value );
@@ -120,6 +129,7 @@ int Disassembler::Disassemble( char* disassembly, size_t capacity )
         break;
 
     case OP_LDC:
+    case OP_INDEX:
         {
             int value = ReadI32( mCodePtr );
             charsWritten = sprintf_s( disassembly, (capacity - totalCharsWritten), " %d", value );

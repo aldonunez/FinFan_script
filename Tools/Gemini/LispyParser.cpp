@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2021 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #include "stdafx.h"
 #include "LispyParser.h"
 #include <stdarg.h>
@@ -667,7 +673,7 @@ Unique<TypeRef> LispyParser::ParseNameTypeRef( bool embedded )
 {
     auto nameTypeRef = Make<NameTypeRef>();
 
-    nameTypeRef->Symbol = ParseSymbol();
+    nameTypeRef->QualifiedName = ParseSymbol();
 
     if ( embedded )
         ScanRParen();
@@ -719,9 +725,14 @@ Unique<Syntax> LispyParser::ParseArrayInitializer()
 
     while ( mCurToken != TokenCode::RParen )
     {
-        if ( mCurToken == TokenCode::Symbol && mCurString == "&extra" )
+        if ( mCurToken == TokenCode::Symbol && mCurString == "&repeat" )
         {
-            initList->HasExtra = true;
+            initList->Fill = ArrayFill::Repeat;
+            ScanToken();
+        }
+        else if ( mCurToken == TokenCode::Symbol && mCurString == "&extra" )
+        {
+            initList->Fill = ArrayFill::Extrapolate;
             ScanToken();
         }
         else
