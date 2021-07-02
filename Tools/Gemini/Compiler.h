@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2019 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #pragma once
 
 #include "GeminiCommon.h"
@@ -135,6 +141,22 @@ public:
                 delete link;
             }
         }
+
+        PatchChain( PatchChain&& other ) noexcept
+        {
+            First = other.First;
+            PatchedPtr = other.PatchedPtr;
+
+            other.First = nullptr;
+            other.PatchedPtr = nullptr;
+        }
+
+        PatchChain& operator=( PatchChain&& other ) noexcept
+        {
+            std::swap( First, other.First );
+            PatchedPtr = other.PatchedPtr;
+            return *this;
+        }
     };
 
     using PatchMap = std::map<std::string, PatchChain>;
@@ -174,6 +196,10 @@ private:
         ExprKind    kind;
         bool        discarded;
         bool        tailRet;
+
+        Declaration*    baseDecl;
+        int32_t         offset;
+        bool            spilledAddr;
     };
 
     struct GenConfig
@@ -182,6 +208,7 @@ private:
         PatchChain* falseChain;
         bool invert;
         bool discard;
+        bool calcAddr;
         PatchChain* breakChain;
         PatchChain* nextChain;
 
@@ -285,6 +312,8 @@ private:
     CompilerStats   mStats = {};
     UnitVec         mUnits;
 
+    std::shared_ptr<Declaration> mLoadedAddrDecl;
+
 public:
     Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex = 0 );
 
@@ -317,16 +346,24 @@ private:
     // Level 2 - S-expressions
     void GenerateNumber( NumberExpr* number, const GenConfig& config, GenStatus& status );
     void GenerateSymbol( NameExpr* symbol, const GenConfig& config, GenStatus& status );
-    void GenerateSymbol( Syntax* node, Declaration *decl, const GenConfig& config, GenStatus& status );
+    void GenerateValue( Syntax* node, Declaration *decl, const GenConfig& config, GenStatus& status );
     void GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status );
+    void GenerateArefAddr( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status );
     void GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status );
-    void GenerateArrayElementRef( IndexExpr* indexExpr );
     void GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status );
+    void GenerateGlobalInit( int32_t offset, Syntax* initializer );
+
+    void CalcAddress( Syntax* dotExpr, Declaration*& baseDecl, int32_t& offset );
 
     void AddGlobalData( U32 offset, Syntax* valueElem );
-    void AddGlobalDataArray( Storage* global, Syntax* valueElem, size_t size );
+    void AddGlobalDataArray( int32_t offset, Syntax* valueElem, size_t size );
 
     void EmitLoadConstant( int32_t value );
+    void EmitLoadAddress( Syntax* node, Declaration* baseDecl, I32 offset );
+    void EmitFuncAddress( Function* func, uint8_t*& dstPtr );
+    void EmitLoadScalar( Syntax* node, Declaration* decl, int32_t offset );
+    void EmitStoreScalar( Syntax* node, Declaration* decl, int32_t offset );
+    void EmitSpilledAddrOffset( int32_t offset );
 
     // Level 3 - functions and special operators
     void GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, GenStatus& status );
@@ -341,10 +378,12 @@ private:
     void GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status );
     void GenerateLet( LetStatement* letStmt, const GenConfig& config, GenStatus& status );
     void GenerateLetBinding( DataDecl* binding );
-    void AddLocalDataArray( Storage* global, Syntax* valueElem, size_t size );
+    void GenerateLocalInit( int32_t offset, Syntax* initializer );
+    void AddLocalDataArray( int32_t offset, Syntax* valueElem, size_t size );
 
     void GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status );
     void GenerateCall( Declaration* decl, std::vector<Unique<Syntax>>& arguments, const GenConfig& config, GenStatus& status );
+    void GenerateCallArgs( std::vector<Unique<Syntax>>& arguments );
     void GenerateFor( ForStatement* forStmt, const GenConfig& config, GenStatus& status );
     void GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& config, GenStatus& status );
     void GenerateDo( WhileStatement* whileStmt, const GenConfig& config, GenStatus& status );
@@ -378,9 +417,10 @@ private:
     // Backpatching
     void Patch( PatchChain* chain, U8* targetPtr = nullptr );
     void PatchCalls( PatchChain* chain, U32 addr );
+    void PushPatch( PatchChain* chain, U8* patchPtr );
     void PushPatch( PatchChain* chain );
     void PopPatch( PatchChain* chain );
-    PatchChain* PushFuncPatch( const std::string& name );
+    PatchChain* PushFuncPatch( const std::string& name, U8* patchPtr );
 
     I32 GetSyntaxValue( Syntax* node, const char* message = nullptr );
 
@@ -393,7 +433,6 @@ private:
 
     // IVisitor
     virtual void VisitAddrOfExpr( AddrOfExpr* addrOf ) override;
-    virtual void VisitArrayTypeRef( ArrayTypeRef* typeRef ) override;
     virtual void VisitAssignmentExpr( AssignmentExpr* assignment ) override;
     virtual void VisitBinaryExpr( BinaryExpr* binary ) override;
     virtual void VisitBreakStatement( BreakStatement* breakStmt ) override;
@@ -401,25 +440,19 @@ private:
     virtual void VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol ) override;
     virtual void VisitCaseExpr( CaseExpr* caseExpr ) override;
     virtual void VisitCondExpr( CondExpr* condExpr ) override;
-    virtual void VisitConstDecl( ConstDecl* constDecl ) override;
+    virtual void VisitCountofExpr( CountofExpr* countofExpr ) override;
     virtual void VisitDotExpr( DotExpr* dotExpr ) override;
     virtual void VisitForStatement( ForStatement* forStmt ) override;
-    virtual void VisitImportDecl( ImportDecl* importDecl ) override;
     virtual void VisitIndexExpr( IndexExpr* indexExpr ) override;
-    virtual void VisitInitList( InitList* initList ) override;
     virtual void VisitLambdaExpr( LambdaExpr* lambdaExpr ) override;
     virtual void VisitLetStatement( LetStatement* letStmt ) override;
     virtual void VisitLoopStatement( LoopStatement* loopStmt ) override;
     virtual void VisitNameExpr( NameExpr* nameExpr ) override;
-    virtual void VisitNameTypeRef( NameTypeRef* nameTypeRef ) override;
-    virtual void VisitNativeDecl( NativeDecl* nativeDecl ) override;
     virtual void VisitNextStatement( NextStatement* nextStmt ) override;
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) override;
-    virtual void VisitParamDecl( ParamDecl* paramDecl ) override;
-    virtual void VisitPointerTypeRef( PointerTypeRef* pointerTypeRef ) override;
     virtual void VisitProcDecl( ProcDecl* procDecl ) override;
-    virtual void VisitProcTypeRef( ProcTypeRef* procTypeRef ) override;
     virtual void VisitReturnStatement( ReturnStatement* retStmt ) override;
+    virtual void VisitSliceExpr( SliceExpr* sliceExpr ) override;
     virtual void VisitStatementList( StatementList* stmtList ) override;
     virtual void VisitUnaryExpr( UnaryExpr* unary ) override;
     virtual void VisitUnit( Unit* unit ) override;

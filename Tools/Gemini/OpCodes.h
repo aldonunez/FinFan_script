@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2019 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #pragma once
 
 #include <assert.h>
@@ -30,6 +36,8 @@ enum
     OP_CALLM,
     OP_CALLNATIVE,
     OP_CALLNATIVE_S,
+    OP_INDEX,
+    OP_INDEX_S,
     OP_MAXOPCODE,
 
     // Having each module end with this unsupported opcode ensures that:

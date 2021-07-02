@@ -1,3 +1,9 @@
+// Gemini Languages and Virtual Machine
+// Copyright 2019 Aldo Jose Nunez
+//
+// Licensed under the Apache License, Version 2.0.
+// See the LICENSE.txt file for details.
+
 #include "stdafx.h"
 #include "Machine.h"
 #include "OpCodes.h"
@@ -221,6 +227,8 @@ int Machine::Run()
                     return ERR_STACK_OVERFLOW;
 
                 mSP -= count;
+
+                std::fill( mSP, mSP + count, 0 );
             }
             break;
 
@@ -563,6 +571,34 @@ int Machine::Run()
                 int ret = CallNative( nativeCode.Proc, callFlags, 0 );
                 if ( ret != ERR_NONE )
                     return ret;
+            }
+            break;
+
+        case OP_INDEX:
+            {
+                if ( WouldUnderflow( 2 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                CELL base = mSP[1];
+                CELL index = mSP[0];
+                U32  stride = ReadU32( codePtr );
+
+                mSP[1] = base + (index * stride);
+                mSP++;
+            }
+            break;
+
+        case OP_INDEX_S:
+            {
+                if ( WouldUnderflow( 2 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                CELL base = mSP[1];
+                CELL index = mSP[0];
+                U8   stride = ReadU8( codePtr );
+
+                mSP[1] = base + (index * stride);
+                mSP++;
             }
             break;
 
