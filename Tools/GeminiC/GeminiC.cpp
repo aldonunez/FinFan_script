@@ -9,6 +9,8 @@
 #include "..\Gemini\Disassembler.h"
 #include <vector>
 
+using namespace Gemini;
+
 
 constexpr char LispyExt[]   = ".geml";
 constexpr char AlgolyExt[]  = ".gema";
@@ -159,12 +161,12 @@ bool CompilerEnv::AddNative( const std::string& name, NativeFunc proc )
 
     ExternalFunc func;
     func.Id = mFuncMap.size();
-    func.Kind = External_Native;
+    func.Kind = ExternalKind::Native;
     func.Address = 0;
     mFuncMap.insert( FuncMap::value_type( name, func ) );
 
     MachineFunc macFunc;
-    macFunc.Kind = External_Native;
+    macFunc.Kind = ExternalKind::Native;
     macFunc.NativeCode.Proc = proc;
     mIdMap.insert( IdMap::value_type( func.Id, macFunc ) );
     return true;
@@ -257,8 +259,6 @@ int main( int argc, char* argv[] )
 
     std::string codeText;
     int codeTextLen = fileSize;
-    U8 codeBin[0x10000];
-    int codeBinLen = sizeof codeBin;
 
     codeText.resize( fileSize );
     fread( &codeText.at(0), 1, fileSize, file );
@@ -266,29 +266,32 @@ int main( int argc, char* argv[] )
     CompilerEnv env;
     CompilerLog log;
 
-    env.AddGlobal( "@0", 0 );
-    env.AddGlobal( "@1", 1 );
-    env.AddGlobal( "@2", 2 );
-    env.AddGlobal( "@3", 3 );
+    env.AddGlobal( "_P0", 0 );
+    env.AddGlobal( "_P1", 1 );
+    env.AddGlobal( "_P2", 2 );
+    env.AddGlobal( "_P3", 3 );
 
     Unique<Unit> progTree;
+    Unique<Unit> nativeUnit;
     size_t filePathLen = strlen( filePath );
 
     if ( filePathLen > (sizeof LispyExt - 1)
         && 0 == _stricmp( LispyExt, &filePath[filePathLen - (sizeof LispyExt - 1)] ) )
     {
-        codeText.append( LispyNatives );
-
-        LispyParser parser( &codeText.front(), codeText.size(), nullptr, &log );
+        LispyParser parser( &codeText.front(), codeText.size(), filePath, &log );
         progTree = parser.Parse();
+
+        LispyParser nativeParser( LispyNatives, sizeof LispyNatives, "", &log );
+        nativeUnit = nativeParser.Parse();
     }
     else if ( filePathLen > (sizeof AlgolyExt - 1)
         && 0 == _stricmp( AlgolyExt, &filePath[filePathLen - (sizeof AlgolyExt - 1)] ) )
     {
-        codeText.append( AlgolyNatives );
-
-        AlgolyParser parser( &codeText.front(), codeText.size(), nullptr, &log );
+        AlgolyParser parser( &codeText.front(), codeText.size(), filePath, &log );
         progTree = parser.Parse();
+
+        AlgolyParser nativeParser( AlgolyNatives, sizeof AlgolyNatives, "", &log );
+        nativeUnit = nativeParser.Parse();
     }
     else
     {
@@ -296,11 +299,13 @@ int main( int argc, char* argv[] )
         return 1;
     }
 
-    Compiler compiler( codeBin, codeBinLen, &env, &log );
+    CompilerAttrs compilerAttrs;
+    Compiler compiler( &env, &log, compilerAttrs );
     compiler.AddUnit( std::move( progTree ) );
+    compiler.AddUnit( std::move( nativeUnit ) );
     CompilerErr error = compiler.Compile();
 
-    if ( error != 0 )
+    if ( error != CompilerErr::OK )
     {
         return 2;
     }
@@ -308,13 +313,13 @@ int main( int argc, char* argv[] )
     CompilerStats stats = { 0 };
     compiler.GetStats( stats );
 
-    fwrite( codeBin, 1, stats.CodeBytesWritten, outFile );
+    fwrite( compiler.GetCode(), 1, stats.CodeBytesWritten, outFile );
 
     for ( CompilerEnv::FuncMap::const_iterator it = env.BeginExternals();
         it != env.EndExternals();
         it++ )
     {
-        if ( it->second.Kind == External_Bytecode )
+        if ( it->second.Kind == ExternalKind::Bytecode )
         {
             fwrite( &it->second.Address, 4, 1, indexFile );
             fwrite( it->first.c_str(), 1, it->first.size(), indexFile );
@@ -350,14 +355,14 @@ int main( int argc, char* argv[] )
             it != env.EndExternals();
             it++ )
         {
-            if ( it->second.Kind != External_Native )
+            if ( it->second.Kind != ExternalKind::Native )
             {
                 codeToFunc[it->second.Address] = it->first;
             }
         }
 
-        Disassembler disassembler( codeBin );
-        int totalBytesDisasm = 0;
+        Disassembler disassembler( compiler.GetCode() );
+        CodeSize totalBytesDisasm = 0;
         while ( totalBytesDisasm < stats.CodeBytesWritten )
         {
             int addr = totalBytesDisasm;

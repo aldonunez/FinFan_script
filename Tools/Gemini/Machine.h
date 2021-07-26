@@ -6,44 +6,61 @@
 
 #pragma once
 
-#include "GeminiCommon.h"
-
 #include <utility>
 
 
-enum
+namespace Gemini
+{
+
+enum VmError
 {
     ERR_NONE,
     ERR_YIELDED,
+    ERR_SWITCH_TO_NATIVE,
     ERR_NOT_RUNING,
     ERR_BAD_ARG,
     ERR_BAD_OPCODE,
     ERR_BAD_ADDRESS,
     ERR_BAD_MODULE,
+    ERR_BAD_STATE,
     ERR_STACK_OVERFLOW,
     ERR_STACK_UNDERFLOW,
     ERR_BYTECODE_NOT_FOUND,
     ERR_NATIVECODE_NOT_FOUND,
     ERR_DIVIDE,
     ERR_NATIVE_ERROR,
+    ERR_BOUND,
 };
 
 
-typedef I32 CELL;
-typedef uintptr_t UserContext;
+typedef uint8_t     U8;
+typedef uint16_t    U16;
+typedef uint32_t    U32;
+typedef uint64_t    U64;
+
+typedef int8_t      I8;
+typedef int16_t     I16;
+typedef int32_t     I32;
+
+typedef int32_t     CELL;
+typedef uint32_t    UCELL;
+typedef uintptr_t   UserContext;
+
 
 struct Module
 {
     const U8*       CodeBase;
     CELL*           DataBase;
+    CELL*           ConstBase;
     U32             CodeSize;
     U16             DataSize;
+    U16             ConstSize;
 };
 
 struct ByteCode
 {
-    const Module*   Module;
-    U32             Address;
+    const Gemini::Module*   Module;
+    U32                     Address;
 };
 
 class Machine;
@@ -69,18 +86,20 @@ struct StackFrame
     U32             RetAddrWord;
 };
 
+
 class Machine : private IEnvironment
 {
 private:
-    enum
+    struct ReadableDataModule
     {
-        FRAME_WORDS = (sizeof( StackFrame ) + sizeof( CELL ) - 1) / sizeof( CELL ),
+        const CELL* Base;
+        U16         Size;
     };
 
-public:
-    enum
+    struct WritableDataModule
     {
-        MIN_STACK = FRAME_WORDS * 4,
+        CELL*       Base;
+        U16         Size;
     };
 
 private:
@@ -94,6 +113,7 @@ private:
     NativeFunc      mNativeContinuation;
     UserContext     mNativeContinuationContext;
     U8              mNativeContinuationFlags;
+    U8              mNativeNestingLevel;
     U8              mModIndex;
     U32             mPC;
     const Module*   mMod;
@@ -101,15 +121,22 @@ private:
 
 public:
     Machine();
+
     void Init( CELL* stack, U16 stackSize, IEnvironment* environment, UserContext scriptCtx = 0 );
-    void Init( CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx = 0 );
-    bool IsRunning();
-    UserContext GetScriptContext();
+    void Init( CELL* stack, U16 stackSize, U8 modIndex, const Module* module, UserContext scriptCtx = 0 );
+
+    bool IsRunning() const;
+    UserContext GetScriptContext() const;
+    U8 GetModIndex() const;
+    U32 GetPC() const;
+
     CELL* Start( U8 modIndex, U32 address, U8 argCount );
+    CELL* Start( CELL addrWord, U8 argCount );
     void Reset();
     int Run();
     int Yield( NativeFunc proc, UserContext context );
     int PushCell( CELL value );
+    int PopCell( CELL& value );
 
 private:
     void Init( CELL* stack, U16 stackSize, UserContext scriptCtx );
@@ -119,6 +146,8 @@ private:
     int CallNative( NativeFunc proc, U8 argCount, UserContext context );
 
     int SwitchModule( U8 newModIndex );
+
+    void DecrementSP( U16 count );
 
     void Push( CELL word );
     CELL Pop();
@@ -130,7 +159,11 @@ private:
 
     bool IsCodeInBounds( U32 address ) const;
 
-    std::pair<int, const Module*> GetDataModule( U8 index );
+    std::pair<int, ReadableDataModule> GetReadableDataModule( U8 index, U32 addr, bool writable = false );
+    std::pair<int, WritableDataModule> GetWritableDataModule( U8 index, U32 addr );
+
+    std::pair<int, const CELL*> GetSizedReadableDataPtr( CELL addrWord, CELL size, bool writable = false );
+    std::pair<int,       CELL*> GetSizedWritableDataPtr( CELL addrWord, CELL size );
 
     const Module* GetModule( U8 index );
 
@@ -140,3 +173,5 @@ private:
 
 
 int VerifyModule( const Module* mod );
+
+}

@@ -4,9 +4,11 @@
 // Licensed under the Apache License, Version 2.0.
 // See the LICENSE.txt file for details.
 
-#include "stdafx.h"
+#include "pch.h"
 #include "Machine.h"
 #include "OpCodes.h"
+#include "VmCommon.h"
+#include <algorithm>
 
 
 /*
@@ -35,19 +37,27 @@ callm <uint8> <uint8> <uint24>
 */
 
 
+namespace Gemini
+{
+
+static_assert( FRAME_WORDS == (sizeof( StackFrame ) + sizeof( CELL ) - 1) / sizeof( CELL ) );
+
+
 Machine::Machine() :
+    mSP( nullptr ),
     mStack( nullptr ),
     mStackSize( 0 ),
     mFramePtr(),
-    mSP( nullptr ),
     mEnv( nullptr ),
     mScriptCtx( 0 ),
     mNativeContinuation( nullptr ),
     mNativeContinuationContext( 0 ),
     mNativeContinuationFlags( 0 ),
-    mMod(),
+    mNativeNestingLevel( 0 ),
     mModIndex(),
-    mPC()
+    mPC(),
+    mMod(),
+    mStackMod{}
 {
 }
 
@@ -57,7 +67,7 @@ void Machine::Init( CELL* stack, U16 stackSize, IEnvironment* environment, UserC
     mEnv = environment;
 }
 
-void Machine::Init( CELL* stack, U16 stackSize, int modIndex, const Module* module, UserContext scriptCtx )
+void Machine::Init( CELL* stack, U16 stackSize, U8 modIndex, const Module* module, UserContext scriptCtx )
 {
     Init( stack, stackSize, scriptCtx );
     mEnv = this;
@@ -78,14 +88,24 @@ void Machine::Init( CELL* stack, U16 stackSize, UserContext scriptCtx )
     Reset();
 }
 
-bool Machine::IsRunning()
+bool Machine::IsRunning() const
 {
     return mFramePtr < mStackSize;
 }
 
-UserContext Machine::GetScriptContext()
+UserContext Machine::GetScriptContext() const
 {
     return mScriptCtx;
+}
+
+U8 Machine::GetModIndex() const
+{
+    return mModIndex;
+}
+
+U32 Machine::GetPC() const
+{
+    return mPC;
 }
 
 CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
@@ -100,23 +120,35 @@ CELL* Machine::Start( U8 modIndex, U32 address, U8 argCount )
         || address >= module->CodeSize - SENTINEL_SIZE )
         return nullptr;
 
-    if ( mSP - mStack < argCount )
+    if ( WouldOverflow( argCount ) )
         return nullptr;
 
-    mSP -= argCount;
+    DecrementSP( argCount );
 
     CELL* args = mSP;
 
     mPC         = address;
     mMod        = module;
-    mModIndex   = modIndex;
+    mModIndex   = MODINDEX_NATIVE;
 
     U8 callFlags = CallFlags::Build( argCount, false );
 
     if ( PushFrame( mMod->CodeBase, callFlags ) == nullptr )
         return nullptr;
 
+    mPC         = address;
+    mMod        = module;
+    mModIndex   = modIndex;
+
     return args;
+}
+
+CELL* Machine::Start( CELL addrWord, U8 argCount )
+{
+    U8 modIndex = CodeAddr::GetModule( addrWord );
+    U32 address = CodeAddr::GetAddress( addrWord );
+
+    return Start( modIndex, address, argCount );
 }
 
 void Machine::Reset()
@@ -131,7 +163,6 @@ void Machine::Reset()
 
 int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
 {
-    bool  autoPop = CallFlags::GetAutoPop( callFlags );
     U8    argCount = CallFlags::GetCount( callFlags );
 
     if ( WouldUnderflow( argCount ) )
@@ -140,33 +171,31 @@ int Machine::CallNative( NativeFunc proc, U8 callFlags, UserContext context )
     if ( WouldOverflow() )
         return ERR_STACK_OVERFLOW;
 
-    CELL* args = mSP;
+    CELL* args = mSP + FRAME_WORDS;
     CELL* oldSP = mSP;
 
+    if ( mNativeNestingLevel == MAX_NATIVE_NESTING )
+        return ERR_NATIVE_ERROR;
+
+    mNativeNestingLevel++;
+
     int ret = proc( this, argCount, args, context );
+
+    mNativeNestingLevel--;
 
     if ( ret == ERR_NONE )
     {
         CELL* newSP = mSP;
         ptrdiff_t resultCount = oldSP - newSP;
 
-        mSP += argCount;
-
         if ( resultCount == 0 )
         {
             Push( 0 );
         }
-        else if ( resultCount == 1 )
-        {
-            mSP[0] = newSP[0];
-        }
-        else
+        else if ( resultCount != 1 )
         {
             return ERR_NATIVE_ERROR;
         }
-
-        if ( autoPop )
-            mSP++;
     }
     else if ( ret == ERR_YIELDED )
     {
@@ -195,17 +224,35 @@ int Machine::Run()
         int ret = CallNative( continuation, mNativeContinuationFlags, context );
         if ( ret != ERR_NONE )
             return ret;
+
+        int err = PopFrame();
+        if ( err != ERR_NONE )
+            return err;
+
+        if ( !IsCodeInBounds( mPC ) )
+            return ERR_BAD_ADDRESS;
     }
 
     const U8* codePtr = mMod->CodeBase + mPC;
 
     while ( true )
     {
+        mPC = static_cast<U32>( codePtr - mMod->CodeBase );
+
         const U8 op = *codePtr;
         codePtr++;
 
         switch ( op )
         {
+        case OP_POP:
+            {
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
+                mSP++;
+            }
+            break;
+
         case OP_DUP:
             {
                 if ( WouldOverflow() )
@@ -214,8 +261,21 @@ int Machine::Run()
                 if ( WouldUnderflow() )
                     return ERR_STACK_UNDERFLOW;
 
-                mSP--;
-                *mSP = *(mSP + 1);
+                DecrementSP( 1 );
+                *mSP = mSP[1];
+            }
+            break;
+
+        case OP_OVER:
+            {
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                if ( WouldUnderflow( 2 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                DecrementSP( 1 );
+                *mSP = mSP[2];
             }
             break;
 
@@ -226,18 +286,9 @@ int Machine::Run()
                 if ( WouldOverflow( count ) )
                     return ERR_STACK_OVERFLOW;
 
-                mSP -= count;
+                DecrementSP( count );
 
                 std::fill( mSP, mSP + count, 0 );
-            }
-            break;
-
-        case OP_POP:
-            {
-                if ( WouldUnderflow() )
-                    return ERR_STACK_UNDERFLOW;
-
-                mSP++;
             }
             break;
 
@@ -247,6 +298,22 @@ int Machine::Run()
                     return ERR_STACK_UNDERFLOW;
 
                 mSP[0] = !mSP[0];
+            }
+            break;
+
+        case OP_LDARGA:
+            {
+                int index = ReadU8( codePtr );
+                long offset = mFramePtr + FRAME_WORDS + index;
+
+                if ( offset >= mStackSize )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                U32 addrWord = CodeAddr::Build( offset, MODINDEX_STACK );
+                Push( addrWord );
             }
             break;
 
@@ -280,6 +347,22 @@ int Machine::Run()
             }
             break;
 
+        case OP_LDLOCA:
+            {
+                U8  index = ReadU8( codePtr );
+                I32 offset = mFramePtr - 1 - index;
+
+                if ( offset < 0 )
+                    return ERR_BAD_ADDRESS;
+
+                if ( WouldOverflow() )
+                    return ERR_STACK_OVERFLOW;
+
+                U32 addrWord = CodeAddr::Build( offset, MODINDEX_STACK );
+                Push( addrWord );
+            }
+            break;
+
         case OP_LDLOC:
             {
                 int index = ReadU8( codePtr );
@@ -310,38 +393,19 @@ int Machine::Run()
             }
             break;
 
-        case OP_LDLOCA:
-            {
-                int index = ReadU8( codePtr );
-                long offset = mFramePtr - 1 - index;
-
-                if ( offset < 0 )
-                    return ERR_BAD_ADDRESS;
-
-                if ( WouldOverflow() )
-                    return ERR_STACK_OVERFLOW;
-
-                U32 addrWord = CodeAddr::Build( offset, MODINDEX_STACK );
-                Push( addrWord );
-            }
-            break;
-
         case OP_LDMOD:
             {
                 U8  iMod = ReadU8( codePtr );
                 U16 addr = ReadU16( codePtr );
 
-                auto [err, mod] = GetDataModule( iMod );
+                auto [err, mod] = GetReadableDataModule( iMod, addr );
                 if ( err != ERR_NONE )
                     return err;
-
-                if ( addr >= mod->DataSize )
-                    return ERR_BAD_ADDRESS;
 
                 if ( WouldOverflow() )
                     return ERR_STACK_OVERFLOW;
 
-                Push( mod->DataBase[addr] );
+                Push( mod.Base[addr] );
             }
             break;
 
@@ -350,17 +414,14 @@ int Machine::Run()
                 U8  iMod = ReadU8( codePtr );
                 U16 addr = ReadU16( codePtr );
 
-                auto [err, mod] = GetDataModule( iMod );
+                auto [err, mod] = GetWritableDataModule( iMod, addr );
                 if ( err != ERR_NONE )
                     return err;
-
-                if ( addr >= mod->DataSize )
-                    return ERR_BAD_ADDRESS;
 
                 if ( WouldUnderflow() )
                     return ERR_STACK_UNDERFLOW;
 
-                mod->DataBase[addr] = Pop();
+                mod.Base[addr] = Pop();
             }
             break;
 
@@ -391,16 +452,13 @@ int Machine::Run()
 
                 U32 addrWord = Pop();
                 U8  iMod = CodeAddr::GetModule( addrWord );
-                U16 addr = CodeAddr::GetAddress( addrWord );
+                U32 addr = CodeAddr::GetAddress( addrWord );
 
-                auto [err, mod] = GetDataModule( iMod );
+                auto [err, mod] = GetReadableDataModule( iMod, addr );
                 if ( err != ERR_NONE )
                     return err;
 
-                if ( addr >= mod->DataSize )
-                    return ERR_BAD_ADDRESS;
-
-                Push( mod->DataBase[addr] );
+                Push( mod.Base[addr] );
             }
             break;
 
@@ -412,16 +470,13 @@ int Machine::Run()
                 U32 addrWord = Pop();
                 U32 value = Pop();
                 U8  iMod = CodeAddr::GetModule( addrWord );
-                U16 addr = CodeAddr::GetAddress( addrWord );
+                U32 addr = CodeAddr::GetAddress( addrWord );
 
-                auto [err, mod] = GetDataModule( iMod );
+                auto [err, mod] = GetWritableDataModule( iMod, addr );
                 if ( err != ERR_NONE )
                     return err;
 
-                if ( addr >= mod->DataSize )
-                    return ERR_BAD_ADDRESS;
-
-                mod->DataBase[addr] = value;
+                mod.Base[addr] = value;
             }
             break;
 
@@ -437,7 +492,7 @@ int Machine::Run()
         case OP_B:
             {
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
-                I32 addr = (codePtr - mMod->CodeBase) + offset;
+                I32 addr = static_cast<I32>(codePtr - mMod->CodeBase) + offset;
 
                 if ( !IsCodeInBounds( addr ) )
                     return ERR_BAD_ADDRESS;
@@ -452,7 +507,7 @@ int Machine::Run()
                     return ERR_STACK_UNDERFLOW;
 
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
-                I32 addr = (codePtr - mMod->CodeBase) + offset;
+                I32 addr = static_cast<I32>(codePtr - mMod->CodeBase) + offset;
 
                 if ( !IsCodeInBounds( addr ) )
                     return ERR_BAD_ADDRESS;
@@ -469,7 +524,7 @@ int Machine::Run()
                     return ERR_STACK_UNDERFLOW;
 
                 BranchInst::TOffset offset = BranchInst::ReadOffset( codePtr );
-                I32 addr = (codePtr - mMod->CodeBase) + offset;
+                I32 addr = static_cast<I32>(codePtr - mMod->CodeBase) + offset;
 
                 if ( !IsCodeInBounds( addr ) )
                     return ERR_BAD_ADDRESS;
@@ -483,10 +538,11 @@ int Machine::Run()
         case OP_RET:
             {
                 int err = PopFrame();
+                if ( err == ERR_SWITCH_TO_NATIVE )
+                    goto Done;
+
                 if ( err != ERR_NONE )
                     return err;
-                if ( mFramePtr >= mStackSize )
-                    goto Done;
 
                 if ( !IsCodeInBounds( mPC ) )
                     return ERR_BAD_ADDRESS;
@@ -560,8 +616,8 @@ int Machine::Run()
                     id = ReadU8( codePtr );
                 }
 
-                // If the native call yields, then we have to remember where we were.
-                mPC = codePtr - mMod->CodeBase;
+                if ( PushFrame( codePtr, callFlags ) == nullptr )
+                    return ERR_STACK_OVERFLOW;
 
                 NativeCode nativeCode;
 
@@ -571,6 +627,73 @@ int Machine::Run()
                 int ret = CallNative( nativeCode.Proc, callFlags, 0 );
                 if ( ret != ERR_NONE )
                     return ret;
+
+                int err = PopFrame();
+                if ( err != ERR_NONE )
+                    return err;
+
+                if ( !IsCodeInBounds( mPC ) )
+                    return ERR_BAD_ADDRESS;
+
+                codePtr = mMod->CodeBase + mPC;
+            }
+            break;
+
+        case OP_COPYBLOCK:
+            {
+                if ( WouldUnderflow( 2 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                CELL source = mSP[1];
+                CELL dest   = mSP[0];
+                U32  size   = ReadU24( codePtr );
+
+                mSP += 2;
+
+                auto [err, pDst] = GetSizedWritableDataPtr( dest, size );
+                if ( err != ERR_NONE )
+                    return err;
+
+                auto [err1, pSrc] = GetSizedReadableDataPtr( source, size );
+                if ( err1 != ERR_NONE )
+                    return err1;
+
+                std::copy_n( pSrc, size, pDst );
+            }
+            break;
+
+        case OP_COPYARRAY:
+            {
+                if ( WouldUnderflow( 4 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                CELL srcCount = mSP[3];
+                CELL srcAddr  = mSP[2];
+                CELL dstCount = mSP[1];
+                CELL dstAddr  = mSP[0];
+                U32  elemSize = ReadU24( codePtr );
+
+                mSP += 4;
+
+                if ( srcCount < 0 || dstCount < srcCount )
+                    return ERR_BOUND;
+
+                U64 size64 = static_cast<U64>(srcCount) * elemSize;
+
+                if ( size64 > MAX_MODULE_DATA_SIZE )
+                    return ERR_BOUND;
+
+                U32 size = static_cast<U32>(size64);
+
+                auto [err, pDst] = GetSizedWritableDataPtr( dstAddr, size );
+                if ( err != ERR_NONE )
+                    return err;
+
+                auto [err1, pSrc] = GetSizedReadableDataPtr( srcAddr, size );
+                if ( err1 != ERR_NONE )
+                    return err1;
+
+                std::copy_n( pSrc, size, pDst );
             }
             break;
 
@@ -579,26 +702,158 @@ int Machine::Run()
                 if ( WouldUnderflow( 2 ) )
                     return ERR_STACK_UNDERFLOW;
 
-                CELL base = mSP[1];
-                CELL index = mSP[0];
-                U32  stride = ReadU32( codePtr );
+                U32  base   = mSP[1];
+                CELL index  = mSP[0];
+                U32  stride = ReadU24( codePtr );
+                U32  bound  = ReadU24( codePtr );
 
-                mSP[1] = base + (index * stride);
+                if ( index < 0 || static_cast<U32>(index) >= bound )
+                    return ERR_BOUND;
+
+                auto newAddr = base + (static_cast<U64>(index) * stride);
+
+                if ( newAddr > CodeAddr::ToModuleMax( base ) )
+                    return ERR_BAD_ADDRESS;
+
+                mSP[1] = static_cast<CELL>(newAddr);
                 mSP++;
             }
             break;
 
-        case OP_INDEX_S:
+        case OP_INDEXOPEN:
             {
-                if ( WouldUnderflow( 2 ) )
+                if ( WouldUnderflow( 3 ) )
                     return ERR_STACK_UNDERFLOW;
 
-                CELL base = mSP[1];
-                CELL index = mSP[0];
-                U8   stride = ReadU8( codePtr );
+                CELL bound  = mSP[2];
+                U32  base   = mSP[1];
+                CELL index  = mSP[0];
+                U32  stride = ReadU24( codePtr );
 
-                mSP[1] = base + (index * stride);
+                if ( index < 0 || index >= bound || bound < 0 )
+                    return ERR_BOUND;
+
+                auto newAddr = base + (static_cast<U64>(index) * stride);
+
+                if ( newAddr > CodeAddr::ToModuleMax( base ) )
+                    return ERR_BAD_ADDRESS;
+
+                mSP[2] = static_cast<CELL>(newAddr);
+                mSP += 2;
+            }
+            break;
+
+        case OP_RANGEOPEN:
+            {
+                if ( WouldUnderflow( 4 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                CELL bound  = mSP[3];
+                U32  base   = mSP[2];
+                CELL index  = mSP[1];
+                CELL end    = mSP[0];
+                U32  stride = ReadU24( codePtr );
+
+                if ( end == -1 )
+                    end = bound;
+
+                if ( index < 0 || index >= bound || bound < 0
+                    || end <= index || end > bound )
+                    return ERR_BOUND;
+
+                auto newAddr = base + (static_cast<U64>(index) * stride);
+
+                if ( newAddr > CodeAddr::ToModuleMax( base ) )
+                    return ERR_BAD_ADDRESS;
+
+                mSP[3] = end - index;
+                mSP[2] = static_cast<CELL>(newAddr);
+                mSP += 2;
+            }
+            break;
+
+        case OP_RANGEOPENCLOSED:
+            {
+                if ( WouldUnderflow( 4 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                CELL bound  = mSP[3];
+                U32  base   = mSP[2];
+                CELL index  = mSP[1];
+                CELL end    = mSP[0];
+                U32  stride = ReadU24( codePtr );
+
+                if ( end == -1 )
+                    end = bound;
+
+                if ( index < 0 || index >= bound || bound < 0
+                    || end <= index || end > bound )
+                    return ERR_BOUND;
+
+                auto newAddr = base + (static_cast<U64>(index) * stride);
+
+                if ( newAddr > CodeAddr::ToModuleMax( base ) )
+                    return ERR_BAD_ADDRESS;
+
+                mSP[3] = static_cast<CELL>(newAddr);
+                mSP += 3;
+            }
+            break;
+
+        case OP_RANGE:
+            {
+                if ( WouldUnderflow( 3 ) )
+                    return ERR_STACK_UNDERFLOW;
+
+                U32  base   = mSP[2];
+                CELL index  = mSP[1];
+                CELL end    = mSP[0];
+                U32  stride = ReadU24( codePtr );
+                U32  bound  = ReadU24( codePtr );
+
+                if ( end == -1 )
+                    end = bound;
+
+                if ( index < 0 || static_cast<U32>(index) >= bound
+                    || end <= index || static_cast<U32>(end) > bound )
+                    return ERR_BOUND;
+
+                auto newAddr = base + (static_cast<U64>(index) * stride);
+
+                if ( newAddr > CodeAddr::ToModuleMax( base ) )
+                    return ERR_BAD_ADDRESS;
+
+                mSP[2] = end - index;
+                mSP[1] = static_cast<CELL>(newAddr);
                 mSP++;
+            }
+            break;
+
+        case OP_OFFSET:
+            {
+                if ( WouldUnderflow() )
+                    return ERR_STACK_UNDERFLOW;
+
+                U32  base   = mSP[0];
+                U32  offset = ReadU24( codePtr );
+
+                auto newAddr = base + static_cast<U64>(offset);
+
+                if ( newAddr > CodeAddr::ToModuleMax( base ) )
+                    return ERR_BAD_ADDRESS;
+
+                mSP[0] = static_cast<CELL>(newAddr);
+            }
+            break;
+
+        case OP_YIELD:
+            {
+                if ( mNativeNestingLevel > 0 )
+                    return ERR_BAD_STATE;
+
+                mPC = static_cast<U32>(codePtr - mMod->CodeBase);
+
+                return ERR_YIELDED;
             }
             break;
 
@@ -613,32 +868,34 @@ Done:
 
 StackFrame* Machine::PushFrame( const U8* curCodePtr, U8 callFlags )
 {
-    if ( (mSP - mStack) < FRAME_WORDS )
+    if ( WouldOverflow( FRAME_WORDS ) )
         return nullptr;
 
     if ( WouldUnderflow( CallFlags::GetCount( callFlags ) ) )
         return nullptr;
 
-    mSP -= FRAME_WORDS;
-    auto frame = (StackFrame*) mSP;
+    DecrementSP( FRAME_WORDS );
 
-    U32 retAddr = curCodePtr - mMod->CodeBase;
+    auto frame = reinterpret_cast<StackFrame*>( mSP );
+    U32 retAddr = static_cast<U32>( curCodePtr - mMod->CodeBase );
 
     frame->RetAddrWord = CodeAddr::Build( retAddr, mModIndex );
     frame->CallFlags = callFlags;
     frame->FrameAddr = mFramePtr;
 
-    mFramePtr = (CELL*) frame - mStack;
+    mFramePtr = static_cast<U16>( mSP - mStack );
 
     return frame;
 }
 
 int Machine::PopFrame()
 {
+    int err = ERR_NONE;
+
     if ( (mFramePtr + FRAME_WORDS) > mStackSize )
         return ERR_STACK_UNDERFLOW;
 
-    auto  curFrame = (StackFrame*) &mStack[mFramePtr];
+    auto  curFrame = reinterpret_cast<StackFrame*>( &mStack[mFramePtr] );
     bool  autoPop = CallFlags::GetAutoPop( curFrame->CallFlags );
     U8    argCount = CallFlags::GetCount( curFrame->CallFlags );
 
@@ -650,8 +907,8 @@ int Machine::PopFrame()
 
     U8 newModIndex = CodeAddr::GetModule( curFrame->RetAddrWord );
 
-    int err = SwitchModule( newModIndex );
-    if ( err != ERR_NONE )
+    err = SwitchModule( newModIndex );
+    if ( err != ERR_NONE && err != ERR_SWITCH_TO_NATIVE )
         return err;
 
     CELL* oldSP = mSP;
@@ -665,7 +922,7 @@ int Machine::PopFrame()
     if ( autoPop )
         mSP++;
 
-    return ERR_NONE;
+    return err;
 }
 
 int Machine::PushCell( CELL value )
@@ -677,10 +934,22 @@ int Machine::PushCell( CELL value )
     return ERR_NONE;
 }
 
+int Machine::PopCell( CELL& value )
+{
+    if ( WouldUnderflow() )
+        return ERR_STACK_UNDERFLOW;
+
+    value = Pop();
+    return ERR_NONE;
+}
+
 int Machine::Yield( NativeFunc proc, UserContext context )
 {
     if ( proc == nullptr )
         return ERR_BAD_ARG;
+
+    if ( mNativeNestingLevel != 1 )
+        return ERR_NATIVE_ERROR;
 
     mNativeContinuation = proc;
     mNativeContinuationContext = context;
@@ -700,19 +969,19 @@ int Machine::CallPrimitive( U8 func )
     {
     case PRIM_ADD:
         {
-            result = a + b;
+            result = VmAdd( a, b );
         }
         break;
 
     case PRIM_SUB:
         {
-            result = a - b;
+            result = VmSub( a, b );
         }
         break;
 
     case PRIM_MUL:
         {
-            result = a * b;
+            result = VmMul( a, b );
         }
         break;
 
@@ -720,7 +989,8 @@ int Machine::CallPrimitive( U8 func )
         {
             if ( b == 0 )
                 return ERR_DIVIDE;
-            result = a / b;
+
+            result = VmDiv( a, b );
         }
         break;
 
@@ -728,7 +998,8 @@ int Machine::CallPrimitive( U8 func )
         {
             if ( b == 0 )
                 return ERR_DIVIDE;
-            result = a % b;
+
+            result = VmMod( a, b );
         }
         break;
 
@@ -780,6 +1051,9 @@ int Machine::CallPrimitive( U8 func )
 
 int Machine::SwitchModule( U8 newModIndex )
 {
+    if ( newModIndex == MODINDEX_NATIVE )
+        return ERR_SWITCH_TO_NATIVE;
+
     if ( newModIndex != mModIndex )
     {
         mMod = GetModule( newModIndex );
@@ -796,9 +1070,16 @@ int Machine::SwitchModule( U8 newModIndex )
     return ERR_NONE;
 }
 
+void Machine::DecrementSP( U16 count )
+{
+    assert( count <= (mSP - mStack) );
+
+    mSP -= count;
+}
+
 void Machine::Push( CELL word )
 {
-    mSP--;
+    DecrementSP( 1 );
     *mSP = word;
 }
 
@@ -832,29 +1113,80 @@ bool Machine::IsCodeInBounds( U32 address ) const
     return address < (mMod->CodeSize - SENTINEL_SIZE);
 }
 
-std::pair<int, const Module*> Machine::GetDataModule( U8 index )
+std::pair<int, const CELL*> Machine::GetSizedReadableDataPtr( CELL addrWord, CELL size, bool writable )
+{
+    U8  iMod = CodeAddr::GetModule( addrWord );
+    U32 offs = CodeAddr::GetAddress( addrWord );
+
+    auto [err, mod] = GetReadableDataModule( iMod, offs, writable );
+    if ( err != ERR_NONE )
+        return std::pair( err, nullptr );
+
+    if ( size < 0 || size > (mod.Size - static_cast<U16>(offs)) )
+        return std::pair( ERR_BAD_ADDRESS, nullptr );
+
+    return std::pair( ERR_NONE, mod.Base + offs );
+}
+
+std::pair<int, CELL*> Machine::GetSizedWritableDataPtr( CELL addrWord, CELL size )
+{
+    auto [err, ptr] = GetSizedReadableDataPtr( addrWord, size, true );
+    if ( err != ERR_NONE )
+        return std::pair( err, nullptr );
+
+    return std::pair( ERR_NONE, const_cast<CELL*>(ptr) );
+}
+
+std::pair<int, Machine::ReadableDataModule> Machine::GetReadableDataModule( U8 index, U32 addr, bool writable )
 {
     const Module* mod;
 
-    if ( index == mModIndex )
-    {
-        mod = mMod;
-    }
-    else if ( index == MODINDEX_STACK )
+    if ( index == MODINDEX_STACK )
     {
         mod = &mStackMod;
     }
     else
     {
-        mod = GetModule( index );
-        if ( mod == nullptr )
-            return std::pair( ERR_BYTECODE_NOT_FOUND, nullptr );
+        U8 baseIndex = index & ~CONST_SECTION_MOD_INDEX_MASK;
+        bool isConstSection = (baseIndex != index);
+
+        if ( baseIndex == mModIndex )
+        {
+            mod = mMod;
+        }
+        else
+        {
+            mod = GetModule( baseIndex );
+            if ( mod == nullptr )
+                return std::pair( ERR_BYTECODE_NOT_FOUND, ReadableDataModule() );
+        }
+
+        if ( isConstSection )
+        {
+            if ( writable || addr >= mod->ConstSize )
+                return std::pair( ERR_BAD_ADDRESS, ReadableDataModule() );
+
+            assert( mod->ConstBase != nullptr );
+
+            return std::pair( ERR_NONE, ReadableDataModule{ mod->ConstBase, mod->ConstSize } );
+        }
     }
 
-    if ( mod->DataBase == nullptr )
-        return std::pair( ERR_BAD_ADDRESS, nullptr );
+    if ( addr >= mod->DataSize )
+        return std::pair( ERR_BAD_ADDRESS, ReadableDataModule() );
 
-    return std::pair( ERR_NONE, mod );
+    assert( mod->DataBase != nullptr );
+
+    return std::pair( ERR_NONE, ReadableDataModule{ mod->DataBase, mod->DataSize } );
+}
+
+std::pair<int, Machine::WritableDataModule> Machine::GetWritableDataModule( U8 index, U32 addr )
+{
+    auto [err, mod] = GetReadableDataModule( index, addr, true );
+    if ( err != ERR_NONE )
+        return std::pair( err, WritableDataModule() );
+
+    return std::pair( ERR_NONE, WritableDataModule{ const_cast<CELL*>(mod.Base), mod.Size } );
 }
 
 const Module* Machine::GetModule( U8 index )
@@ -870,4 +1202,6 @@ bool Machine::FindNativeCode( U32 id, NativeCode* nativeCode )
 const Module* Machine::FindModule( U8 index )
 {
     return index == mModIndex ? mMod : nullptr;
+}
+
 }

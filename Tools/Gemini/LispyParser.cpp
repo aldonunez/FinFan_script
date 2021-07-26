@@ -4,9 +4,12 @@
 // Licensed under the Apache License, Version 2.0.
 // See the LICENSE.txt file for details.
 
-#include "stdafx.h"
+#include "pch.h"
 #include "LispyParser.h"
+#include <assert.h>
+#include <limits.h>
 #include <stdarg.h>
+#include <stdexcept>
 
 
 static const uint8_t sIdentifierInitialCharMap[] =
@@ -32,7 +35,10 @@ static const char* gTokenNames[] =
 };
 
 
-LispyParser::LispyParser( const char* codeText, int codeTextLen, const char* fileName, ICompilerLog* log ) :
+namespace Gemini
+{
+
+LispyParser::LispyParser( const char* codeText, size_t codeTextLen, const char* fileName, ICompilerLog* log ) :
     mFileName( fileName != nullptr ? fileName : "" ),
     mUnitFileName(),
     mCodeTextPtr( codeText ),
@@ -46,6 +52,15 @@ LispyParser::LispyParser( const char* codeText, int codeTextLen, const char* fil
     mTokCol( 0 ),
     mRep( log )
 {
+    if ( codeText == nullptr )
+        throw std::invalid_argument( "codeText" );
+
+    if ( fileName == nullptr )
+        throw std::invalid_argument( "fileName" );
+
+    if ( log == nullptr )
+        throw std::invalid_argument( "log" );
+
     if ( mCodeTextPtr < mCodeTextEnd )
     {
         mCurChar = *mCodeTextPtr;
@@ -82,6 +97,7 @@ LispyParser::LispyParser( const char* codeText, int codeTextLen, const char* fil
         { "do", &LispyParser::ParseDo },
         { "break", &LispyParser::ParseBreak },
         { "next", &LispyParser::ParseNext },
+        { "yield", &LispyParser::ParseYield },
         { "case", &LispyParser::ParseCase },
         { "progn", &LispyParser::ParseProgn },
         { "defun", &LispyParser::ParseGlobalError },
@@ -90,15 +106,20 @@ LispyParser::LispyParser( const char* codeText, int codeTextLen, const char* fil
 
 int LispyParser::GetColumn()
 {
-    return mCodeTextPtr - mLineStart + 1;
+    auto diff = mCodeTextPtr - mLineStart;
+
+    if ( diff >= INT_MAX )
+        diff = INT_MAX - 1;
+
+    return static_cast<int>(diff) + 1;
 }
 
-int LispyParser::PeekChar() const
+char LispyParser::PeekChar() const
 {
     return mCurChar;
 }
 
-int LispyParser::PeekChar( int index ) const
+char LispyParser::PeekChar( int index ) const
 {
     if ( (mCodeTextEnd - mCodeTextPtr) < (index + 1) )
         return 0;
@@ -245,7 +266,7 @@ void LispyParser::SkipWhitespace()
 
 bool LispyParser::IsIdentifierInitial( int c )
 {
-    return (c < sizeof sIdentifierInitialCharMap)
+    return (static_cast<unsigned char>(c) < sizeof sIdentifierInitialCharMap)
         && sIdentifierInitialCharMap[c];
 }
 
@@ -635,7 +656,7 @@ Unique<DataDecl> LispyParser::ParseLetBinding( Unique<DataDecl>&& varDecl, bool 
     if ( !isParam )
         ScanRParen();
 
-    return varDecl;
+    return std::move( varDecl );
 }
 
 Unique<TypeRef> LispyParser::ParseTypeRef( bool embedded )
@@ -689,7 +710,7 @@ Unique<TypeRef> LispyParser::ParsePtrFuncTypeRef()
 
     do
     {
-        procTypeRef->Params.push_back( ParseTypeRef( false ) );
+        procTypeRef->Params.push_back( ParseAnonymousParameter() );
 
     } while ( mCurToken != TokenCode::RParen );
 
@@ -700,6 +721,17 @@ Unique<TypeRef> LispyParser::ParsePtrFuncTypeRef()
     pointerTypeRef->Target = std::move( procTypeRef );
 
     return pointerTypeRef;
+}
+
+ParamSpecRef LispyParser::ParseAnonymousParameter()
+{
+    ParamSpecRef param;
+
+    // TODO: mode
+
+    param.TypeRef = ParseTypeRef( false );
+
+    return param;
 }
 
 Unique<TypeRef> LispyParser::ParseArrayTypeRef()
@@ -758,6 +790,15 @@ Unique<DataDecl> LispyParser::ParseDefconstant()
     ScanToken();
 
     return ParseLetBinding( Make<ConstDecl>() );
+}
+
+Unique<DataDecl> LispyParser::ParseNameDecl()
+{
+    auto varDecl = Make<VarDecl>();
+
+    varDecl->Name = ScanSymbol();
+
+    return varDecl;
 }
 
 Unique<Syntax> LispyParser::ParseAref()
@@ -870,20 +911,22 @@ Unique<Syntax> LispyParser::ParseLoopFor()
 
     ScanToken();
 
-    forStmt->IndexName = ScanSymbol();
+    forStmt->Index = ParseNameDecl();
 
     ScanSymbol( "from" );
 
     forStmt->First = ParseExpression();
 
     AssertToken( TokenCode::Symbol );
-    if ( mCurString != "above"
-        && mCurString != "below"
-        && mCurString != "downto"
-        && mCurString != "to" )
+
+    if ( mCurString == "above" )        forStmt->Comparison = ForComparison::Above;
+    else if ( mCurString == "below" )   forStmt->Comparison = ForComparison::Below;
+    else if ( mCurString == "downto" )  forStmt->Comparison = ForComparison::Downto;
+    else if ( mCurString == "to" )      forStmt->Comparison = ForComparison::To;
+    else
         ThrowSyntaxError( "Expected symbol: above, below, downto, to" );
 
-    forStmt->Comparison = ScanSymbol();
+    ScanToken();
 
     forStmt->Last = ParseExpression();
 
@@ -961,6 +1004,16 @@ Unique<Syntax> LispyParser::ParseNext()
     ScanRParen();
 
     return nextStmt;
+}
+
+Unique<Syntax> LispyParser::ParseYield()
+{
+    auto yieldStmt = Make<YieldStatement>();
+
+    ScanToken();
+    ScanRParen();
+
+    return yieldStmt;
 }
 
 Unique<Syntax> LispyParser::ParseCase()
@@ -1061,10 +1114,11 @@ void LispyParser::ThrowSyntaxError( const char* format, ... )
 {
     va_list args;
     va_start( args, format );
-    mRep.ThrowError( CERR_SYNTAX, mUnitFileName, mTokLine, mTokCol, format, args );
-    va_end( args );
+    mRep.ThrowError( CompilerErr::SYNTAX, mUnitFileName, mTokLine, mTokCol, format, args );
+    // No need to run va_end( args ), since an exception was thrown
 }
 
+}
 
 #if 0
 void GenerateIdCharTable()
@@ -1081,7 +1135,7 @@ void GenerateIdCharTable()
     constexpr unsigned int TableSize = 128;
     bool table[TableSize] = { false };
 
-    for ( int i = 0; i < _countof( sExtAlphaChars ); i++ )
+    for ( int i = 0; i < std::size( sExtAlphaChars ); i++ )
     {
         table[sExtAlphaChars[i]] = true;
     }

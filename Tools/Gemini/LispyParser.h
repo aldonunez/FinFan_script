@@ -6,9 +6,15 @@
 
 #pragma once
 
-#include "Compiler.h"
+#include "LangCommon.h"
+#include "Syntax.h"
+#include <map>
 #include <string>
+#include <vector>
 
+
+namespace Gemini
+{
 
 class LispyParser
 {
@@ -32,7 +38,7 @@ class LispyParser
     const char*     mCodeTextEnd;
     const char*     mLineStart;
     int             mLine;
-    int             mCurChar;
+    char            mCurChar;
 
     TokenCode       mCurToken;
     std::string     mCurString;
@@ -44,7 +50,7 @@ class LispyParser
     ParserMap       mParserMap;
 
 public:
-    LispyParser( const char* codeText, int codeTextLen, const char* fileName, ICompilerLog* log );
+    LispyParser( const char* codeText, size_t codeTextLen, const char* fileName, ICompilerLog* log );
 
     Unique<Unit> Parse();
 
@@ -52,8 +58,8 @@ private:
     // Scanning
 
     int GetColumn();
-    int PeekChar() const;
-    int PeekChar( int index ) const;
+    char PeekChar() const;
+    char PeekChar( int index ) const;
     void NextChar();
     void SkipWhitespace();
     TokenCode ScanToken();
@@ -105,15 +111,18 @@ private:
     Unique<Syntax> ParseDo();
     Unique<Syntax> ParseBreak();
     Unique<Syntax> ParseNext();
+    Unique<Syntax> ParseYield();
     Unique<Syntax> ParseCase();
     Unique<CaseWhen> ParseCaseWhen();
     Unique<Syntax> ParseProgn();
 
     std::vector<Unique<DataDecl>> ParseParamList();
+    ParamSpecRef ParseAnonymousParameter();
     Unique<DataDecl> ParseParameter();
     Unique<ProcDecl> ParseProc( bool hasName );
     Unique<DataDecl> ParseDefvar();
     Unique<DataDecl> ParseDefconstant();
+    Unique<DataDecl> ParseNameDecl();
     Unique<Syntax> ParseGlobalError();
 
     void ParseImplicitProgn( StatementList& container );
@@ -123,3 +132,5 @@ private:
 
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );
 };
+
+}

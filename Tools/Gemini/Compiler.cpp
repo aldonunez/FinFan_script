@@ -4,63 +4,111 @@
 // Licensed under the Apache License, Version 2.0.
 // See the LICENSE.txt file for details.
 
-#include "stdafx.h"
+#include "pch.h"
 #include "Compiler.h"
-#include "OpCodes.h"
-#include <ctype.h>
-#include <cstdarg>
 #include "BinderVisitor.h"
+#include "Disassembler.h"
 #include "FolderVisitor.h"
+#include "OpCodes.h"
+#include "VmCommon.h"
+#include <algorithm>
+#include <stdarg.h>
+#include <stdexcept>
+#include <string.h>
+
+#define ENABLE_DISASSEMBLY 0
 
 
-Compiler::Compiler( U8* codeBin, int codeBinLen, ICompilerEnv* env, ICompilerLog* log, int modIndex ) :
-    mCodeBin( codeBin ),
-    mCodeBinPtr( codeBin ),
-    mCodeBinEnd( codeBin + codeBinLen ),
+namespace Gemini
+{
+
+#if ENABLE_DISASSEMBLY
+    void Disassemble( const uint8_t* program, int size );
+
+    #define DISASSEMBLE( code, size ) Disassemble( code, size )
+#else
+    #define DISASSEMBLE( code, size )
+#endif
+
+
+Compiler::Compiler( ICompilerEnv* env, ICompilerLog* log, CompilerAttrs& globalAttrs, ModSize modIndex ) :
     mEnv( env ),
     mRep( log ),
-    mModIndex( modIndex )
+    mModIndex( modIndex ),
+    mGlobalAttrs( globalAttrs )
 {
+    if ( env == nullptr )
+        throw std::invalid_argument( "env" );
+
+    if ( log == nullptr )
+        throw std::invalid_argument( "log" );
+
+    if ( modIndex >= ModSizeMax )
+        throw std::invalid_argument( "modIndex" );
+
     mLoadedAddrDecl.reset( new LoadedAddressDeclaration() );
-    mLoadedAddrDecl->Kind = DeclKind::LoadedAddress;
+    mLoadedAddrDecl->Type = mErrorType;
+
+    mLoadedAddrDeclConst.reset( new LoadedAddressDeclaration() );
+    mLoadedAddrDeclConst->Type = mErrorType;
+    mLoadedAddrDeclConst->IsReadOnly = true;
 }
 
 void Compiler::AddUnit( Unique<Unit>&& unit )
 {
+    if ( !unit )
+        throw std::invalid_argument( "unit" );
+
     mUnits.push_back( std::move( unit ) );
 }
 
 void Compiler::AddModule( std::shared_ptr<ModuleDeclaration> moduleDecl )
 {
-    mModuleTable.insert( SymTable::value_type( moduleDecl->Name, moduleDecl ) );
+    if ( !moduleDecl )
+        throw std::invalid_argument( "moduleDecl" );
+
+    auto modTabResult = mModuleTable.insert( SymTable::value_type( moduleDecl->Name, moduleDecl ) );
+
+    if ( !modTabResult.second )
+        throw std::invalid_argument( "Module name already used" );
+
+    auto modIdResult = mModulesById.insert( ModIdMap::value_type( moduleDecl->Index, moduleDecl ) );
+
+    if ( !modIdResult.second )
+        throw std::invalid_argument( "Module index already used" );
 }
 
 CompilerErr Compiler::Compile()
 {
+    if ( mStatus != CompilerErr::NONE )
+        return mStatus;
+
     try
     {
         BindAttributes();
         FoldConstants();
         GenerateCode();
 
-        GenerateLambdas();
+        CopyDeferredGlobals();
+
         GenerateSentinel();
+        FinalizeConstData();
+
+        mStatus = CompilerErr::OK;
     }
     catch ( CompilerException& ex )
     {
-        return ex.GetError();
+        mStatus = ex.GetError();
     }
 
-    mCompiled = true;
-
-    return CERR_OK;
+    return mStatus;
 }
 
 void Compiler::GetStats( CompilerStats& stats )
 {
-    if ( mCompiled && !mCalculatedStats )
+    if ( mStatus == CompilerErr::OK && !mCalculatedStats )
     {
-        mStats.CodeBytesWritten = mCodeBinPtr - mCodeBin;
+        mStats.CodeBytesWritten = static_cast<CodeSize>( mCodeBin.size() );
 
         CalculateStackDepth();
 
@@ -70,9 +118,19 @@ void Compiler::GetStats( CompilerStats& stats )
     stats = mStats;
 }
 
-I32* Compiler::GetData()
+uint8_t* Compiler::GetCode()
 {
-    return &mGlobals.front();
+    return mCodeBin.data();
+}
+
+size_t Compiler::GetCodeSize()
+{
+    return mCodeBin.size();
+}
+
+int32_t* Compiler::GetData()
+{
+    return mGlobals.data();
 }
 
 size_t Compiler::GetDataSize()
@@ -80,37 +138,58 @@ size_t Compiler::GetDataSize()
     return mGlobals.size();
 }
 
+int32_t* Compiler::GetConst()
+{
+    return mConsts.data();
+}
+
+size_t Compiler::GetConstSize()
+{
+    return mConsts.size();
+}
+
 std::shared_ptr<ModuleDeclaration> Compiler::GetMetadata( const char* modName )
 {
+    if ( modName == nullptr )
+        throw std::invalid_argument( "modName" );
+
     std::shared_ptr<ModuleDeclaration> modDecl( new ModuleDeclaration() );
 
     modDecl->Name = modName;
-    modDecl->Kind = DeclKind::Module;
+    modDecl->Index = mModIndex;
     modDecl->Table = std::move( mPublicTable );
-    modDecl->Type = std::shared_ptr<ModuleType>( new ModuleType() );
+    modDecl->Type = mModuleType;
 
     return modDecl;
 }
 
 void Compiler::BindAttributes()
 {
-    BinderVisitor binder( mModIndex, mGlobalTable, mModuleTable, mPublicTable, mEnv, mRep.GetLog() );
+    BinderVisitor binder( mModIndex, mGlobalTable, mModuleTable, mPublicTable, mGlobalAttrs, mRep.GetLog() );
 
     for ( auto& unit : mUnits )
         binder.Declare( unit.get() );
 
     for ( auto& unit : mUnits )
-        binder.Bind( unit.get() );
+        binder.BindDeclarations( unit.get() );
+
+    for ( auto& unit : mUnits )
+        binder.BindFunctionBodies( unit.get() );
 
     mGlobals.resize( binder.GetDataSize() );
+    mConsts.resize( binder.GetConstSize() );
+
+    mModuleAttrs = binder.GetModuleAttrs();
 }
 
 void Compiler::FoldConstants()
 {
+#if !defined( GEMINIVM_DISABLE_FOLDING_PASS )
     FolderVisitor folder( mRep.GetLog() );
 
     for ( auto& unit : mUnits )
         folder.Fold( unit.get() );
+#endif
 }
 
 void Compiler::GenerateCode()
@@ -152,23 +231,17 @@ void Compiler::Generate( Syntax* node, const GenConfig& config, GenStatus& statu
     {
         if ( config.trueChain != nullptr )
         {
-            PushPatch( config.trueChain );
-
-            mCodeBinPtr[0] = (config.invert && status.kind != ExprKind::Comparison) ? OP_BFALSE : OP_BTRUE;
-            mCodeBinPtr += BranchInst::Size;
+            OpCode opcode = (config.invert && status.kind != ExprKind::Comparison) ? OP_BFALSE : OP_BTRUE;
+            EmitBranch( opcode, config.trueChain );
             DecreaseExprDepth();
 
-            PushPatch( config.falseChain );
-
-            mCodeBinPtr[0] = OP_B;
-            mCodeBinPtr += BranchInst::Size;
+            EmitBranch( OP_B, config.falseChain );
         }
         else if ( config.invert && status.kind != ExprKind::Comparison )
         {
             if ( !config.discard )
             {
-                mCodeBinPtr[0] = OP_NOT;
-                mCodeBinPtr += 1;
+                Emit( OP_NOT );
             }
         }
     }
@@ -197,11 +270,12 @@ void Compiler::GenerateDiscard( Syntax* elem, const GenConfig& config )
         assert( status.discarded );
         mRep.LogWarning( elem->FileName, elem->Line, elem->Column, "Deprecated: POP was emitted." );
 
-        *mCodeBinPtr = OP_POP;
-        mCodeBinPtr++;
+        Emit( OP_POP );
 
         DecreaseExprDepth();
     }
+
+    assert( mCurExprDepth == 0 );
 }
 
 void Compiler::VisitNumberExpr( NumberExpr* numberExpr )
@@ -224,15 +298,11 @@ void Compiler::EmitLoadConstant( int32_t value )
 {
     if ( (value >= INT8_MIN) && (value <= INT8_MAX) )
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = (U8) value;
-        mCodeBinPtr += 2;
+        EmitU8( OP_LDC_S, static_cast<uint8_t>(value) );
     }
     else
     {
-        *mCodeBinPtr = OP_LDC;
-        mCodeBinPtr++;
-        WriteI32( mCodeBinPtr, value );
+        EmitU32( OP_LDC, value );
     }
 
     IncreaseExprDepth();
@@ -261,7 +331,14 @@ void Compiler::GenerateValue( Syntax* node, Declaration* decl, const GenConfig& 
         return;
     }
 
-    EmitLoadScalar( node, decl, 0 );
+    if ( IsScalarType( node->Type->GetKind() ) )
+    {
+        EmitLoadScalar( node, decl, 0 );
+    }
+    else
+    {
+        EmitLoadAddress( node, decl, 0 );
+    }
 }
 
 void Compiler::EmitLoadScalar( Syntax* node, Declaration* decl, int32_t offset )
@@ -269,62 +346,122 @@ void Compiler::EmitLoadScalar( Syntax* node, Declaration* decl, int32_t offset )
     switch ( decl->Kind )
     {
     case DeclKind::Global:
-        mCodeBinPtr[0] = OP_LDMOD;
-        mCodeBinPtr[1] = ((GlobalStorage*) decl)->ModIndex;
-        mCodeBinPtr += 2;
-        WriteU16( mCodeBinPtr, ((GlobalStorage*) decl)->Offset + offset );
+        assert( offset >= 0 && offset < GlobalSizeMax );
+        assert( offset < (GlobalSizeMax - ((GlobalStorage*) decl)->Offset) );
+
+        EmitModAccess(
+            OP_LDMOD,
+            ((GlobalStorage*) decl)->ModIndex,
+            static_cast<uint16_t>(((GlobalStorage*) decl)->Offset + offset) );
         IncreaseExprDepth();
         break;
 
     case DeclKind::Local:
-        mCodeBinPtr[0] = OP_LDLOC;
-        mCodeBinPtr[1] = ((LocalStorage*) decl)->Offset - offset;
-        mCodeBinPtr += 2;
+        assert( offset >= 0 && offset < LocalSizeMax );
+        assert( offset <= ((LocalStorage*) decl)->Offset );
+
+        EmitU8( OP_LDLOC, static_cast<uint8_t>(((LocalStorage*) decl)->Offset - offset) );
         IncreaseExprDepth();
         break;
 
     case DeclKind::Param:
-        mCodeBinPtr[0] = OP_LDARG;
-        mCodeBinPtr[1] = ((ParamStorage*) decl)->Offset + offset;
-        mCodeBinPtr += 2;
-        IncreaseExprDepth();
+        {
+            auto param = (ParamStorage*) decl;
+
+            if ( param->Mode == ParamMode::Value
+                || param->Mode == ParamMode::ValueIn )
+            {
+                assert( offset >= 0 && offset < ParamSizeMax );
+                assert( offset < (ParamSizeMax - param->Offset) );
+
+                EmitU8( OP_LDARG, static_cast<uint8_t>(param->Offset + offset) );
+                IncreaseExprDepth();
+            }
+            else if ( param->Mode == ParamMode::RefInOut
+                || param->Mode == ParamMode::RefIn )
+            {
+                EmitU8( OP_LDARG, param->Offset );
+                IncreaseExprDepth();
+
+                if ( offset > 0 )
+                    EmitSpilledAddrOffset( offset );
+
+                Emit( OP_LOADI );
+            }
+            else
+            {
+                THROW_INTERNAL_ERROR( "EmitLoadScalar: Bad parameter mode" );
+            }
+        }
         break;
 
     case DeclKind::Func:
-    case DeclKind::Forward:
-        mRep.ThrowError( CERR_SEMANTICS, node, "functions don't have values" );
+        mRep.ThrowSemanticsError( node, "functions don't have values" );
         break;
 
     case DeclKind::Const:
+        {
+            assert( offset >= 0 && offset < GlobalSizeMax );
+
+            auto constant = (Constant*) decl;
+            ValueVariant value;
+
+            if ( constant->Value.Is( ValueKind::Aggregate ) )
+            {
+                assert( (GlobalSize) offset < (constant->Value.GetAggregate().Module->GetConsts().size() - constant->Value.GetAggregate().Offset) );
+
+                FolderVisitor folder( mRep.GetLog() );
+
+                GlobalSize bufOffset = static_cast<GlobalSize>(constant->Value.GetAggregate().Offset + offset);
+
+                value = folder.ReadConstValue( *node->Type, constant->Value.GetAggregate().Module, bufOffset );
+            }
+            else
+            {
+                assert( offset == 0 );
+
+                value = constant->Value;
+            }
+
+            if ( value.Is( ValueKind::Integer ) )
+            {
+                EmitLoadConstant( value.GetInteger() );
+            }
+            else if ( value.Is( ValueKind::Function ) )
+            {
+                EmitLoadFuncAddress( value.GetFunction().get() );
+            }
+            else
+            {
+                THROW_INTERNAL_ERROR( "" );
+            }
+        }
+        break;
+
+    case DeclKind::Enum:
         assert( offset == 0 );
-        EmitLoadConstant( ((Constant*) decl)->Value );
+        EmitLoadConstant( ((EnumMember*) decl)->Value );
         break;
 
     case DeclKind::LoadedAddress:
+        assert( offset >= 0 && offset < DataSizeMax );
+
         if ( offset > 0 )
             EmitSpilledAddrOffset( offset );
 
-        mCodeBinPtr[0] = OP_LOADI;
-        mCodeBinPtr++;
+        Emit( OP_LOADI );
         DecreaseExprDepth();
         IncreaseExprDepth();
         break;
 
     default:
-        assert( false );
-        mRep.ThrowInternalError();
+        THROW_INTERNAL_ERROR( "EmitLoadScalar: DeclKind" );
     }
 }
 
 void Compiler::EmitSpilledAddrOffset( int32_t offset )
 {
-    EmitLoadConstant( offset );
-
-    mCodeBinPtr[0] = OP_PRIM;
-    mCodeBinPtr[1] = PRIM_ADD;
-    mCodeBinPtr += 2;
-
-    DecreaseExprDepth();
+    EmitU24( OP_OFFSET, offset );
 }
 
 void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig& config, GenStatus& status )
@@ -333,7 +470,6 @@ void Compiler::GenerateEvalStar( CallOrSymbolExpr* callOrSymbol, const GenConfig
     auto decl = symbol->GetDecl();
 
     if ( decl->Kind == DeclKind::Func
-        || decl->Kind == DeclKind::Forward
         || decl->Kind == DeclKind::NativeFunc )
     {
         std::vector<Unique<Syntax>> args;
@@ -353,8 +489,8 @@ void Compiler::VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol )
 
 void Compiler::GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
 {
-    auto& op = binary->Op;
-    int primitive;
+    auto&   op = binary->Op;
+    uint8_t primitive;
 
     if ( op == "+" )
         primitive = PRIM_ADD;
@@ -367,10 +503,7 @@ void Compiler::GenerateArithmetic( BinaryExpr* binary, const GenConfig& config, 
     else if ( op == "%" )
         primitive = PRIM_MOD;
     else
-    {
-        assert( false );
-        mRep.ThrowInternalError();
-    }
+        THROW_INTERNAL_ERROR( "" );
 
     GenerateBinaryPrimitive( binary, primitive, config, status );
 }
@@ -405,15 +538,15 @@ void Compiler::GenerateReturn( ReturnStatement* retStmt, const GenConfig& config
     }
     else
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = 0;
-        mCodeBinPtr += 2;
+        // Currently not allowed in the language
+        EmitU8( OP_LDC_S, 0 );
         IncreaseExprDepth();
     }
 
-    mCodeBinPtr[0] = OP_RET;
-    mCodeBinPtr += 1;
-    DecreaseExprDepth();
+    Emit( OP_RET );
+
+    if ( config.discard )
+        DecreaseExprDepth();
 
     status.discarded = true;
     status.tailRet = true;
@@ -424,7 +557,6 @@ void Compiler::VisitReturnStatement( ReturnStatement* retStmt )
     GenerateReturn( retStmt, Config(), Status() );
 }
 
-// TODO: move
 void Compiler::VisitCountofExpr( CountofExpr* countofExpr )
 {
     if ( Config().discard )
@@ -433,7 +565,12 @@ void Compiler::VisitCountofExpr( CountofExpr* countofExpr )
         return;
     }
 
-    auto& arrayType = (ArrayType&) *countofExpr->Expr->Type;
+    EmitCountofArray( countofExpr->Expr.get() );
+}
+
+void Compiler::EmitCountofArray( Syntax* arrayNode )
+{
+    ArrayType& arrayType = (ArrayType&) *arrayNode->Type;
 
     if ( arrayType.Count != 0 )
     {
@@ -441,8 +578,24 @@ void Compiler::VisitCountofExpr( CountofExpr* countofExpr )
     }
     else
     {
-        assert( false );
-        mRep.ThrowInternalError();
+        auto addr = CalcAddress( arrayNode );
+
+        if ( addr.decl->Kind == DeclKind::Param )
+        {
+            auto param = (ParamStorage*) addr.decl;
+
+            EmitU8( OP_LDARG, param->Offset + 1 );
+            IncreaseExprDepth();
+        }
+        else if ( addr.decl->Kind == DeclKind::LoadedAddress )
+        {
+            Emit( OP_POP );
+            DecreaseExprDepth();
+        }
+        else
+        {
+            THROW_INTERNAL_ERROR( "" );
+        }
     }
 }
 
@@ -451,8 +604,8 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
     PatchChain  falseChain;
     PatchChain  leaveChain;
     bool        foundCatchAll = false;
-    int         exprDepth = mCurExprDepth;
-    U8*         startPtr = mCodeBinPtr;
+    LocalSize   exprDepth = mCurExprDepth;
+    int32_t     startLoc = static_cast<int32_t>( mCodeBin.size() );
 
     GenConfig statementConfig = GenConfig::Statement( config.discard )
         .WithLoop( config.breakChain, config.nextChain );
@@ -466,7 +619,7 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
 
         auto clause = condExpr->Clauses[i].get();
 
-        auto optVal = GetOptionalSyntaxValue( clause->Condition.get() );
+        auto optVal = GetFinalOptionalSyntaxValue( clause->Condition.get() );
 
         bool isConstantTrue = optVal.has_value() && optVal.value() != 0;
 
@@ -492,15 +645,11 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
 
             if ( !config.discard )
             {
-                mCodeBinPtr[0] = OP_DUP;
-                mCodeBinPtr++;
+                Emit( OP_DUP );
                 IncreaseExprDepth();
             }
 
-            PushPatch( &leaveChain );
-
-            mCodeBinPtr[0] = OP_BTRUE;
-            mCodeBinPtr += BranchInst::Size;
+            EmitBranch( OP_BTRUE, &leaveChain );
             DecreaseExprDepth();
         }
         else
@@ -519,9 +668,10 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
 
             if ( i < (int) condExpr->Clauses.size() - 1 || !config.discard )
             {
-                PushPatch( &leaveChain );
-                mCodeBinPtr[0] = OP_B;
-                mCodeBinPtr += BranchInst::Size;
+                // Not the last clause; or last one is not catch-all and not discarding.
+                // So, we'll emit LDC.S 0 below. And here we emit a jump over it.
+
+                EmitBranch( OP_B, &leaveChain );
             }
 
             ElideFalse( &trueChain, &falseChain );
@@ -536,20 +686,23 @@ void Compiler::GenerateCond( CondExpr* condExpr, const GenConfig& config, GenSta
 
         if ( !config.discard )
         {
-            mCodeBinPtr[0] = OP_LDC_S;
-            mCodeBinPtr[1] = 0;
-            mCodeBinPtr += 2;
+            EmitU8( OP_LDC_S, 0 );
             IncreaseExprDepth();
         }
     }
 
-    if ( (mCodeBinPtr - startPtr) >= BranchInst::Size
-        && mCodeBinPtr[-BranchInst::Size] == OP_B
+    // This is not very important, because it optimizes a case like:
+    //   if n then B() else 3 end
+    // ... in a discarding context
+
+    if ( (mCodeBin.size() - startLoc) >= BranchInst::Size
+        && mCodeBin[mCodeBin.size() - BranchInst::Size] == OP_B
         && leaveChain.First != nullptr
-        && leaveChain.First->Inst == &mCodeBinPtr[-BranchInst::Size]
-        && falseChain.PatchedPtr == mCodeBinPtr )
+        && leaveChain.First->Ref == ((int32_t) mCodeBin.size() - BranchInst::Size)
+        && falseChain.PatchedInstIndex == (int32_t) mCodeBin.size() )
     {
-        mCodeBinPtr -= BranchInst::Size;
+        PopPatch( &leaveChain );
+        DeleteCode( BranchInst::Size );
         Patch( &falseChain );
     }
 
@@ -564,7 +717,12 @@ void Compiler::VisitCondExpr( CondExpr* condExpr )
     GenerateCond( condExpr, Config(), Status() );
 }
 
-void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config, GenStatus& status )
+void Compiler::VisitAsExpr( AsExpr* asExpr )
+{
+    Generate( asExpr->Inner.get(), Config(), Status() );
+}
+
+void Compiler::GenerateSetScalar( AssignmentExpr* assignment, const GenConfig& config, GenStatus& status )
 {
     // Value
     Generate( assignment->Right.get() );
@@ -575,116 +733,183 @@ void Compiler::GenerateSet( AssignmentExpr* assignment, const GenConfig& config,
     }
     else
     {
-        *mCodeBinPtr++ = OP_DUP;
+        Emit( OP_DUP );
         IncreaseExprDepth();
     }
 
-    int32_t         offset = 0;
-    Declaration*    decl = nullptr;
+    auto addr = CalcAddress( assignment->Left.get() );
 
-    CalcAddress( assignment->Left.get(), decl, offset );
-
-    EmitStoreScalar( assignment->Left.get(), decl, offset );
+    EmitStoreScalar( assignment->Left.get(), addr.decl, addr.offset );
 }
 
 void Compiler::EmitStoreScalar( Syntax* node, Declaration* decl, int32_t offset )
 {
+    if ( decl->IsReadOnly )
+        mRep.ThrowSemanticsError( node, "Constants can't be changed" );
+
     switch ( decl->Kind )
     {
     case DeclKind::Global:
-        mCodeBinPtr[0] = OP_STMOD;
-        mCodeBinPtr[1] = ((GlobalStorage*) decl)->ModIndex;
-        mCodeBinPtr += 2;
-        WriteU16( mCodeBinPtr, ((GlobalStorage*) decl)->Offset + offset );
+        assert( offset >= 0 && offset < GlobalSizeMax );
+        assert( offset < (GlobalSizeMax - ((GlobalStorage*) decl)->Offset) );
+
+        EmitModAccess(
+            OP_STMOD,
+            ((GlobalStorage*) decl)->ModIndex,
+            static_cast<uint16_t>(((GlobalStorage*) decl)->Offset + offset) );
         break;
 
     case DeclKind::Local:
-        mCodeBinPtr[0] = OP_STLOC;
-        mCodeBinPtr[1] = ((LocalStorage*) decl)->Offset - offset;
-        mCodeBinPtr += 2;
+        assert( offset >= 0 && offset < LocalSizeMax );
+        assert( offset <= ((LocalStorage*) decl)->Offset );
+
+        EmitU8( OP_STLOC, static_cast<uint8_t>(((LocalStorage*) decl)->Offset - offset) );
         break;
 
     case DeclKind::Param:
-        mCodeBinPtr[0] = OP_STARG;
-        mCodeBinPtr[1] = ((ParamStorage*) decl)->Offset + offset;
-        mCodeBinPtr += 2;
+        {
+            auto param = (ParamStorage*) decl;
+
+            if ( param->Mode == ParamMode::Value )
+            {
+                assert( offset >= 0 && offset < ParamSizeMax );
+                assert( offset < (ParamSizeMax - param->Offset) );
+
+                EmitU8( OP_STARG, static_cast<uint8_t>(param->Offset + offset) );
+            }
+            else if ( param->Mode == ParamMode::RefInOut )
+            {
+                EmitU8( OP_LDARG, param->Offset );
+                IncreaseExprDepth();
+
+                if ( offset > 0 )
+                    EmitSpilledAddrOffset( offset );
+
+                Emit( OP_STOREI );
+                DecreaseExprDepth();
+            }
+            else
+            {
+                THROW_INTERNAL_ERROR( "EmitStoreScalar: Bad parameter mode" );
+            }
+        }
         break;
 
     case DeclKind::Func:
-    case DeclKind::Forward:
     case DeclKind::NativeFunc:
-        mRep.ThrowError( CERR_SEMANTICS, node, "functions can't be assigned a value" );
+        mRep.ThrowSemanticsError( node, "functions can't be assigned a value" );
         break;
 
     case DeclKind::Const:
-        mRep.ThrowError( CERR_SEMANTICS, node, "Constants can't be changed" );
+    case DeclKind::Enum:
+        mRep.ThrowSemanticsError( node, "Constants can't be changed" );
         break;
 
     case DeclKind::LoadedAddress:
+        assert( offset >= 0 && offset < DataSizeMax );
+
         if ( offset > 0 )
             EmitSpilledAddrOffset( offset );
 
-        mCodeBinPtr[0] = OP_STOREI;
-        mCodeBinPtr++;
+        Emit( OP_STOREI );
         DecreaseExprDepth();
         break;
 
     default:
-        assert( false );
-        mRep.ThrowInternalError();
+        THROW_INTERNAL_ERROR( "EmitStoreScalar: DeclKind" );
     }
 
     DecreaseExprDepth();
 }
 
+void Compiler::GenerateSetAggregate( AssignmentExpr* assignment, const GenConfig& config, GenStatus& status )
+{
+    if ( IsOpenArrayType( *assignment->Left->Type ) || IsOpenArrayType( *assignment->Right->Type ) )
+    {
+        auto& leftArrayType = (ArrayType&) *assignment->Left->Type;
+        auto& rightArrayType = (ArrayType&) *assignment->Right->Type;
+
+        GenerateRef( *assignment->Right, leftArrayType, false );
+
+        if ( config.discard )
+        {
+            status.discarded = true;
+        }
+        else
+        {
+            Emit( OP_OVER );
+            Emit( OP_OVER );
+            IncreaseExprDepth( 2 );
+        }
+
+        if ( IsClosedArrayType( leftArrayType ) )
+            EmitLoadConstant( leftArrayType.Count );
+
+        auto addr = CalcAddress( assignment->Left.get(), true );
+
+        EmitLoadAddress( assignment->Left.get(), addr.decl, addr.offset );
+
+        EmitU24( OP_COPYARRAY, rightArrayType.ElemType->GetSize() );
+
+        DecreaseExprDepth( 4 );
+
+        // Generating a return value or argument value would need PUSHBLOCK
+    }
+    else
+    {
+        // Value
+        Generate( assignment->Right.get() );
+
+        if ( config.discard )
+        {
+            status.discarded = true;
+        }
+        else
+        {
+            Emit( OP_DUP );
+            IncreaseExprDepth();
+        }
+
+        auto addr = CalcAddress( assignment->Left.get(), true );
+
+        EmitLoadAddress( assignment->Left.get(), addr.decl, addr.offset );
+
+        EmitU24( OP_COPYBLOCK, assignment->Right->Type->GetSize() );
+
+        DecreaseExprDepth( 2 );
+    }
+}
+
 void Compiler::VisitAssignmentExpr( AssignmentExpr* assignment )
 {
-    GenerateSet( assignment, Config(), Status() );
+    if ( IsScalarType( assignment->Left->Type->GetKind() ) )
+        GenerateSetScalar( assignment, Config(), Status() );
+    else
+        GenerateSetAggregate( assignment, Config(), Status() );
 }
 
 void Compiler::VisitProcDecl( ProcDecl* procDecl )
 {
-    U32 addr = (mCodeBinPtr - mCodeBin);
+    uint32_t addr = static_cast<CodeSize>( mCodeBin.size() );
 
     auto func = (Function*) procDecl->Decl.get();
 
     func->Address = addr;
 
-    auto patchIt = mPatchMap.find( func->Name );
-    if ( patchIt != mPatchMap.end() )
+    mGlobalAttrs.AddFunctionByAddress( std::static_pointer_cast<Function>(procDecl->Decl) );
+
+    auto patchIt = mFuncPatchMap.find( func->Name );
+    if ( patchIt != mFuncPatchMap.end() )
         PatchCalls( &patchIt->second, addr );
 
-    mEnv->AddExternal( procDecl->Name, External_Bytecode, func->Address );
+    mEnv->AddExternal( procDecl->Name, ExternalKind::Bytecode, func->Address );
 
     GenerateProc( procDecl, func );
 }
 
-void Compiler::GenerateLambda( LambdaExpr* lambdaExpr, const GenConfig& config, GenStatus& status )
-{
-    if ( config.discard )
-    {
-        status.discarded = true;
-        return;
-    }
-
-    *mCodeBinPtr = OP_LDC;
-    mCodeBinPtr++;
-
-    DeferredLambda lambda = { 0 };
-    lambda.Definition = lambdaExpr->Proc.get();
-    lambda.Patch = mCodeBinPtr;
-    mLambdas.push_back( lambda );
-
-    // Add the reference to the deferred lambda just linked
-    mLocalAddrRefs.push_back( { AddrRefKind::Lambda, mLambdas.size() - 1 } );
-
-    WriteU32( mCodeBinPtr, 0 );
-    IncreaseExprDepth();
-}
-
 void Compiler::VisitLambdaExpr( LambdaExpr* lambdaExpr )
 {
-    GenerateLambda( lambdaExpr, Config(), Status() );
+    THROW_INTERNAL_ERROR( "LambdaExpr was not transformed" );
 }
 
 void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, GenStatus& status )
@@ -697,40 +922,47 @@ void Compiler::GenerateFunction( AddrOfExpr* addrOf, const GenConfig& config, Ge
 
     auto func = (Function*) addrOf->Inner->GetDecl();
 
-    mCodeBinPtr[0] = OP_LDC;
-    mCodeBinPtr++;
-
-    EmitFuncAddress( (Function*) addrOf->Inner->GetDecl(), mCodeBinPtr );
-
-    IncreaseExprDepth();
+    EmitLoadFuncAddress( func );
 }
 
-void Compiler::EmitFuncAddress( Function* func, uint8_t*& dstPtr )
+void Compiler::EmitLoadFuncAddress( Function* func )
 {
-    U32 addr = 0, modIndex = 0;
+    size_t curIndex = ReserveCode( 5 );
+    mCodeBin[curIndex] = OP_LDC;
 
-    if ( func->Address != INT32_MAX )
+    EmitFuncAddress( func, { CodeRefKind::Code, static_cast<int32_t>( curIndex + 1 ) } );
+
+    IncreaseExprDepth();
+
+    DISASSEMBLE( &mCodeBin[curIndex], 5 );
+}
+
+void Compiler::EmitFuncAddress( Function* func, CodeRef funcRef )
+{
+    if ( func->Address == UndefinedAddr )
     {
-        addr = func->Address;
-        modIndex = func->ModIndex;
-    }
-    else
-    {
-        PatchChain* chain = PushFuncPatch( func->Name, dstPtr );
-
-        if ( mInFunc )
-        {
-            AddrRef ref = { AddrRefKind::Inst };
-            ref.InstPtr = &chain->First->Inst;
-            mLocalAddrRefs.push_back( ref );
-        }
-
-        modIndex = mModIndex;
+        PushFuncPatch( func->Name, funcRef );
     }
 
-    WriteU24( dstPtr, addr );
-    dstPtr[0] = modIndex;
-    dstPtr++;
+    uint32_t addrWord = CodeAddr::Build( func->Address, func->ModIndex );
+
+    switch ( funcRef.Kind )
+    {
+    case CodeRefKind::Code:
+        StoreU32( &mCodeBin[funcRef.Location], addrWord );
+        break;
+
+    case CodeRefKind::Data:
+        mGlobals[funcRef.Location] = addrWord;
+        break;
+
+    case CodeRefKind::Const:
+        mConsts[funcRef.Location] = addrWord;
+        break;
+
+    default:
+        THROW_INTERNAL_ERROR( "EmitFuncAddress: CodeRef::Kind" );
+    }
 }
 
 void Compiler::VisitAddrOfExpr( AddrOfExpr* addrOf )
@@ -740,15 +972,14 @@ void Compiler::VisitAddrOfExpr( AddrOfExpr* addrOf )
 
 void Compiler::GenerateFuncall( CallExpr* call, const GenConfig& config, GenStatus& status )
 {
-    GenerateCallArgs( call->Arguments );
+    auto ptrType = (PointerType*) call->Head->Type.get();
+    auto funcType = (FuncType*) ptrType->TargetType.get();
+
+    ParamSize argCount = GenerateCallArgs( call->Arguments, funcType );
 
     Generate( call->Head.get() );
 
-    int argCount = call->Arguments.size();
-
-    mCodeBinPtr[0] = OP_CALLI;
-    mCodeBinPtr[1] = CallFlags::Build( argCount, config.discard );
-    mCodeBinPtr += 2;
+    EmitU8( OP_CALLI, CallFlags::Build( argCount, config.discard ) );
 
     DecreaseExprDepth();
 
@@ -778,10 +1009,10 @@ void Compiler::GenerateLetBinding( DataDecl* binding )
 {
     auto local = (LocalStorage*) binding->GetDecl();
 
-    GenerateLocalInit( local->Offset, binding->Initializer.get() );
+    GenerateLocalInit( local->Offset, local->Type.get(), binding->Initializer.get() );
 }
 
-void Compiler::GenerateLocalInit( int32_t offset, Syntax* initializer )
+void Compiler::GenerateLocalInit( LocalSize offset, Type* localType, Syntax* initializer )
 {
     if ( initializer == nullptr )
         return;
@@ -791,20 +1022,22 @@ void Compiler::GenerateLocalInit( int32_t offset, Syntax* initializer )
     if ( IsScalarType( type->GetKind() ) )
     {
         Generate( initializer );
-        mCodeBinPtr[0] = OP_STLOC;
-        mCodeBinPtr[1] = offset;
-        mCodeBinPtr += 2;
+        EmitU8( OP_STLOC, offset );
         DecreaseExprDepth();
     }
-    else if ( type->GetKind() == TypeKind::Array )
+    else if ( initializer->Kind == SyntaxKind::ArrayInitializer )
     {
         auto arrayType = (ArrayType*) type;
 
-        AddLocalDataArray( offset, initializer, arrayType->Count );
+        EmitLocalArrayInitializer( offset, (ArrayType*) localType, (InitList*) initializer, arrayType->Count );
+    }
+    else if ( initializer->Kind == SyntaxKind::RecordInitializer )
+    {
+        EmitLocalRecordInitializer( offset, (RecordType*) localType, (RecordInitializer*) initializer );
     }
     else
     {
-        mRep.ThrowError( CERR_SEMANTICS, initializer, "'let' binding takes a name or name and type" );
+        EmitLocalAggregateCopyBlock( offset, localType, initializer );
     }
 }
 
@@ -813,50 +1046,75 @@ void Compiler::VisitLetStatement( LetStatement* letStmt )
     GenerateLet( letStmt, Config(), Status() );
 }
 
-// TODO: try to merge this with AddGlobalDataArray. Separate the array processing from the code generation
-
-void Compiler::AddLocalDataArray( int32_t offset, Syntax* valueElem, size_t size )
+void Compiler::EmitLocalAggregateCopyBlock( LocalSize offset, Type* localType, Syntax* valueElem )
 {
-    if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
-        mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
+    if ( IsOpenArrayType( *valueElem->Type ) )
+    {
+        Generate( valueElem );
 
-    auto    initList = (InitList*) valueElem;
-    size_t  locIndex = offset;
-    size_t  i = 0;
+        auto dstArrayType = (ArrayType&) *localType;
+
+        EmitLoadConstant( dstArrayType.Count );
+        EmitU8( OP_LDLOCA, offset );
+        EmitU24( OP_COPYARRAY, dstArrayType.ElemType->GetSize() );
+
+        IncreaseExprDepth();
+        DecreaseExprDepth( 4 );
+    }
+    else
+    {
+        Generate( valueElem );
+
+        EmitU8( OP_LDLOCA, offset );
+        EmitU24( OP_COPYBLOCK, valueElem->Type->GetSize() );
+
+        IncreaseExprDepth();
+        DecreaseExprDepth( 2 );
+    }
+}
+
+void Compiler::EmitLocalArrayInitializer( LocalSize offset, ArrayType* localType, InitList* initList, size_t size )
+{
+    LocalSize   locIndex = offset;
+    LocalSize   i = 0;
+
+    auto        localElemType = localType->ElemType.get();
+
+    if ( initList->Values.size() > size )
+        mRep.ThrowSemanticsError( initList, "Array has too many initializers" );
 
     for ( auto& entry : initList->Values )
     {
-        if ( i == size )
-            mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
+        assert( locIndex+1 >= entry->Type->GetSize() );
 
-        GenerateLocalInit( locIndex, entry.get() );
+        GenerateLocalInit( locIndex, localElemType, entry.get() );
         i++;
-        locIndex -= entry->Type->GetSize();
+        locIndex -= static_cast<LocalSize>(entry->Type->GetSize());
     }
 
     if ( initList->Fill == ArrayFill::Extrapolate && initList->Values.size() > 0 )
     {
-        size_t count = initList->Values.size();
-        I32 prevValue = 0;
-        I32 step = 0;
+        // Use unsigned values for well defined overflow
+
+        size_t   count = initList->Values.size();
+        uint32_t prevValue = 0;
+        uint32_t step = 0;
 
         prevValue = GetSyntaxValue( initList->Values.back().get(), "Array initializer extrapolation requires a constant" );
 
         if ( initList->Values.size() > 1 )
         {
-            auto prevValue2 = GetOptionalSyntaxValue( initList->Values[count - 2].get() );
+            auto prevValue2 = GetFinalOptionalSyntaxValue( initList->Values[count - 2].get() );
             if ( prevValue2.has_value() )
-                step = prevValue - prevValue2.value();
+                step = VmSub( prevValue, prevValue2.value() );
         }
 
         for ( ; i < size; i++ )
         {
-            I32 newValue = prevValue + step;
+            uint32_t newValue = VmAdd( prevValue, step );
 
             EmitLoadConstant( newValue );
-            mCodeBinPtr[0] = OP_STLOC;
-            mCodeBinPtr[1] = (U8) locIndex;
-            mCodeBinPtr += 2;
+            EmitU8( OP_STLOC, static_cast<uint8_t>(locIndex) );
             locIndex--;
             DecreaseExprDepth();
 
@@ -869,10 +1127,79 @@ void Compiler::AddLocalDataArray( int32_t offset, Syntax* valueElem, size_t size
 
         for ( ; i < size; i++ )
         {
-            GenerateLocalInit( locIndex, lastNode );
-            locIndex -= lastNode->Type->GetSize();
+            assert( locIndex+1 >= lastNode->Type->GetSize() );
+
+            GenerateLocalInit( locIndex, localElemType, lastNode );
+            locIndex -= static_cast<LocalSize>(lastNode->Type->GetSize());
         }
     }
+}
+
+void Compiler::EmitLocalRecordInitializer( LocalSize offset, RecordType* localType, RecordInitializer* recordInit )
+{
+    for ( auto& fieldInit : recordInit->Fields )
+    {
+        auto fieldDecl = (FieldStorage*) fieldInit->GetDecl();
+
+        assert( offset >= fieldDecl->Offset );
+
+        auto itLocalField = localType->GetFields().find( fieldInit->Name );
+        auto localFieldType = itLocalField->second->GetType();
+
+        GenerateLocalInit( static_cast<LocalSize>(offset - fieldDecl->Offset), localFieldType.get(), fieldInit->Initializer.get() );
+    }
+}
+
+void Compiler::GenerateRef( Syntax& node, Type& siteType, bool writable )
+{
+    if ( IsOpenArrayType( siteType ) && IsClosedArrayType( *node.Type ) )
+        EmitCountofArray( &node );
+
+    auto addr = CalcAddress( &node, writable );
+
+    if ( !addr.spilled )
+    {
+        EmitLoadAddress( &node, addr.decl, addr.offset );
+    }
+    else if ( addr.offset > 0 )
+    {
+        EmitSpilledAddrOffset( addr.offset );
+    }
+}
+
+void Compiler::GenerateArg( Syntax& node, ParamSpec& paramSpec )
+{
+    switch ( paramSpec.Mode )
+    {
+    case ParamMode::Value:
+    case ParamMode::ValueIn:
+        Generate( &node );
+        break;
+
+    case ParamMode::RefInOut:
+    case ParamMode::RefIn:
+        GenerateRef( node, *paramSpec.Type, (paramSpec.Mode == ParamMode::RefInOut) );
+        break;
+
+    default:
+        THROW_INTERNAL_ERROR( "GenerateArg: ParamMode" );
+    }
+}
+
+ParamSize Compiler::GenerateCallArgs( std::vector<Unique<Syntax>>& arguments, FuncType* funcType )
+{
+    assert( arguments.size() == funcType->Params.size() );
+
+    ParamSize argCount = 0;
+
+    for ( auto i = static_cast<ptrdiff_t>(arguments.size()) - 1; i >= 0; i-- )
+    {
+        GenerateArg( *arguments[i], funcType->Params[i] );
+
+        argCount += funcType->Params[i].Size;
+    }
+
+    return argCount;
 }
 
 void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus& status )
@@ -880,57 +1207,43 @@ void Compiler::GenerateCall( CallExpr* call, const GenConfig& config, GenStatus&
     GenerateCall( call->Head->GetDecl(), call->Arguments, config, status );
 }
 
-void Compiler::GenerateCallArgs( std::vector<Unique<Syntax>>& arguments )
-{
-    for ( int i = arguments.size() - 1; i >= 0; i-- )
-    {
-        Generate( arguments[i].get() );
-    }
-}
-
 void Compiler::GenerateCall( Declaration* decl, std::vector<Unique<Syntax>>& arguments, const GenConfig& config, GenStatus& status )
 {
-    GenerateCallArgs( arguments );
+    auto funcType = (FuncType*) decl->GetType().get();
 
-    int argCount = arguments.size();
-    U8 callFlags = CallFlags::Build( argCount, config.discard );
+    ParamSize argCount = GenerateCallArgs( arguments, funcType );
+
+    uint8_t callFlags = CallFlags::Build( argCount, config.discard );
 
     if ( decl == nullptr )
     {
-        mRep.ThrowInternalError( "Call head has no declaration" );
+        THROW_INTERNAL_ERROR( "Call head has no declaration" );
     }
     else if ( decl->Kind == DeclKind::Func
         && ((Function*) decl)->ModIndex == mModIndex )
     {
         Function* func = (Function*) decl;
-        U32 addr = 0;
 
-        mCodeBinPtr[0] = OP_CALL;
-        mCodeBinPtr[1] = callFlags;
-        mCodeBinPtr += 2;
+        size_t curIndex = ReserveCode( 5 );
+        mCodeBin[curIndex+0] = OP_CALL;
+        mCodeBin[curIndex+1] = callFlags;
 
-        if ( func->Address != INT32_MAX )
+        if ( func->Address == UndefinedAddr )
         {
-            addr = func->Address;
-        }
-        else
-        {
-            PatchChain* chain = PushFuncPatch( func->Name, mCodeBinPtr );
-
-            AddrRef ref = { AddrRefKind::Inst };
-            ref.InstPtr = &chain->First->Inst;
-            mLocalAddrRefs.push_back( ref );
+            PushFuncPatch( func->Name, { CodeRefKind::Code, static_cast<int32_t>( curIndex + 2 ) } );
         }
 
-        WriteU24( mCodeBinPtr, addr );
+        StoreU24( &mCodeBin[curIndex+2], func->Address );
+
+        DISASSEMBLE( &mCodeBin[curIndex], 5 );
 
         if ( mInFunc )
-            mCurFunc->CalledFunctions.push_back( { mCurExprDepth, func->Name } );
+            mCurFunc->CalledFunctions.push_back( { func->Name, mCurExprDepth, mModIndex } );
     }
     else
     {
-        int opCode = 0;
-        I32 id = 0;
+        uint8_t opCode = 0;
+        int32_t id = 0;
 
         if ( decl->Kind == DeclKind::Func )
         {
@@ -939,7 +1252,7 @@ void Compiler::GenerateCall( Declaration* decl, std::vector<Unique<Syntax>>& arg
             opCode = OP_CALLM;
             id = CodeAddr::Build( func->Address, func->ModIndex );
 
-            // TODO: Add this external call to the list of called functions
+            mCurFunc->CalledFunctions.push_back( { func->Name, mCurExprDepth, func->ModIndex } );
         }
         else if ( decl->Kind == DeclKind::NativeFunc )
         {
@@ -952,22 +1265,27 @@ void Compiler::GenerateCall( Declaration* decl, std::vector<Unique<Syntax>>& arg
         }
         else
         {
-            assert( false );
-            mRep.ThrowInternalError();
+            THROW_INTERNAL_ERROR( "" );
         }
-
-        mCodeBinPtr[0] = opCode;
-        mCodeBinPtr[1] = callFlags;
-        mCodeBinPtr += 2;
 
         if ( opCode == OP_CALLNATIVE_S )
         {
-            *(U8*) mCodeBinPtr = (U8) id;
-            mCodeBinPtr += 1;
+            size_t curIndex = ReserveCode( 3 );
+            mCodeBin[curIndex + 0] = opCode;
+            mCodeBin[curIndex + 1] = callFlags;
+            mCodeBin[curIndex + 2] = static_cast<uint8_t>(id);
+
+            DISASSEMBLE( &mCodeBin[curIndex], 3 );
         }
         else
         {
-            WriteU32( mCodeBinPtr, id );
+            size_t curIndex = ReserveCode( 6 );
+            mCodeBin[curIndex + 0] = opCode;
+            mCodeBin[curIndex + 1] = callFlags;
+
+            StoreU32( &mCodeBin[curIndex + 2], id );
+
+            DISASSEMBLE( &mCodeBin[curIndex], 6 );
         }
     }
 
@@ -996,32 +1314,32 @@ void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenS
 
     auto local = (LocalStorage*) forStmt->IndexDecl.get();
 
-    int primitive;
-    int step;
+    uint8_t primitive;
+    int32_t step;
 
-    if ( 0 == strcmp( forStmt->Comparison.c_str(), "below" ) )
+    if ( forStmt->Comparison == ForComparison::Below )
     {
         primitive = PRIM_LT;
         step = 1;
     }
-    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "to" ) )
+    else if ( forStmt->Comparison == ForComparison::To )
     {
         primitive = PRIM_LE;
         step = 1;
     }
-    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "downto" ) )
+    else if ( forStmt->Comparison == ForComparison::Downto )
     {
         primitive = PRIM_GE;
         step = -1;
     }
-    else if ( 0 == strcmp( forStmt->Comparison.c_str(), "above" ) )
+    else if ( forStmt->Comparison == ForComparison::Above )
     {
         primitive = PRIM_GT;
         step = -1;
     }
     else
     {
-        mRep.ThrowError( CERR_SEMANTICS, forStmt, "Expected symbol: to, downto, above, below" );
+        mRep.ThrowSemanticsError( forStmt, "Expected symbol: to, downto, above, below" );
     }
 
     PatchChain  bodyChain;
@@ -1031,10 +1349,8 @@ void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenS
 
     // Beginning expression
     Generate( forStmt->First.get() );
-    mCodeBinPtr[0] = OP_DUP;
-    mCodeBinPtr[1] = OP_STLOC;
-    mCodeBinPtr[2] = local->Offset;
-    mCodeBinPtr += 3;
+    Emit( OP_DUP );
+    EmitU8( OP_STLOC, local->Offset );
     IncreaseExprDepth();
     DecreaseExprDepth();
 
@@ -1043,11 +1359,9 @@ void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenS
     // for a usual test.
     DecreaseExprDepth();
 
-    PushPatch( &testChain );
-    mCodeBinPtr[0] = OP_B;
-    mCodeBinPtr += BranchInst::Size;
+    EmitBranch( OP_B, &testChain );
 
-    U8* bodyPtr = mCodeBinPtr;
+    int32_t bodyLoc = static_cast<int32_t>( mCodeBin.size() );
 
     // Body
     GenerateStatements( &forStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
@@ -1059,14 +1373,10 @@ void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenS
     else
         EmitLoadConstant( step );
 
-    mCodeBinPtr[0] = OP_LDLOC;
-    mCodeBinPtr[1] = local->Offset;
-    mCodeBinPtr[2] = OP_PRIM;
-    mCodeBinPtr[3] = PRIM_ADD;
-    mCodeBinPtr[4] = OP_DUP;
-    mCodeBinPtr[5] = OP_STLOC;
-    mCodeBinPtr[6] = local->Offset;
-    mCodeBinPtr += 7;
+    EmitU8( OP_LDLOC, local->Offset );
+    EmitU8( OP_PRIM, PRIM_ADD );
+    Emit( OP_DUP );
+    EmitU8( OP_STLOC, local->Offset );
     IncreaseExprDepth();
     DecreaseExprDepth();
     IncreaseExprDepth();
@@ -1077,17 +1387,13 @@ void Compiler::GenerateFor( ForStatement* forStmt, const GenConfig& config, GenS
     // Ending expression
     Generate( forStmt->Last.get() );
 
-    mCodeBinPtr[0] = OP_PRIM;
-    mCodeBinPtr[1] = primitive;
-    mCodeBinPtr += 2;
+    EmitU8( OP_PRIM, primitive );
     DecreaseExprDepth();
 
-    PushPatch( &bodyChain );
-    mCodeBinPtr[0] = OP_BTRUE;
-    mCodeBinPtr += BranchInst::Size;
+    EmitBranch( OP_BTRUE, &bodyChain );
     DecreaseExprDepth();
 
-    Patch( &bodyChain, bodyPtr );
+    Patch( &bodyChain, bodyLoc );
     Patch( &breakChain );
 
     GenerateNilIfNeeded( config, status );
@@ -1103,18 +1409,16 @@ void Compiler::GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& con
     PatchChain  breakChain;
     PatchChain  nextChain;
 
-    U8* bodyPtr = mCodeBinPtr;
+    int32_t     bodyLoc = static_cast<int32_t>(mCodeBin.size());
 
     // Body
     GenerateStatements( &loopStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
 
     if ( loopStmt->Condition == nullptr )
     {
-        PushPatch( &nextChain );
-        mCodeBinPtr[0] = OP_B;
-        mCodeBinPtr += BranchInst::Size;
+        EmitBranch( OP_B, &nextChain );
 
-        Patch( &nextChain, bodyPtr );
+        Patch( &nextChain, bodyLoc );
     }
     else
     {
@@ -1126,7 +1430,7 @@ void Compiler::GenerateSimpleLoop( LoopStatement* loopStmt, const GenConfig& con
         Generate( loopStmt->Condition.get(), GenConfig::Expr( &bodyChain, &breakChain, false ), exprStatus );
         ElideFalse( &bodyChain, &breakChain );
 
-        Patch( &bodyChain, bodyPtr );
+        Patch( &bodyChain, bodyLoc );
     }
 
     Patch( &breakChain );
@@ -1145,7 +1449,7 @@ void Compiler::GenerateDo( WhileStatement* whileStmt, const GenConfig& config, G
     PatchChain  nextChain;
     PatchChain  trueChain;
 
-    U8* testPtr = mCodeBinPtr;
+    int32_t testLoc = static_cast<int32_t>(mCodeBin.size());
 
     // Test expression
     Generate( whileStmt->Condition.get(), GenConfig::Expr( &trueChain, &breakChain, false ) );
@@ -1156,12 +1460,10 @@ void Compiler::GenerateDo( WhileStatement* whileStmt, const GenConfig& config, G
     // Body
     GenerateStatements( &whileStmt->Body, config.WithLoop( &breakChain, &nextChain ), status );
 
-    PushPatch( &nextChain );
-    mCodeBinPtr[0] = OP_B;
-    mCodeBinPtr += BranchInst::Size;
+    EmitBranch( OP_B, &nextChain );
 
     Patch( &breakChain );
-    Patch( &nextChain, testPtr );
+    Patch( &nextChain, testLoc );
 
     GenerateNilIfNeeded( config, status );
 }
@@ -1174,11 +1476,9 @@ void Compiler::VisitWhileStatement( WhileStatement* whileStmt )
 void Compiler::GenerateBreak( BreakStatement* breakStmt, const GenConfig& config, GenStatus& status )
 {
     if ( config.breakChain == nullptr )
-        mRep.ThrowError( CERR_SEMANTICS, breakStmt, "Cannot use break outside of a loop" );
+        mRep.ThrowSemanticsError( breakStmt, "Cannot use break outside of a loop" );
 
-    PushPatch( config.breakChain );
-    mCodeBinPtr[0] = OP_B;
-    mCodeBinPtr += BranchInst::Size;
+    EmitBranch( OP_B, config.breakChain );
 
     status.discarded = true;
 }
@@ -1191,11 +1491,9 @@ void Compiler::VisitBreakStatement( BreakStatement* breakStmt )
 void Compiler::GenerateNext( NextStatement* nextStmt, const GenConfig& config, GenStatus& status )
 {
     if ( config.nextChain == nullptr )
-        mRep.ThrowError( CERR_SEMANTICS, nextStmt, "Cannot use next outside of a loop" );
+        mRep.ThrowSemanticsError( nextStmt, "Cannot use next outside of a loop" );
 
-    PushPatch( config.nextChain );
-    mCodeBinPtr[0] = OP_B;
-    mCodeBinPtr += BranchInst::Size;
+    EmitBranch( OP_B, config.nextChain );
 
     status.discarded = true;
 }
@@ -1203,6 +1501,13 @@ void Compiler::GenerateNext( NextStatement* nextStmt, const GenConfig& config, G
 void Compiler::VisitNextStatement( NextStatement* nextStmt )
 {
     GenerateNext( nextStmt, Config(), Status() );
+}
+
+void Compiler::VisitYieldStatement( YieldStatement* nextStmt )
+{
+    Emit( OP_YIELD );
+
+    GenerateNilIfNeeded( Config(), Status() );
 }
 
 void Compiler::GenerateCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
@@ -1213,27 +1518,9 @@ void Compiler::GenerateCase( CaseExpr* caseExpr, const GenConfig& config, GenSta
 void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config, GenStatus& status )
 {
     PatchChain  exitChain;
-    int         exprDepth = mCurExprDepth;
+    LocalSize   exprDepth = mCurExprDepth;
 
     const GenConfig& statementConfig = config;
-
-    if ( caseExpr->TestKeyDecl != nullptr )
-    {
-        auto local = (LocalStorage*) caseExpr->TestKeyDecl.get();
-
-        Generate( caseExpr->TestKey.get() );
-        mCodeBinPtr[0] = OP_STLOC;
-        mCodeBinPtr[1] = local->Offset;
-        mCodeBinPtr += 2;
-        DecreaseExprDepth();
-
-        // Replace the keyform expression with the temporary variable
-        Unique<NameExpr> localSym( new NameExpr() );
-        localSym->String = "$testKey";
-        localSym->Decl = caseExpr->TestKeyDecl;
-        localSym->Type = localSym->Decl->Type;
-        caseExpr->TestKey = std::move( localSym );
-    }
 
     for ( auto& clause : caseExpr->Clauses )
     {
@@ -1243,7 +1530,7 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
         // Restore the expression depth, so that it doesn't accumulate
         mCurExprDepth = exprDepth;
 
-        int i = 0;
+        size_t i = 0;
 
         for ( auto& key : clause->Keys )
         {
@@ -1252,23 +1539,17 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
             Generate( caseExpr->TestKey.get() );
             Generate( key.get() );
 
-            mCodeBinPtr[0] = OP_PRIM;
-            mCodeBinPtr[1] = PRIM_EQ;
-            mCodeBinPtr += 2;
+            EmitU8( OP_PRIM, PRIM_EQ );
             DecreaseExprDepth();
 
             if ( i == clause->Keys.size() )
             {
-                PushPatch( &falseChain );
-                mCodeBinPtr[0] = OP_BFALSE;
-                mCodeBinPtr += BranchInst::Size;
+                EmitBranch( OP_BFALSE, &falseChain );
                 DecreaseExprDepth();
             }
             else
             {
-                PushPatch( &trueChain );
-                mCodeBinPtr[0] = OP_BTRUE;
-                mCodeBinPtr += BranchInst::Size;
+                EmitBranch( OP_BTRUE, &trueChain );
                 DecreaseExprDepth();
             }
         }
@@ -1277,9 +1558,7 @@ void Compiler::GenerateGeneralCase( CaseExpr* caseExpr, const GenConfig& config,
 
         GenerateImplicitProgn( &clause->Body, statementConfig, status );
 
-        PushPatch( &exitChain );
-        mCodeBinPtr[0] = OP_B;
-        mCodeBinPtr += BranchInst::Size;
+        EmitBranch( OP_B, &exitChain );
 
         Patch( &falseChain );
     }
@@ -1315,13 +1594,17 @@ void Compiler::VisitUnaryExpr( UnaryExpr* unary )
     {
         GenerateUnaryPrimitive( unary->Inner.get(), Config(), Status() );
     }
+    else
+    {
+        THROW_INTERNAL_ERROR( "" );
+    }
 }
 
 void Compiler::GenerateComparison( BinaryExpr* binary, const GenConfig& config, GenStatus& status )
 {
-    auto& op = binary->Op;
-    int positivePrimitive;
-    int negativePrimitive;
+    auto&   op = binary->Op;
+    uint8_t positivePrimitive;
+    uint8_t negativePrimitive;
 
     if ( op == "=" )
     {
@@ -1355,8 +1638,7 @@ void Compiler::GenerateComparison( BinaryExpr* binary, const GenConfig& config, 
     }
     else
     {
-        assert( false );
-        mRep.ThrowInternalError();
+        THROW_INTERNAL_ERROR( "" );
     }
 
     GenerateBinaryPrimitive( binary, config.invert ? negativePrimitive : positivePrimitive, config, status );
@@ -1423,6 +1705,7 @@ void Compiler::Atomize( ConjSpec* spec, BinaryExpr* binary, bool invert, bool di
 {
     PatchChain  trueChain;
     PatchChain  falseChain;
+    PatchChain  endChain;
 
     GenerateConj( spec, binary, GenConfig::Expr( &trueChain, &falseChain, invert ) );
 
@@ -1432,48 +1715,49 @@ void Compiler::Atomize( ConjSpec* spec, BinaryExpr* binary, bool invert, bool di
 
     if ( !discard )
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = 1;
-        mCodeBinPtr[2] = OP_B;
-        mCodeBinPtr += 3;
+        EmitU8( OP_LDC_S, 1 );
 
-        // Offset of 2 to jump over LDC.S below.
-        BranchInst::WriteOffset( mCodeBinPtr, 2 );
+        EmitBranch( OP_B, &endChain );
     }
 
     Patch( &falseChain );
 
     if ( !discard )
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = 0;
-        mCodeBinPtr += 2;
+        EmitU8( OP_LDC_S, 0 );
+
+        Patch( &endChain );
 
         IncreaseExprDepth();
     }
 }
 
-U8 Compiler::InvertJump( U8 opCode )
+uint8_t Compiler::InvertJump( uint8_t opCode )
 {
     switch ( opCode )
     {
     case OP_BTRUE:  return OP_BFALSE;
     case OP_BFALSE: return OP_BTRUE;
     default:
-        assert( false );
-        mRep.ThrowInternalError();
+        THROW_INTERNAL_ERROR( "" );
     }
 }
 
 void Compiler::PushPatch( PatchChain* chain )
 {
-    PushPatch( chain, mCodeBinPtr );
+    PushPatch( chain, static_cast<int32_t>(mCodeBin.size()) );
 }
 
-void Compiler::PushPatch( PatchChain* chain, U8* patchPtr )
+void Compiler::PushPatch( PatchChain* chain, int32_t patchLoc )
 {
-    InstPatch* link = new InstPatch;
-    link->Inst = patchPtr;
+    PushBasicPatch( chain, patchLoc );
+}
+
+template <typename TRef>
+void Compiler::PushBasicPatch( BasicPatchChain<TRef>* chain, TRef patchLoc )
+{
+    BasicInstPatch<TRef>* link = new BasicInstPatch<TRef>;
+    link->Ref = patchLoc;
     link->Next = chain->First;
     chain->First = link;
 }
@@ -1487,18 +1771,23 @@ void Compiler::PopPatch( PatchChain* chain )
     delete link;
 }
 
-Compiler::PatchChain* Compiler::PushFuncPatch( const std::string& name, U8* patchPtr )
+void Compiler::PushFuncPatch( const std::string& name, CodeRef codeRef )
 {
-    auto patchIt = mPatchMap.find( name );
-    if ( patchIt == mPatchMap.end() )
+    auto patchIt = mFuncPatchMap.find( name );
+    if ( patchIt == mFuncPatchMap.end() )
     {
-        auto result = mPatchMap.insert( PatchMap::value_type( { name, PatchChain() } ) );
+        auto result = mFuncPatchMap.insert( FuncPatchMap::value_type( { name, FuncPatchChain() } ) );
         patchIt = std::move( result.first );
     }
 
-    PushPatch( &patchIt->second, patchPtr );
+    PushBasicPatch( &patchIt->second, codeRef );
 
-    return &patchIt->second;
+    if ( codeRef.Kind == CodeRefKind::Code )
+    {
+        AddrRef ref = { AddrRefKind::Inst };
+        ref.InstIndexPtr = &patchIt->second.First->Ref.Location;
+        mLocalAddrRefs.push_back( ref );
+    }
 }
 
 void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
@@ -1507,20 +1796,22 @@ void Compiler::ElideTrue( PatchChain* trueChain, PatchChain* falseChain )
         || falseChain->First == nullptr )
         return;
 
-    U8* target = mCodeBinPtr;
-    size_t diff = target - (trueChain->First->Inst + BranchInst::Size);
+    int32_t target = static_cast<int32_t>(mCodeBin.size());
+    size_t diff = target - (trueChain->First->Ref + BranchInst::Size);
 
     if ( diff == BranchInst::Size
-        && mCodeBinPtr[-BranchInst::Size] == OP_B
-        && &mCodeBinPtr[-BranchInst::Size] == falseChain->First->Inst
+        && mCodeBin[mCodeBin.size() - BranchInst::Size] == OP_B
+        && ((int32_t) mCodeBin.size() - BranchInst::Size) == falseChain->First->Ref
         )
     {
-        falseChain->First->Inst = trueChain->First->Inst;
-        trueChain->First->Inst[0] = InvertJump( trueChain->First->Inst[0] );
+        falseChain->First->Ref = trueChain->First->Ref;
+
+        mCodeBin[trueChain->First->Ref] = InvertJump( mCodeBin[trueChain->First->Ref] );
 
         // Remove the branch instruction.
         PopPatch( trueChain );
-        mCodeBinPtr -= BranchInst::Size;
+
+        DeleteCode( BranchInst::Size );
     }
 }
 
@@ -1529,39 +1820,51 @@ void Compiler::ElideFalse( PatchChain* trueChain, PatchChain* falseChain )
     if ( falseChain->First == nullptr )
         return;
 
-    U8* target = mCodeBinPtr;
-    size_t diff = target - (falseChain->First->Inst + BranchInst::Size);
+    int32_t target = static_cast<int32_t>(mCodeBin.size());
+    size_t diff = target - (falseChain->First->Ref + BranchInst::Size);
 
     if ( diff == 0 )
     {
         // Remove the branch instruction.
         PopPatch( falseChain );
-        mCodeBinPtr -= BranchInst::Size;
+
+        DeleteCode( BranchInst::Size );
     }
 }
 
-void Compiler::Patch( PatchChain* chain, U8* targetPtr )
+void Compiler::Patch( PatchChain* chain, int32_t targetIndex )
 {
-    U8* target = (targetPtr != nullptr) ? targetPtr : mCodeBinPtr;
+    int32_t target = (targetIndex >= 0) ? targetIndex : static_cast<int32_t>(mCodeBin.size());
 
     for ( InstPatch* link = chain->First; link != nullptr; link = link->Next )
     {
-        ptrdiff_t diff = target - (link->Inst + BranchInst::Size);
+        ptrdiff_t diff = target - (link->Ref + BranchInst::Size);
 
         if ( diff < BranchInst::OffsetMin || diff > BranchInst::OffsetMax )
-            mRep.ThrowError( CERR_UNSUPPORTED, nullptr, "Branch target is too far." );
+            mRep.ThrowSemanticsError( nullptr, "Branch target is too far." );
 
-        BranchInst::StoreOffset( &link->Inst[1], diff );
+        BranchInst::StoreOffset( &mCodeBin[link->Ref + 1], static_cast<BranchInst::TOffset>(diff) );
     }
 
-    chain->PatchedPtr = target;
+    chain->PatchedInstIndex = target;
 }
 
-void Compiler::PatchCalls( PatchChain* chain, U32 addr )
+void Compiler::PatchCalls( FuncPatchChain* chain, uint32_t addr )
 {
-    for ( InstPatch* link = chain->First; link != nullptr; link = link->Next )
+    for ( FuncInstPatch* link = chain->First; link != nullptr; link = link->Next )
     {
-        StoreU24( link->Inst, addr );
+        void* refPtr = nullptr;
+
+        switch ( link->Ref.Kind )
+        {
+        case CodeRefKind::Code:  refPtr = &mCodeBin[link->Ref.Location]; break;
+        case CodeRefKind::Data:  refPtr = &mGlobals[link->Ref.Location]; break;
+        case CodeRefKind::Const: refPtr = &mConsts[link->Ref.Location]; break;
+        default:
+            THROW_INTERNAL_ERROR( "" );
+        }
+
+        StoreU24( (uint8_t*) refPtr, addr );
     }
 }
 
@@ -1573,22 +1876,18 @@ void Compiler::GenerateUnaryPrimitive( Syntax* elem, const GenConfig& config, Ge
     }
     else
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = 0;
-        mCodeBinPtr += 2;
+        EmitU8( OP_LDC_S, 0 );
 
         Generate( elem );
 
-        mCodeBinPtr[0] = OP_PRIM;
-        mCodeBinPtr[1] = PRIM_SUB;
-        mCodeBinPtr += 2;
+        EmitU8( OP_PRIM, PRIM_SUB );
 
         IncreaseExprDepth();
         DecreaseExprDepth();
     }
 }
 
-void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, uint8_t primitive, const GenConfig& config, GenStatus& status )
 {
     if ( config.discard )
     {
@@ -1601,19 +1900,17 @@ void Compiler::GenerateBinaryPrimitive( BinaryExpr* binary, int primitive, const
         Generate( binary->Left.get() );
         Generate( binary->Right.get() );
 
-        mCodeBinPtr[0] = OP_PRIM;
-        mCodeBinPtr[1] = primitive;
-        mCodeBinPtr += 2;
+        EmitU8( OP_PRIM, primitive );
 
         DecreaseExprDepth();
     }
 }
 
-void Compiler::EmitLoadAddress( Syntax* node, Declaration* baseDecl, I32 offset )
+void Compiler::EmitLoadAddress( Syntax* node, Declaration* baseDecl, int32_t offset )
 {
     if ( baseDecl == nullptr )
     {
-        mRep.ThrowInternalError( "Missing declaration" );
+        THROW_INTERNAL_ERROR( "Missing declaration" );
     }
     else
     {
@@ -1622,52 +1919,125 @@ void Compiler::EmitLoadAddress( Syntax* node, Declaration* baseDecl, I32 offset 
         switch ( baseDecl->Kind )
         {
         case DeclKind::Global:
+            assert( offset >= 0 && offset < GlobalSizeMax );
+            assert( offset < (GlobalSizeMax - ((GlobalStorage*) baseDecl)->Offset) );
+
             addrWord = CodeAddr::Build(
                 ((GlobalStorage*) baseDecl)->Offset + offset,
                 ((GlobalStorage*) baseDecl)->ModIndex );
-            mCodeBinPtr[0] = OP_LDC;
-            mCodeBinPtr++;
-            WriteU32( mCodeBinPtr, addrWord );
+            EmitU32( OP_LDC, addrWord );
+            IncreaseExprDepth();
             break;
 
         case DeclKind::Local:
-            mCodeBinPtr[0] = OP_LDLOCA;
-            mCodeBinPtr[1] = ((LocalStorage*) baseDecl)->Offset - offset;
-            mCodeBinPtr += 2;
+            assert( offset >= 0 && offset < LocalSizeMax );
+            assert( offset <= ((LocalStorage*) baseDecl)->Offset );
+
+            EmitU8( OP_LDLOCA, static_cast<uint8_t>(((LocalStorage*) baseDecl)->Offset - offset) );
+            IncreaseExprDepth();
+            break;
+
+        case DeclKind::LoadedAddress:
+            assert( offset >= 0 && offset < DataSizeMax );
+
+            if ( offset > 0 )
+                EmitSpilledAddrOffset( offset );
+            break;
+
+        case DeclKind::Param:
+            {
+                auto param = (ParamStorage*) baseDecl;
+
+                if ( IsOpenArrayType( *param->Type ) )
+                {
+                    EmitU8( OP_LDARG, static_cast<uint8_t>(param->Offset + 1) );
+                    EmitU8( OP_LDARG, static_cast<uint8_t>(param->Offset + 0) );
+                    IncreaseExprDepth( 2 );
+                }
+                else if ( param->Mode == ParamMode::Value )
+                {
+                    assert( offset >= 0 && offset < ParamSizeMax );
+                    assert( offset < (ParamSizeMax - param->Offset) );
+
+                    EmitU8( OP_LDARGA, static_cast<uint8_t>(param->Offset + offset) );
+                    IncreaseExprDepth();
+                }
+                else if ( param->Mode == ParamMode::RefInOut
+                    || param->Mode == ParamMode::RefIn )
+                {
+                    EmitU8( OP_LDARG, param->Offset );
+
+                    if ( offset != 0 )
+                        EmitSpilledAddrOffset( offset );
+
+                    IncreaseExprDepth();
+                }
+                else
+                {
+                    THROW_INTERNAL_ERROR( "EmitLoadAddress: Bad parameter mode" );
+                }
+            }
+            break;
+
+        case DeclKind::Const:
+            {
+                auto    constant = (Constant*) baseDecl;
+                ModSize modIndex = constant->ModIndex | CONST_SECTION_MOD_INDEX_MASK;
+
+                assert( offset >= 0 && offset < GlobalSizeMax );
+                assert( offset < (GlobalSizeMax - constant->Offset) );
+
+                if ( !constant->Serialized )
+                    SerializeConstant( constant );
+
+                addrWord = CodeAddr::Build(
+                    constant->Offset + offset,
+                    modIndex );
+                EmitU32( OP_LDC, addrWord );
+                IncreaseExprDepth();
+            }
             break;
 
         default:
-            mRep.ThrowError( CERR_SEMANTICS, node, "'aref' supports only globals and locals" );
+            mRep.ThrowSemanticsError( node, "Can't take address of declaration" );
         }
     }
-
-    IncreaseExprDepth();
 }
 
-void Compiler::GenerateArefAddr( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status )
+void Compiler::GenerateArefAddrBase( Syntax* fullExpr, Syntax* head, Syntax* index, const GenConfig& config, GenStatus& status )
 {
     assert( config.calcAddr );
 
-    auto arrayType = (ArrayType&) *indexExpr->Head->Type;
+    auto& arrayType = (ArrayType&) *head->Type;
 
-    Generate( indexExpr->Head.get(), config, status );
+    Generate( head, config, status );
 
-    std::optional<int32_t> optIndexVal;
-
-    optIndexVal = GetOptionalSyntaxValue( indexExpr->Index.get() );
-
-    if ( optIndexVal.has_value() )
+    if ( arrayType.Count > 0 )
     {
-        status.offset += optIndexVal.value() * arrayType.ElemType->GetSize();
-        return;
+        std::optional<int32_t> optIndexVal;
+
+        optIndexVal = GetFinalOptionalSyntaxValue( index );
+
+        if ( optIndexVal.has_value() )
+        {
+            assert( optIndexVal.value() < DataSizeMax );
+
+            status.offset += static_cast<DataSize>(optIndexVal.value()) * arrayType.ElemType->GetSize();
+            return;
+        }
     }
+    // Else, open arrays need to check the index
 
     if ( !status.spilledAddr )
     {
-        EmitLoadAddress( indexExpr, status.baseDecl, status.offset );
+        EmitLoadAddress( fullExpr, status.baseDecl, status.offset );
 
         // Set this after emitting the original decl's address above
-        status.baseDecl = mLoadedAddrDecl.get();
+        if ( status.baseDecl->IsReadOnly )
+            status.baseDecl = mLoadedAddrDeclConst.get();
+        else
+            status.baseDecl = mLoadedAddrDecl.get();
+
         status.offset = 0;
         status.spilledAddr = true;
     }
@@ -1679,29 +2049,68 @@ void Compiler::GenerateArefAddr( IndexExpr* indexExpr, const GenConfig& config, 
         status.offset = 0;
     }
 
-    Generate( indexExpr->Index.get() );
+    // A slice of [..] only passes thru to the head of the expression
 
-    if ( arrayType.ElemType->GetSize() > 255 )
+    if ( fullExpr->Kind == SyntaxKind::Slice )
     {
-        mCodeBinPtr[0] = OP_INDEX;
-        mCodeBinPtr += 1;
-        WriteU32( mCodeBinPtr, arrayType.ElemType->GetSize() );
+        auto firstVal = GetFinalOptionalSyntaxValue( index );
+        auto lastVal = GetFinalOptionalSyntaxValue( ((SliceExpr*) fullExpr)->LastIndex.get() );
+
+        if ( firstVal.has_value() && firstVal == 0
+            && lastVal.has_value() && lastVal == -1 )
+        {
+            return;
+        }
     }
-    else if ( arrayType.ElemType->GetSize() > 1 )
+
+    Generate( index );
+
+    if ( arrayType.Count == 0 )
     {
-        mCodeBinPtr[0] = OP_INDEX_S;
-        mCodeBinPtr[1] = arrayType.ElemType->GetSize();
-        mCodeBinPtr += 2;
+        if ( fullExpr->Kind == SyntaxKind::Index )
+        {
+            EmitU24( OP_INDEXOPEN, arrayType.ElemType->GetSize() );
+            DecreaseExprDepth();
+        }
+        else
+        {
+            Generate( ((SliceExpr*) fullExpr)->LastIndex.get() );
+
+            auto firstVal = GetFinalOptionalSyntaxValue( index );
+            auto lastVal = GetFinalOptionalSyntaxValue( ((SliceExpr*) fullExpr)->LastIndex.get() );
+
+            if ( firstVal.has_value() && lastVal.has_value() && lastVal != -1 )
+            {
+                EmitU24( OP_RANGEOPENCLOSED, arrayType.ElemType->GetSize() );
+                DecreaseExprDepth( 2 );
+            }
+            else
+            {
+                EmitU24( OP_RANGEOPEN, arrayType.ElemType->GetSize() );
+                DecreaseExprDepth( 1 );
+            }
+        }
     }
     else
     {
-        // TODO: Do we need an add-address primitive that doesn't overwrite the module byte?
-        mCodeBinPtr[0] = OP_PRIM;
-        mCodeBinPtr[1] = PRIM_ADD;
-        mCodeBinPtr += 2;
+        if ( fullExpr->Kind == SyntaxKind::Index )
+        {
+            EmitOpenIndex( OP_INDEX, arrayType.ElemType->GetSize(), arrayType.Count );
+        }
+        else
+        {
+            Generate( ((SliceExpr*) fullExpr)->LastIndex.get() );
+
+            EmitOpenIndex( OP_RANGE, arrayType.ElemType->GetSize(), arrayType.Count );
+        }
     }
 
     DecreaseExprDepth();
+}
+
+void Compiler::GenerateArefAddr( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status )
+{
+    GenerateArefAddrBase( indexExpr, indexExpr->Head.get(), indexExpr->Index.get(), config, status );
 }
 
 void Compiler::GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenStatus& status )
@@ -1717,12 +2126,30 @@ void Compiler::GenerateAref( IndexExpr* indexExpr, const GenConfig& config, GenS
         return;
     }
 
-    Declaration* baseDecl = nullptr;
-    int32_t offset = 0;
+    auto& arrayType = (ArrayType&) *indexExpr->Head->Type;
+    auto& elemType = *arrayType.ElemType;
 
-    CalcAddress( indexExpr, baseDecl, offset );
+    EmitCopyPartOfAggregate( indexExpr, &elemType );
+}
 
-    EmitLoadScalar( indexExpr, baseDecl, offset );
+void Compiler::EmitCopyPartOfAggregate( Syntax* partNode, Type* partType )
+{
+    // Calculate address in each clause below instead of once here,
+    // because it might spill. And in the case of array, the spilled address
+    // must be right after the size.
+
+    if ( IsScalarType( partType->GetKind() ) )
+    {
+        auto addr = CalcAddress( partNode );
+
+        EmitLoadScalar( partNode, addr.decl, addr.offset );
+    }
+    else
+    {
+        auto addr = CalcAddress( partNode );
+
+        EmitLoadAddress( partNode, addr.decl, addr.offset );
+    }
 }
 
 void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
@@ -1730,7 +2157,7 @@ void Compiler::VisitIndexExpr( IndexExpr* indexExpr )
     GenerateAref( indexExpr, Config(), Status() );
 }
 
-void Compiler::CalcAddress( Syntax* expr, Declaration*& baseDecl, int32_t& offset )
+Compiler::CalculatedAddress Compiler::CalcAddress( Syntax* expr, bool writable )
 {
     GenConfig config{};
     GenStatus status{};
@@ -1739,8 +2166,19 @@ void Compiler::CalcAddress( Syntax* expr, Declaration*& baseDecl, int32_t& offse
 
     Generate( expr, config, status );
 
-    baseDecl = status.baseDecl;
-    offset = status.offset;
+    if ( status.baseDecl == nullptr )
+        mRep.ThrowSemanticsError( expr, "Expression has no address" );
+
+    if ( writable && status.baseDecl->IsReadOnly )
+        mRep.ThrowSemanticsError( expr, "Constants cannot be changed" );
+
+    CalculatedAddress addr{};
+
+    addr.decl = status.baseDecl;
+    addr.offset = status.offset;
+    addr.spilled = status.spilledAddr;
+
+    return addr;
 }
 
 void Compiler::VisitSliceExpr( SliceExpr* sliceExpr )
@@ -1755,52 +2193,57 @@ void Compiler::VisitSliceExpr( SliceExpr* sliceExpr )
     }
     else if ( config.calcAddr )
     {
-        Generate( sliceExpr->Head.get(), config, status );
-
-        auto arrayType = (ArrayType&) *sliceExpr->Head->Type;
-
-        int32_t indexVal = GetSyntaxValue( sliceExpr->FirstIndex.get(), "" );
-
-        status.offset += indexVal * arrayType.ElemType->GetSize();
+        GenerateArefAddrBase( sliceExpr, sliceExpr->Head.get(), sliceExpr->FirstIndex.get(), config, status );
         return;
     }
 
-    assert( false );
+    auto addr = CalcAddress( sliceExpr );
+
+    EmitLoadAddress( sliceExpr, addr.decl, addr.offset );
+}
+
+void Compiler::GenerateFieldAccess( DotExpr* dotExpr, const GenConfig& config, GenStatus& status )
+{
+    if ( config.discard )
+    {
+        status.discarded = true;
+        return;
+    }
+    else if ( config.calcAddr )
+    {
+        Generate( dotExpr->Head.get(), config, status );
+
+        auto field = (FieldStorage*) dotExpr->GetDecl();
+
+        status.offset += field->Offset;
+        return;
+    }
+
+    auto    field = (FieldStorage*) dotExpr->GetDecl();
+    auto&   fieldType = *field->GetType();
+
+    EmitCopyPartOfAggregate( dotExpr, &fieldType );
 }
 
 void Compiler::VisitDotExpr( DotExpr* dotExpr )
 {
-    GenerateValue( dotExpr, dotExpr->GetDecl(), Config(), Status() );
+    auto decl = dotExpr->GetDecl();
+
+    if ( decl->Kind == DeclKind::Field )
+    {
+        GenerateFieldAccess( dotExpr, Config(), Status() );
+    }
+    else
+    {
+        GenerateValue( dotExpr, decl, Config(), Status() );
+    }
 }
 
 void Compiler::GenerateDefvar( VarDecl* varDecl, const GenConfig& config, GenStatus& status )
 {
     auto global = (GlobalStorage*) varDecl->GetDecl();
 
-    GenerateGlobalInit( global->Offset, varDecl->Initializer.get() );
-}
-
-void Compiler::GenerateGlobalInit( int32_t offset, Syntax* initializer )
-{
-    if ( initializer == nullptr )
-        return;
-
-    auto type = initializer->Type.get();
-
-    if ( IsScalarType( type->GetKind() ) )
-    {
-        AddGlobalData( offset, initializer );
-    }
-    else if ( type->GetKind() == TypeKind::Array )
-    {
-        auto arrayType = (ArrayType*) type;
-
-        AddGlobalDataArray( offset, initializer, arrayType->Count );
-    }
-    else
-    {
-        mRep.ThrowError( CERR_SEMANTICS, initializer, "'defvar' takes a name or name and type" );
-    }
+    mGlobalDataGenerator.GenerateGlobalInit( global->Offset, varDecl->Initializer.get() );
 }
 
 void Compiler::VisitVarDecl( VarDecl* varDecl )
@@ -1808,93 +2251,152 @@ void Compiler::VisitVarDecl( VarDecl* varDecl )
     GenerateDefvar( varDecl, Config(), Status() );
 }
 
-void Compiler::AddGlobalData( U32 offset, Syntax* valueElem )
+void Compiler::EmitGlobalFuncAddress( std::optional<std::shared_ptr<Function>> optFunc, GlobalSize offset, int32_t* buffer, Syntax* initializer )
 {
-    if ( valueElem->Type->GetKind() == TypeKind::Pointer )
+    if ( optFunc.has_value() )
     {
-        if ( valueElem->Kind == SyntaxKind::AddrOfExpr )
+        EmitFuncAddress( optFunc.value().get(), { CodeRefKind::Data, offset } );
+    }
+    else
+    {
+        // We don't need to check if it's writable, because we'll explicitly check that it's a global
+        auto addr = CalcAddress( initializer );
+
+        if ( addr.decl->Kind != DeclKind::Global )
+            mRep.ThrowSemanticsError( initializer, "Const or global expected" );
+
+        auto       global    = (GlobalStorage*) addr.decl;
+        GlobalSize srcOffset = global->Offset + addr.offset;
+
+        PushDeferredGlobal( *initializer->Type, ModuleSection::Data, global->ModIndex, srcOffset, offset );
+    }
+}
+
+void Compiler::PushDeferredGlobal( Type& type, ModuleSection srcSection, ModSize srcModIndex, GlobalSize srcOffset, GlobalSize dstOffset )
+{
+    MemTransfer  transfer;
+
+    transfer.SrcSection = srcSection;
+    transfer.SrcModIndex = srcModIndex;
+
+    transfer.Src = srcOffset;
+    transfer.Dst = dstOffset;
+    transfer.Size = type.GetSize();
+
+    mDeferredGlobals.push_back( transfer );
+}
+
+void Compiler::CopyGlobalAggregateBlock( GlobalSize offset, Syntax* valueNode )
+{
+    // Defer these globals until all function addresses are known and put in source blocks
+
+    auto srcAddr = CalcAddress( valueNode );
+
+    if ( srcAddr.decl->Kind == DeclKind::Global )
+    {
+        auto       global    = (GlobalStorage*) srcAddr.decl;
+        GlobalSize srcOffset = global->Offset + srcAddr.offset;
+
+        PushDeferredGlobal( *valueNode->Type, ModuleSection::Data, global->ModIndex, srcOffset, offset );
+    }
+    else if ( srcAddr.decl->Kind == DeclKind::Const )
+    {
+        assert( ((Constant*) srcAddr.decl)->Serialized );
+        assert( ((Constant*) srcAddr.decl)->Value.Is( ValueKind::Aggregate ) );
+
+        auto       constant  = (Constant*) srcAddr.decl;
+        GlobalSize srcOffset = constant->Offset + srcAddr.offset;
+
+        PushDeferredGlobal( *valueNode->Type, ModuleSection::Const, constant->ModIndex, srcOffset, offset );
+    }
+    else
+    {
+        THROW_INTERNAL_ERROR( "CopyGlobalAggregateBlock: DeclKind" );
+    }
+}
+
+void Compiler::VisitConstDecl( ConstDecl* constDecl )
+{
+    // Constants inside functions are serialized on demand
+    if ( mInFunc )
+        return;
+
+    // All global constants except scalars are serialized, because they're public,
+    // and can be accessed from any module.
+
+    // Scalar constants are skipped, because their addresses are never needed:
+    // Scalar parameters with RefIn mode are changed to ValueIn mode.
+
+    if ( IsSerializableConstType( *constDecl->Decl->GetType() ) )
+        SerializeConstant( (Constant*) constDecl->GetDecl() );
+}
+
+void Compiler::SerializeConstant( Constant* constant )
+{
+    // Constants in other modules would have been serialized already
+    assert( constant->ModIndex == mModIndex );
+    assert( !constant->Serialized );
+
+    auto type = constant->GetType();
+
+    assert( type->GetSize() <= (mConsts.size() - mTotalConst) );
+
+    constant->Serialized = true;
+    constant->Offset = mTotalConst;
+
+    // Scalar constants are not serialized
+
+    if ( constant->Value.Is( ValueKind::Aggregate ) )
+    {
+        auto& aggregate = constant->Value.GetAggregate();
+
+        SerializeConstPart( type.get(), aggregate.Module->GetConsts(), aggregate.Offset, mConsts, mTotalConst );
+    }
+    else
+    {
+        THROW_INTERNAL_ERROR( "SerializeConstant: ValueKind" );
+    }
+
+    mTotalConst += type->GetSize();
+}
+
+void Compiler::SerializeConstPart( Type* type, GlobalVec& srcBuffer, GlobalSize srcOffset, GlobalVec& dstBuffer, GlobalSize dstOffset )
+{
+    if ( IsIntegralType( type->GetKind() ) )
+    {
+        dstBuffer[dstOffset] = srcBuffer[srcOffset];
+    }
+    else if ( IsPtrFuncType( *type ) )
+    {
+        auto func = mGlobalAttrs.GetFunction( srcBuffer[srcOffset] );
+
+        EmitFuncAddress( func.get(), { CodeRefKind::Const, dstOffset }  );
+    }
+    else if ( type->GetKind() == TypeKind::Array )
+    {
+        auto arrayType = (ArrayType*) type;
+        auto elemType = arrayType->ElemType.get();
+
+        for ( GlobalSize i = 0; i < arrayType->Count; i++ )
         {
-            auto addrOf = (AddrOfExpr*) valueElem;
+            SerializeConstPart( elemType, srcBuffer, srcOffset, dstBuffer, dstOffset );
 
-            uint8_t* dstPtr = (uint8_t*) &mGlobals[offset];
-
-            EmitFuncAddress( (Function*) addrOf->Inner->GetDecl(), dstPtr );
+            srcOffset += elemType->GetSize();
+            dstOffset += elemType->GetSize();
         }
-        else
+    }
+    else if ( type->GetKind() == TypeKind::Record )
+    {
+        auto recordType = (RecordType*) type;
+
+        for ( auto& f : recordType->GetOrderedFields() )
         {
-            mRep.ThrowInternalError();
+            SerializeConstPart( f->GetType().get(), srcBuffer, srcOffset + f->Offset, dstBuffer, dstOffset + f->Offset );
         }
     }
     else
     {
-        mGlobals[offset] = GetSyntaxValue( valueElem, "Globals must be initialized with constant data" );
-    }
-}
-
-void Compiler::AddGlobalDataArray( int32_t offset, Syntax* valueElem, size_t size )
-{
-    if ( valueElem->Kind != SyntaxKind::ArrayInitializer )
-        mRep.ThrowError( CERR_SEMANTICS, valueElem, "Arrays must be initialized with array initializer" );
-
-    auto    initList = (InitList*) valueElem;
-    size_t  i = 0;
-    size_t  globalIndex = offset;
-
-    for ( auto& entry : initList->Values )
-    {
-        if ( i == size )
-            mRep.ThrowError( CERR_SEMANTICS, valueElem, "Array has too many initializers" );
-
-        GenerateGlobalInit( globalIndex, entry.get() );
-        i++;
-        globalIndex += entry->Type->GetSize();
-    }
-
-    if ( initList->Fill == ArrayFill::Extrapolate && i >= 1 )
-    {
-        I32 prevValue = mGlobals[offset + i - 1];
-        I32 step = 0;
-
-        if ( i >= 2 )
-        {
-            step = prevValue - mGlobals[offset + i - 2];
-        }
-
-        for ( ; i < size; i++ )
-        {
-            I32 newValue = prevValue + step;
-
-            mGlobals[offset + i] = newValue;
-            prevValue = newValue;
-        }
-    }
-    else if ( initList->Fill == ArrayFill::Repeat && i >= 1 )
-    {
-        Syntax* lastNode = initList->Values.back().get();
-
-        for ( ; i < size; i++ )
-        {
-            GenerateGlobalInit( globalIndex, lastNode );
-            globalIndex += lastNode->Type->GetSize();
-        }
-    }
-}
-
-void Compiler::GenerateLambdas()
-{
-    long i = 0;
-
-    for ( auto it = mLambdas.begin(); it != mLambdas.end(); it++, i++ )
-    {
-        int address = mCodeBinPtr - mCodeBin;
-        int addrWord = CodeAddr::Build( address, mModIndex );
-        StoreU32( it->Patch, addrWord );
-
-        auto func = (Function*) it->Definition->GetDecl();
-
-        func->Address = address;
-
-        GenerateProc( it->Definition, func );
+        THROW_INTERNAL_ERROR( "SerializeConstPart: TypeKind" );
     }
 }
 
@@ -1905,14 +2407,10 @@ void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
 
     constexpr uint8_t PushInstSize = 2;
 
-    U8* bodyPtr = mCodeBinPtr;
-    U8* pushCountPatch = nullptr;
+    int32_t bodyLoc = static_cast<int32_t>(mCodeBin.size());
 
     // Assume that there are local variables
-    *mCodeBinPtr = OP_PUSH;
-    mCodeBinPtr++;
-    pushCountPatch = mCodeBinPtr;
-    mCodeBinPtr++;
+    EmitU8( OP_PUSH, 0 );
 
     mCurExprDepth = 0;
     mMaxExprDepth = 0;
@@ -1927,43 +2425,41 @@ void Compiler::GenerateProc( ProcDecl* procDecl, Function* func )
 
     mGenStack.pop_back();
 
+    assert( mCurExprDepth == 1 );
+
     if ( !status.tailRet )
     {
-        mCodeBinPtr[0] = OP_RET;
-        mCodeBinPtr += 1;
+        Emit( OP_RET );
     }
 
     if ( func->LocalCount > 0 )
     {
-        *pushCountPatch = (uint8_t) func->LocalCount;
+        size_t index = bodyLoc + 1;
+        mCodeBin[index] = (uint8_t) func->LocalCount;
     }
     else
     {
         // No locals. So, delete the PUSH instruction
-        memmove( bodyPtr, bodyPtr + PushInstSize, (mCodeBinPtr - bodyPtr) - PushInstSize );
-        mCodeBinPtr -= PushInstSize;
+        DeleteCode( bodyLoc, PushInstSize );
 
         // If local lambda references were generated, then shift them
         // This also includes references to any function
-        for ( auto ref : mLocalAddrRefs )
+
+        for ( const auto& ref : mLocalAddrRefs )
         {
-            U8** ppInst = nullptr;
+            int32_t* instIndexPtr = nullptr;
 
             switch ( ref.Kind )
             {
-            case AddrRefKind::Lambda:
-                ppInst = &mLambdas[ref.LambdaIndex].Patch;
-                break;
-
             case AddrRefKind::Inst:
-                ppInst = ref.InstPtr;
+                instIndexPtr = ref.InstIndexPtr;
                 break;
 
             default:
-                mRep.ThrowInternalError();
+                THROW_INTERNAL_ERROR( "" );
             }
 
-            *ppInst -= PushInstSize;
+            *instIndexPtr -= PushInstSize;
         }
     }
 
@@ -2011,9 +2507,7 @@ void Compiler::GenerateNilIfNeeded( const GenConfig& config, GenStatus& status )
     }
     else
     {
-        mCodeBinPtr[0] = OP_LDC_S;
-        mCodeBinPtr[1] = 0;
-        mCodeBinPtr += 2;
+        EmitU8( OP_LDC_S, 0 );
 
         IncreaseExprDepth();
     }
@@ -2033,41 +2527,115 @@ Compiler::GenStatus& Compiler::Status()
 
 void Compiler::GenerateSentinel()
 {
-    for ( int i = 0; i < SENTINEL_SIZE; i++ )
-    {
-        mCodeBinPtr[i] = OP_SENTINEL;
-    }
+    constexpr auto ALIGN = MODULE_CODE_ALIGNMENT;
 
-    mCodeBinPtr += SENTINEL_SIZE;
+    size_t alignedSize = ((mCodeBin.size() + SENTINEL_SIZE + (ALIGN - 1)) / ALIGN) * ALIGN;
+    size_t paddingSize = alignedSize - mCodeBin.size();
+    size_t curIndex = ReserveProgram( paddingSize );
+
+    for ( size_t i = 0; i < paddingSize; i++ )
+    {
+        mCodeBin[curIndex++] = OP_SENTINEL;
+    }
 }
 
-I32 Compiler::GetSyntaxValue( Syntax* node, const char* message )
+void Compiler::FinalizeConstData()
 {
-    auto optValue = GetOptionalSyntaxValue( node );
+    mConsts.resize( mTotalConst );
+
+    // Replace original constants with final values and layout
+
+    mModuleAttrs->GetConsts() = mConsts;
+
+    // Point references to their values in the final layout
+
+    for ( auto& [name, decl] : mPublicTable )
+    {
+        if ( decl->Kind == DeclKind::Const )
+        {
+            auto& constant = (Constant&) *decl;
+
+            if ( constant.Value.Is( ValueKind::Aggregate ) )
+            {
+                assert( constant.Serialized );
+
+                constant.Value.GetAggregate().Offset = constant.Offset;
+            }
+        }
+    }
+}
+
+int32_t Compiler::GetSyntaxValue( Syntax* node, const char* message )
+{
+    auto optValue = GetFinalOptionalSyntaxValue( node );
 
     if ( optValue.has_value() )
         return optValue.value();
 
     if ( message != nullptr )
-        mRep.ThrowError( CERR_SEMANTICS, node, message );
+        mRep.ThrowSemanticsError( node, message );
     else
-        mRep.ThrowError( CERR_SEMANTICS, node, "Expected a constant value" );
+        mRep.ThrowSemanticsError( node, "Expected a constant value" );
 }
 
-void Compiler::IncreaseExprDepth()
+std::optional<int32_t> Compiler::GetFinalOptionalSyntaxValue( Syntax* node )
 {
-    mCurExprDepth++;
+#if defined( GEMINIVM_DISABLE_FOLDING_PASS )
+    if ( node->Kind != SyntaxKind::Number )
+    {
+        FolderVisitor folder( mRep.GetLog(), mConstIndexFuncMap );
+
+        return folder.EvaluateInt( node );
+    }
+#endif
+
+    return Gemini::GetFinalOptionalSyntaxValue( node );
+}
+
+void Compiler::IncreaseExprDepth( LocalSize amount )
+{
+    if ( amount > (LocalSizeMax - mCurExprDepth) )
+        mRep.ThrowSemanticsError( NULL, "Expression is too deep" );
+
+    mCurExprDepth += amount;
 
     if ( mMaxExprDepth < mCurExprDepth )
         mMaxExprDepth = mCurExprDepth;
 }
 
-void Compiler::DecreaseExprDepth( int amount )
+void Compiler::DecreaseExprDepth( LocalSize amount )
 {
     assert( amount >= 0 );
     assert( amount <= mCurExprDepth );
 
     mCurExprDepth -= amount;
+}
+
+void Compiler::CopyDeferredGlobals()
+{
+    for ( const auto& transfer : mDeferredGlobals )
+    {
+        int32_t* pSrc = nullptr;
+
+        switch ( transfer.SrcSection )
+        {
+        case ModuleSection::Data:
+            pSrc = &mGlobals[transfer.Src];
+            break;
+
+        case ModuleSection::Const:
+            if ( transfer.SrcModIndex == mModIndex )
+                pSrc = &mConsts[transfer.Src];
+            else
+                pSrc = &mGlobalAttrs.GetModule( transfer.SrcModIndex )->GetConsts()[transfer.Src];
+            break;
+
+        default:
+            THROW_INTERNAL_ERROR( "CopyDeferredGlobals: ModuleSection" );
+        }
+
+        std::copy_n( pSrc, transfer.Size, &mGlobals[transfer.Dst] );
+    }
 }
 
 void Compiler::CalculateStackDepth()
@@ -2085,7 +2653,7 @@ void Compiler::CalculateStackDepth()
 
             CalculateStackDepth( func );
 
-            if ( name._Starts_with( "$Lambda$" ) )
+            if ( func->IsLambda )
             {
                 callStats = &mStats.Lambda;
             }
@@ -2099,7 +2667,7 @@ void Compiler::CalculateStackDepth()
 
             // Only count parameters of publics, if that's ever a distinction
 
-            int16_t stackUsage = func->TreeStackUsage + func->ParamCount;
+            uint32_t stackUsage = func->TreeStackUsage + func->ParamCount;
 
             callStats->MaxCallDepth  = std::max( callStats->MaxCallDepth,  func->CallDepth );
             callStats->MaxStackUsage = std::max( callStats->MaxStackUsage, stackUsage );
@@ -2121,18 +2689,34 @@ void Compiler::CalculateStackDepth( Function* func )
         return;
     }
 
-    // TODO: Put Machine::FRAME_WORDS somewhere common, and use it here.
-
     func->IsCalculating = true;
-    func->IndividualStackUsage = 2 + func->LocalCount;
+    func->IndividualStackUsage = FRAME_WORDS + func->LocalCount;
 
-    int16_t maxChildDepth = 0;
-    int16_t maxChildStackUsage = func->ExprDepth;
+    uint32_t maxChildDepth = 0;
+    uint32_t maxChildStackUsage = func->ExprDepth;
 
     for ( const auto& site : func->CalledFunctions )
     {
-        if ( auto it = mGlobalTable.find( site.FunctionName );
-            it != mGlobalTable.end() )
+        SymTable* table = nullptr;
+
+        if ( site.ModIndex == mModIndex )
+        {
+            table = &mGlobalTable;
+        }
+        else
+        {
+            if ( auto modIt = mModulesById.find( site.ModIndex );
+                modIt != mModulesById.end() )
+            {
+                table = &modIt->second->Table;
+            }
+        }
+
+        if ( table == nullptr )
+            continue;
+
+        if ( auto it = table->find( site.FunctionName );
+            it != table->end() )
         {
             if ( it->second->Kind != DeclKind::Func )
                 continue;
@@ -2141,7 +2725,7 @@ void Compiler::CalculateStackDepth( Function* func )
 
             CalculateStackDepth( childFunc );
 
-            int16_t childStackUsage = childFunc->TreeStackUsage + site.ExprDepth;
+            uint32_t childStackUsage = childFunc->TreeStackUsage + site.ExprDepth;
 
             maxChildDepth = std::max( maxChildDepth, childFunc->CallDepth );
             maxChildStackUsage = std::max( maxChildStackUsage, childStackUsage );
@@ -2163,79 +2747,146 @@ void Compiler::CalculateStackDepth( Function* func )
     func->TreeStackUsage = func->IndividualStackUsage + maxChildStackUsage;
 }
 
+size_t Compiler::ReserveProgram( size_t size )
+{
+    if ( size > (CodeSizeMax - mCodeBin.size()) )
+        mRep.ThrowSemanticsError( NULL, "Generated code is too big. Max=%u", CodeSizeMax );
+
+    size_t curIndex = mCodeBin.size();
+    mCodeBin.resize( mCodeBin.size() + size );
+
+    return curIndex;
+}
+
+size_t Compiler::ReserveCode( size_t size )
+{
+    assert( mInFunc );
+    return ReserveProgram( size );
+}
+
+void Compiler::DeleteCode( size_t size )
+{
+    assert( mCodeBin.size() >= size );
+
+    mCodeBin.resize( mCodeBin.size() - size );
+}
+
+void Compiler::DeleteCode( size_t start, size_t size )
+{
+    assert( start < mCodeBin.size() && size <= (mCodeBin.size() - start) );
+
+    mCodeBin.erase( mCodeBin.begin() + start, mCodeBin.begin() + start + size );
+}
+
+void Compiler::EmitBranch( OpCode opcode, PatchChain* chain )
+{
+    PushPatch( chain );
+
+    size_t curIndex = ReserveCode( BranchInst::Size );
+
+    mCodeBin[curIndex] = opcode;
+
+    DISASSEMBLE( &mCodeBin[curIndex], BranchInst::Size );
+}
+
+void Compiler::Emit( OpCode opcode )
+{
+    size_t curIndex = ReserveCode( 1 );
+
+    mCodeBin[curIndex] = opcode;
+
+    DISASSEMBLE( &mCodeBin[curIndex], 1 );
+}
+
+void Compiler::EmitU8( OpCode opcode, uint8_t operand )
+{
+    size_t curIndex = ReserveCode( 2 );
+
+    mCodeBin[curIndex] = opcode;
+    mCodeBin[curIndex + 1] = operand;
+
+    DISASSEMBLE( &mCodeBin[curIndex], 2 );
+}
+
+void Compiler::EmitU16( OpCode opcode, uint16_t operand )
+{
+    size_t curIndex = ReserveCode( 3 );
+
+    mCodeBin[curIndex] = opcode;
+
+    StoreU16( &mCodeBin.at( curIndex + 1 ), operand );
+
+    DISASSEMBLE( &mCodeBin[curIndex], 3 );
+}
+
+void Compiler::EmitU24( OpCode opcode, uint32_t operand )
+{
+    size_t curIndex = ReserveCode( 4 );
+
+    mCodeBin[curIndex] = opcode;
+
+    StoreU24( &mCodeBin.at( curIndex + 1 ), operand );
+
+    DISASSEMBLE( &mCodeBin[curIndex], 4 );
+}
+
+void Compiler::EmitU32( OpCode opcode, uint32_t operand )
+{
+    size_t curIndex = ReserveCode( 5 );
+
+    mCodeBin[curIndex] = opcode;
+
+    StoreU32( &mCodeBin.at( curIndex + 1 ), operand );
+
+    DISASSEMBLE( &mCodeBin[curIndex], 5 );
+}
+
+void Compiler::EmitOpenIndex( OpCode opcode, uint32_t stride, uint32_t bound )
+{
+    size_t curIndex = ReserveCode( 7 );
+
+    mCodeBin[curIndex] = opcode;
+
+    StoreU24( &mCodeBin.at( curIndex + 1 ), stride );
+    StoreU24( &mCodeBin.at( curIndex + 4 ), bound );
+
+    DISASSEMBLE( &mCodeBin[curIndex], 7 );
+}
+
+void Compiler::EmitModAccess( OpCode opcode, uint8_t mod, uint16_t addr )
+{
+    size_t curIndex = ReserveCode( 4 );
+
+    mCodeBin[curIndex+0] = opcode;
+    mCodeBin[curIndex+1] = mod;
+
+    StoreU16( &mCodeBin[curIndex + 2], addr );
+
+    DISASSEMBLE( &mCodeBin[curIndex], 4 );
+}
+
 
 //----------------------------------------------------------------------------
+//  Disassembly
+//----------------------------------------------------------------------------
 
-void Log( ICompilerLog* log, LogCategory category, const char* fileName, int line, int col, const char* format, va_list args );
+#if ENABLE_DISASSEMBLY
 
-
-Reporter::Reporter( ICompilerLog* log ) :
-    mLog( log )
+void Disassemble( const uint8_t* program, int size )
 {
-    assert( log != nullptr );
-}
-
-ICompilerLog* Reporter::GetLog()
-{
-    return mLog;
-}
-
-void Reporter::ThrowError( CompilerErr exceptionCode, Syntax* elem, const char* format, ... )
-{
-    va_list args;
-    va_start( args, format );
-    const char* fileName = nullptr;
-    int line = 0;
-    int column = 0;
-    if ( elem != nullptr )
+    Disassembler disassembler( program );
+    int totalBytesDisasm = 0;
+    while ( totalBytesDisasm < size )
     {
-        fileName = elem->FileName;
-        line = elem->Line;
-        column = elem->Column;
+        char disasm[128];
+        int bytesDisasm = disassembler.Disassemble( disasm, std::size( disasm ) );
+        if ( bytesDisasm <= 0 )
+            break;
+        totalBytesDisasm += bytesDisasm;
+        printf( "%s\n", disasm );
     }
-    ThrowError( exceptionCode, fileName, line, column, format, args );
-    va_end( args );
 }
 
-void Reporter::ThrowError( CompilerErr exceptionCode, const char* fileName, int line, int col, const char* format, va_list args )
-{
-    Log( LOG_ERROR, fileName, line, col, format, args );
-    throw CompilerException( exceptionCode );
-}
+#endif
 
-void Reporter::ThrowInternalError()
-{
-    ThrowInternalError( "Internal error" );
-}
-
-void Reporter::ThrowInternalError( const char* format, ... )
-{
-    va_list args;
-    va_start( args, format );
-    ThrowError( CERR_INTERNAL, "", 0, 0, format, args );
-    va_end( args );
-}
-
-void Reporter::Log( LogCategory category, const char* fileName, int line, int col, const char* format, va_list args )
-{
-    ::Log( mLog, category, fileName, line, col, format, args );
-}
-
-void Reporter::LogWarning( const char* fileName, int line, int col, const char* format, ... )
-{
-    va_list args;
-    va_start( args, format );
-    Log( LOG_WARNING, fileName, line, col, format, args );
-    va_end( args );
-}
-
-
-void Log( ICompilerLog* log, LogCategory category, const char* fileName, int line, int col, const char* format, va_list args )
-{
-    if ( log != nullptr )
-    {
-        char msg[256] = "";
-        vsprintf_s( msg, format, args );
-        log->Add( category, fileName, line, col, msg );
-    }
 }

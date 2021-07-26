@@ -6,16 +6,29 @@
 
 #pragma once
 
-#include "GeminiCommon.h"
 
+namespace Gemini
+{
 
 class Disassembler
 {
-    const U8*   mCodeBin;
-    const U8*   mCodePtr;
+public:
+    enum ConstFormat : uint8_t
+    {
+        DecimalConst,
+        HexConst,
+    };
+
+private:
+    const uint8_t*  mCodeBin;
+    const uint8_t*  mCodePtr;
+    bool            mShowInstAddr;
+    ConstFormat     mConstFormat;
 
 public:
-    Disassembler( const U8* code );
+    Disassembler( const uint8_t* code, bool showInstAddr = true, ConstFormat constFormat = DecimalConst );
 
-    int Disassemble( char* disassembly, size_t capacity );
+    int32_t Disassemble( char* disassembly, size_t capacity );
 };
+
+}

@@ -6,28 +6,37 @@
 
 #pragma once
 
+#include "LangCommon.h"
 #include "Syntax.h"
-#include "Compiler.h"
 #include <optional>
 
 
-class FolderVisitor : public IVisitor
+namespace Gemini
 {
-    Reporter                mRep;
-    std::optional<int32_t>  mLastValue;
-    bool                    mFoldNodes;
 
-    std::shared_ptr<IntType>    mIntType;
+class FolderVisitor final : public Visitor
+{
+    std::optional<ValueVariant> mLastValue;
+    bool                        mFoldNodes = false;
+    bool                        mCalcOffset = false;
+    Reporter                    mRep;
+
+    std::optional<int32_t>      mBufOffset;
+    std::shared_ptr<ModuleAttrs> mModule;
 
 public:
     FolderVisitor( ICompilerLog* log );
 
-    std::optional<int32_t> Evaluate( Syntax* node );
+    std::optional<int32_t> EvaluateInt( Syntax* node );
+    std::optional<ValueVariant> Evaluate( Syntax* node );
     void Fold( Syntax* node );
 
-    // IVisitor
+    ValueVariant ReadConstValue( Type& type, std::shared_ptr<ModuleAttrs> module, GlobalSize offset );
+
+    // Visitor
     virtual void VisitAddrOfExpr( AddrOfExpr* addrOf ) override;
     virtual void VisitArrayTypeRef( ArrayTypeRef* typeRef ) override;
+    virtual void VisitAsExpr( AsExpr* asExpr ) override;
     virtual void VisitAssignmentExpr( AssignmentExpr* assignment ) override;
     virtual void VisitBinaryExpr( BinaryExpr* binary ) override;
     virtual void VisitBreakStatement( BreakStatement* breakStmt ) override;
@@ -49,10 +58,10 @@ public:
     virtual void VisitNumberExpr( NumberExpr* numberExpr ) override;
     virtual void VisitParamDecl( ParamDecl* paramDecl ) override;
     virtual void VisitProcDecl( ProcDecl* procDecl ) override;
+    virtual void VisitRecordInitializer( RecordInitializer* recordInitializer ) override;
     virtual void VisitReturnStatement( ReturnStatement* retStmt ) override;
     virtual void VisitSliceExpr( SliceExpr* sliceExpr ) override;
     virtual void VisitStatementList( StatementList* stmtList ) override;
-    virtual void VisitTypeDecl( TypeDecl* typeDecl ) override;
     virtual void VisitUnaryExpr( UnaryExpr* unary ) override;
     virtual void VisitUnit( Unit* unit ) override;
     virtual void VisitVarDecl( VarDecl* varDecl ) override;
@@ -61,6 +70,14 @@ public:
 private:
     void VisitProc( ProcDecl* procDecl );
     void VisitLetBinding( DataDecl* varDecl );
+    void VisitFieldAccess( DotExpr* dotExpr );
+    void VisitNameAccess( Syntax* expr );
+    void CalcIndexAddr( Unique<Syntax>& head, Unique<Syntax>& index );
+
+    void ReadValue( Syntax* expr );
+    ValueVariant ReadValueAtCurrentOffset( Type& type );
 
     void Fold( Unique<Syntax>& child );
 };
+
+}

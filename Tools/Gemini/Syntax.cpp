@@ -4,13 +4,23 @@
 // Licensed under the Apache License, Version 2.0.
 // See the LICENSE.txt file for details.
 
-#include "stdafx.h"
+#include "pch.h"
 #include "Syntax.h"
+#include <algorithm>
+#include <assert.h>
 
+
+namespace Gemini
+{
 
 Declaration* Syntax::GetDecl()
 {
     return nullptr;
+}
+
+std::shared_ptr<Declaration> Syntax::GetSharedDecl()
+{
+    return {};
 }
 
 NameExpr::NameExpr()
@@ -35,6 +45,11 @@ Declaration* NameExpr::GetDecl()
     return Decl.get();
 }
 
+std::shared_ptr<Declaration> NameExpr::GetSharedDecl()
+{
+    return Decl;
+}
+
 NumberExpr::NumberExpr() :
     NumberExpr( 0 )
 {
@@ -46,19 +61,24 @@ NumberExpr::NumberExpr( int64_t value ) :
     Kind = SyntaxKind::Number;
 }
 
-ArrayTypeRef::ArrayTypeRef()
-{
-    Kind = SyntaxKind::ArrayTypeRef;
-}
-
 InitList::InitList()
 {
     Kind = SyntaxKind::ArrayInitializer;
 }
 
+RecordInitializer::RecordInitializer()
+{
+    Kind = SyntaxKind::RecordInitializer;
+}
+
 Declaration* DeclSyntax::GetDecl()
 {
     return Decl.get();
+}
+
+std::shared_ptr<Declaration> DeclSyntax::GetSharedDecl()
+{
+    return Decl;
 }
 
 ConstDecl::ConstDecl()
@@ -71,6 +91,17 @@ VarDecl::VarDecl()
     Kind = SyntaxKind::VarDecl;
 }
 
+VarDecl::VarDecl( std::string_view name ) :
+    VarDecl()
+{
+    Name = name;
+}
+
+ParamDecl::ParamDecl()
+{
+    Kind = SyntaxKind::ParamDecl;
+}
+
 AddrOfExpr::AddrOfExpr()
 {
     Kind = SyntaxKind::AddrOfExpr;
@@ -79,6 +110,11 @@ AddrOfExpr::AddrOfExpr()
 IndexExpr::IndexExpr()
 {
     Kind = SyntaxKind::Index;
+}
+
+SliceExpr::SliceExpr()
+{
+    Kind = SyntaxKind::Slice;
 }
 
 DotExpr::DotExpr()
@@ -91,11 +127,16 @@ Declaration* DotExpr::GetDecl()
     return Decl.get();
 }
 
+std::shared_ptr<Declaration> DotExpr::GetSharedDecl()
+{
+    return Decl;
+}
+
 Unit::Unit( const std::string& fileName )
 {
     mFileName.resize( fileName.size() + 1 );
 
-    memcpy( mFileName.data(), fileName.data(), fileName.size() );
+    std::copy_n( fileName.data(), fileName.size(), mFileName.data() );
     mFileName[fileName.size()] = '\0';
 
     FileName = GetUnitFileName();
@@ -107,203 +148,246 @@ const char* Unit::GetUnitFileName()
 }
 
 
-void AddrOfExpr::Accept( IVisitor* visitor )
+void AddrOfExpr::Accept( Visitor* visitor )
 {
     visitor->VisitAddrOfExpr( this );
 }
 
-void ArrayTypeRef::Accept( IVisitor* visitor )
+void ArrayTypeRef::Accept( Visitor* visitor )
 {
     visitor->VisitArrayTypeRef( this );
 }
 
-void AssignmentExpr::Accept( IVisitor* visitor )
+void AsExpr::Accept( Visitor* visitor )
+{
+    visitor->VisitAsExpr( this );
+}
+
+void AssignmentExpr::Accept( Visitor* visitor )
 {
     visitor->VisitAssignmentExpr( this );
 }
 
-void BinaryExpr::Accept( IVisitor* visitor )
+void BinaryExpr::Accept( Visitor* visitor )
 {
     visitor->VisitBinaryExpr( this );
 }
 
-void BreakStatement::Accept( IVisitor* visitor )
+void BreakStatement::Accept( Visitor* visitor )
 {
     visitor->VisitBreakStatement( this );
 }
 
-void CallExpr::Accept( IVisitor* visitor )
+void CallExpr::Accept( Visitor* visitor )
 {
     visitor->VisitCallExpr( this );
 }
 
-void CallOrSymbolExpr::Accept( IVisitor* visitor )
+void CallOrSymbolExpr::Accept( Visitor* visitor )
 {
     visitor->VisitCallOrSymbolExpr( this );
 }
 
-void CaseElse::Accept( IVisitor* visitor )
+void CaseElse::Accept( Visitor* visitor )
 {
-    // There's no entry in IVisitor for this node
+    // There's no entry in Visitor for this node
+    assert( false );
 }
 
-void CaseExpr::Accept( IVisitor* visitor )
+void CaseExpr::Accept( Visitor* visitor )
 {
     visitor->VisitCaseExpr( this );
 }
 
-void CaseWhen::Accept( IVisitor* visitor )
+void CaseWhen::Accept( Visitor* visitor )
 {
-    // There's no entry in IVisitor for this node
+    // There's no entry in Visitor for this node
+    assert( false );
 }
 
-void CondClause::Accept( IVisitor* visitor )
+void CondClause::Accept( Visitor* visitor )
 {
-    // There's no entry in IVisitor for this node
+    // There's no entry in Visitor for this node
+    assert( false );
 }
 
-void CondExpr::Accept( IVisitor* visitor )
+void CondExpr::Accept( Visitor* visitor )
 {
     visitor->VisitCondExpr( this );
 }
 
-void ConstDecl::Accept( IVisitor* visitor )
+void ConstDecl::Accept( Visitor* visitor )
 {
     visitor->VisitConstDecl( this );
 }
 
-void CountofExpr::Accept( IVisitor* visitor )
+void CountofExpr::Accept( Visitor* visitor )
 {
     visitor->VisitCountofExpr( this );
 }
 
-void DotExpr::Accept( IVisitor* visitor )
+void DotExpr::Accept( Visitor* visitor )
 {
     visitor->VisitDotExpr( this );
 }
 
-void ForStatement::Accept( IVisitor* visitor )
+void EnumMemberDef::Accept( Visitor* visitor )
+{
+    visitor->VisitEnumMemberDef( this );
+}
+
+void EnumTypeRef::Accept( Visitor* visitor )
+{
+    visitor->VisitEnumTypeRef( this );
+}
+
+void FieldDecl::Accept( Visitor* visitor )
+{
+    visitor->VisitFieldDecl( this );
+}
+
+void FieldInitializer::Accept( Visitor* visitor )
+{
+    visitor->VisitFieldInitializer( this );
+}
+
+void ForStatement::Accept( Visitor* visitor )
 {
     visitor->VisitForStatement( this );
 }
 
-void ImportDecl::Accept( IVisitor* visitor )
+void ImportDecl::Accept( Visitor* visitor )
 {
     visitor->VisitImportDecl( this );
 }
 
-void IndexExpr::Accept( IVisitor* visitor )
+void IndexExpr::Accept( Visitor* visitor )
 {
     visitor->VisitIndexExpr( this );
 }
 
-void InitList::Accept( IVisitor* visitor )
+void InitList::Accept( Visitor* visitor )
 {
     visitor->VisitInitList( this );
 }
 
-void LambdaExpr::Accept( IVisitor* visitor )
+void LambdaExpr::Accept( Visitor* visitor )
 {
     visitor->VisitLambdaExpr( this );
 }
 
-void LetStatement::Accept( IVisitor* visitor )
+void LetStatement::Accept( Visitor* visitor )
 {
     visitor->VisitLetStatement( this );
 }
 
-void LoopStatement::Accept( IVisitor* visitor )
+void LoopStatement::Accept( Visitor* visitor )
 {
     visitor->VisitLoopStatement( this );
 }
 
-void NameExpr::Accept( IVisitor* visitor )
+void NameExpr::Accept( Visitor* visitor )
 {
     visitor->VisitNameExpr( this );
 }
 
-void NameTypeRef::Accept( IVisitor* visitor )
+void NameTypeRef::Accept( Visitor* visitor )
 {
     visitor->VisitNameTypeRef( this );
 }
 
-void NextStatement::Accept( IVisitor* visitor )
+void NextStatement::Accept( Visitor* visitor )
 {
     visitor->VisitNextStatement( this );
 }
 
-void NativeDecl::Accept( IVisitor* visitor )
+void NativeDecl::Accept( Visitor* visitor )
 {
     visitor->VisitNativeDecl( this );
 }
 
-void NumberExpr::Accept( IVisitor* visitor )
+void NumberExpr::Accept( Visitor* visitor )
 {
     visitor->VisitNumberExpr( this );
 }
 
-void ParamDecl::Accept( IVisitor* visitor )
+void ParamDecl::Accept( Visitor* visitor )
 {
     visitor->VisitParamDecl( this );
 }
 
-void PointerTypeRef::Accept( IVisitor* visitor )
+void PointerTypeRef::Accept( Visitor* visitor )
 {
     visitor->VisitPointerTypeRef( this );
 }
 
-void ProcDecl::Accept( IVisitor* visitor )
+void ProcDecl::Accept( Visitor* visitor )
 {
     visitor->VisitProcDecl( this );
 }
 
-void ProcTypeRef::Accept( IVisitor* visitor )
+void ProcTypeRef::Accept( Visitor* visitor )
 {
     visitor->VisitProcTypeRef( this );
 }
 
-void ReturnStatement::Accept( IVisitor* visitor )
+void RecordInitializer::Accept( Visitor* visitor )
+{
+    visitor->VisitRecordInitializer( this );
+}
+
+void RecordTypeRef::Accept( Visitor* visitor )
+{
+    visitor->VisitRecordTypeRef( this );
+}
+
+void ReturnStatement::Accept( Visitor* visitor )
 {
     visitor->VisitReturnStatement( this );
 }
 
-void SliceExpr::Accept( IVisitor* visitor )
+void SliceExpr::Accept( Visitor* visitor )
 {
     visitor->VisitSliceExpr( this );
 }
 
-void StatementList::Accept( IVisitor* visitor )
+void StatementList::Accept( Visitor* visitor )
 {
     visitor->VisitStatementList( this );
 }
 
-void TypeDecl::Accept( IVisitor* visitor )
+void TypeDecl::Accept( Visitor* visitor )
 {
     visitor->VisitTypeDecl( this );
 }
 
-void UnaryExpr::Accept( IVisitor* visitor )
+void UnaryExpr::Accept( Visitor* visitor )
 {
     visitor->VisitUnaryExpr( this );
 }
 
-void Unit::Accept( IVisitor* visitor )
+void Unit::Accept( Visitor* visitor )
 {
     visitor->VisitUnit( this );
 }
 
-void VarDecl::Accept( IVisitor* visitor )
+void VarDecl::Accept( Visitor* visitor )
 {
     visitor->VisitVarDecl( this );
 }
 
-void WhileStatement::Accept( IVisitor* visitor )
+void WhileStatement::Accept( Visitor* visitor )
 {
     visitor->VisitWhileStatement( this );
 }
 
+void YieldStatement::Accept( Visitor* visitor )
+{
+    visitor->VisitYieldStatement( this );
+}
 
-std::optional<int32_t> GetOptionalSyntaxValue( Syntax* node )
+
+std::optional<int32_t> GetFinalOptionalSyntaxValue( Syntax* node )
 {
     if ( node->Kind == SyntaxKind::Number )
     {
@@ -314,7 +398,14 @@ std::optional<int32_t> GetOptionalSyntaxValue( Syntax* node )
         return (int32_t) number->Value;
     }
 
-    return std::optional<int32_t>();
+    return {};
+}
+
+void CopyBaseSyntax( Syntax& dest, const Syntax& source )
+{
+    dest.Line = source.Line;
+    dest.Column = source.Column;
+    dest.FileName = source.FileName;
 }
 
 
@@ -322,148 +413,271 @@ std::optional<int32_t> GetOptionalSyntaxValue( Syntax* node )
 //  Visitors
 //----------------------------------------------------------------------------
 
-void IVisitor::VisitAddrOfExpr( AddrOfExpr* addrOf )
+void Visitor::VisitAddrOfExpr( AddrOfExpr* addrOf )
 {
 }
 
-void IVisitor::VisitArrayTypeRef( ArrayTypeRef* typeRef )
+void Visitor::VisitArrayTypeRef( ArrayTypeRef* typeRef )
 {
 }
 
-void IVisitor::VisitAssignmentExpr( AssignmentExpr* assignment )
+void Visitor::VisitAsExpr( AsExpr* asExpr )
 {
 }
 
-void IVisitor::VisitBinaryExpr( BinaryExpr* binary )
+void Visitor::VisitAssignmentExpr( AssignmentExpr* assignment )
 {
 }
 
-void IVisitor::VisitBreakStatement( BreakStatement* breakStmt )
+void Visitor::VisitBinaryExpr( BinaryExpr* binary )
 {
 }
 
-void IVisitor::VisitCallExpr( CallExpr* call )
+void Visitor::VisitBreakStatement( BreakStatement* breakStmt )
 {
 }
 
-void IVisitor::VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol )
+void Visitor::VisitCallExpr( CallExpr* call )
 {
 }
 
-void IVisitor::VisitCaseExpr( CaseExpr* caseExpr )
+void Visitor::VisitCallOrSymbolExpr( CallOrSymbolExpr* callOrSymbol )
 {
 }
 
-void IVisitor::VisitCondExpr( CondExpr* condExpr )
+void Visitor::VisitCaseExpr( CaseExpr* caseExpr )
 {
 }
 
-void IVisitor::VisitConstDecl( ConstDecl* constDecl )
+void Visitor::VisitCondExpr( CondExpr* condExpr )
 {
 }
 
-void IVisitor::VisitCountofExpr( CountofExpr* countofExpr )
+void Visitor::VisitConstDecl( ConstDecl* constDecl )
 {
 }
 
-void IVisitor::VisitDotExpr( DotExpr* dotExpr )
+void Visitor::VisitCountofExpr( CountofExpr* countofExpr )
 {
 }
 
-void IVisitor::VisitForStatement( ForStatement* forStmt )
+void Visitor::VisitDotExpr( DotExpr* dotExpr )
 {
 }
 
-void IVisitor::VisitImportDecl( ImportDecl* importDecl )
+void Visitor::VisitEnumMemberDef( EnumMemberDef* enumMemberDef )
 {
 }
 
-void IVisitor::VisitIndexExpr( IndexExpr* indexExpr )
+void Visitor::VisitEnumTypeRef( EnumTypeRef* enumTypeRef )
 {
 }
 
-void IVisitor::VisitInitList( InitList* initList )
+void Visitor::VisitFieldDecl( FieldDecl* fieldDecl )
 {
 }
 
-void IVisitor::VisitLambdaExpr( LambdaExpr* lambdaExpr )
+void Visitor::VisitFieldInitializer( FieldInitializer* fieldInit )
 {
 }
 
-void IVisitor::VisitLetStatement( LetStatement* letStmt )
+void Visitor::VisitForStatement( ForStatement* forStmt )
 {
 }
 
-void IVisitor::VisitLoopStatement( LoopStatement* loopStmt )
+void Visitor::VisitImportDecl( ImportDecl* importDecl )
 {
 }
 
-void IVisitor::VisitNameExpr( NameExpr* nameExpr )
+void Visitor::VisitIndexExpr( IndexExpr* indexExpr )
 {
 }
 
-void IVisitor::VisitNameTypeRef( NameTypeRef* nameTypeRef )
+void Visitor::VisitInitList( InitList* initList )
 {
 }
 
-void IVisitor::VisitNativeDecl( NativeDecl* nativeDecl )
+void Visitor::VisitLambdaExpr( LambdaExpr* lambdaExpr )
 {
 }
 
-void IVisitor::VisitNextStatement( NextStatement* nextStmt )
+void Visitor::VisitLetStatement( LetStatement* letStmt )
 {
 }
 
-void IVisitor::VisitNumberExpr( NumberExpr* numberExpr )
+void Visitor::VisitLoopStatement( LoopStatement* loopStmt )
 {
 }
 
-void IVisitor::VisitParamDecl( ParamDecl* paramDecl )
+void Visitor::VisitNameExpr( NameExpr* nameExpr )
 {
 }
 
-void IVisitor::VisitPointerTypeRef( PointerTypeRef* pointerTypeRef )
+void Visitor::VisitNameTypeRef( NameTypeRef* nameTypeRef )
 {
 }
 
-void IVisitor::VisitProcDecl( ProcDecl* procDecl )
+void Visitor::VisitNativeDecl( NativeDecl* nativeDecl )
 {
 }
 
-void IVisitor::VisitProcTypeRef( ProcTypeRef* procTypeRef )
+void Visitor::VisitNextStatement( NextStatement* nextStmt )
 {
 }
 
-void IVisitor::VisitReturnStatement( ReturnStatement* retStmt )
+void Visitor::VisitNumberExpr( NumberExpr* numberExpr )
 {
 }
 
-void IVisitor::VisitSliceExpr( SliceExpr* sliceExpr )
+void Visitor::VisitParamDecl( ParamDecl* paramDecl )
 {
 }
 
-void IVisitor::VisitStatementList( StatementList* stmtmList )
+void Visitor::VisitPointerTypeRef( PointerTypeRef* pointerTypeRef )
 {
 }
 
-void IVisitor::VisitTypeDecl( TypeDecl* typeDecl )
+void Visitor::VisitProcDecl( ProcDecl* procDecl )
 {
 }
 
-void IVisitor::VisitUnaryExpr( UnaryExpr* unary )
+void Visitor::VisitProcTypeRef( ProcTypeRef* procTypeRef )
 {
 }
 
-void IVisitor::VisitUnit( Unit* unit )
+void Visitor::VisitRecordInitializer( RecordInitializer* recordInitializer )
 {
 }
 
-void IVisitor::VisitVarDecl( VarDecl* varDecl )
+void Visitor::VisitRecordTypeRef( RecordTypeRef* recordTypeRef )
 {
 }
 
-void IVisitor::VisitWhileStatement( WhileStatement* whileStmt )
+void Visitor::VisitReturnStatement( ReturnStatement* retStmt )
 {
+}
+
+void Visitor::VisitSliceExpr( SliceExpr* sliceExpr )
+{
+}
+
+void Visitor::VisitStatementList( StatementList* stmtmList )
+{
+}
+
+void Visitor::VisitTypeDecl( TypeDecl* typeDecl )
+{
+}
+
+void Visitor::VisitUnaryExpr( UnaryExpr* unary )
+{
+}
+
+void Visitor::VisitUnit( Unit* unit )
+{
+}
+
+void Visitor::VisitVarDecl( VarDecl* varDecl )
+{
+}
+
+void Visitor::VisitWhileStatement( WhileStatement* whileStmt )
+{
+}
+
+void Visitor::VisitYieldStatement( YieldStatement* yieldStmt )
+{
+}
+
+
+//----------------------------------------------------------------------------
+//  Declarations
+//----------------------------------------------------------------------------
+
+Declaration::Declaration( DeclKind kind ) :
+    Kind( kind )
+{
+}
+
+CommonDeclaration::CommonDeclaration( DeclKind kind ) :
+    Declaration( kind )
+{
+}
+
+UndefinedDeclaration::UndefinedDeclaration() :
+    CommonDeclaration( DeclKind::Undefined )
+{
+}
+
+Constant::Constant() :
+    Declaration( DeclKind::Const )
+{
+    IsReadOnly = true;
+}
+
+GlobalStorage::GlobalStorage() :
+    CommonDeclaration( DeclKind::Global )
+{
+}
+
+LocalStorage::LocalStorage() :
+    CommonDeclaration( DeclKind::Local )
+{
+}
+
+ParamStorage::ParamStorage() :
+    CommonDeclaration( DeclKind::Param )
+{
+}
+
+FieldStorage::FieldStorage() :
+    CommonDeclaration( DeclKind::Field )
+{
+}
+
+Function::Function() :
+    CommonDeclaration( DeclKind::Func )
+{
+}
+
+NativeFunction::NativeFunction() :
+    CommonDeclaration( DeclKind::NativeFunc )
+{
+}
+
+TypeDeclaration::TypeDeclaration() :
+    CommonDeclaration( DeclKind::Type )
+{
+}
+
+ModuleDeclaration::ModuleDeclaration() :
+    CommonDeclaration( DeclKind::Module )
+{
+}
+
+LoadedAddressDeclaration::LoadedAddressDeclaration() :
+    CommonDeclaration( DeclKind::LoadedAddress )
+{
+}
+
+EnumMember::EnumMember( int32_t value, std::shared_ptr<EnumType> parentType ) :
+    Declaration( DeclKind::Enum ),
+    ParentType( parentType ),
+    Value( value )
+{
+    IsReadOnly = true;
+}
+
+std::shared_ptr<Type> EnumMember::GetType() const
+{
+    auto parentType = ParentType.lock();
+
+    // A weak pointer is used only to avoid a circular reference.
+    // The parent type must be available.
+
+    assert( parentType );
+
+    return std::static_pointer_cast<Type>( std::move( parentType ) );
 }
 
 
@@ -491,28 +705,16 @@ bool Type::IsAssignableFrom( Type* other ) const
     return IsEqual( other );
 }
 
-int32_t Type::GetSize() const
+bool Type::IsPassableFrom( Type* other, ParamMode mode ) const
+{
+    return IsAssignableFrom( other );
+}
+
+DataSize Type::GetSize() const
 {
     return 0;
 }
 
-
-TypeType::TypeType() :
-    Type( TypeKind::Type )
-{
-}
-
-
-ModuleType::ModuleType() :
-    Type( TypeKind::Module )
-{
-}
-
-
-XferType::XferType() :
-    Type( TypeKind::Xfer )
-{
-}
 
 bool XferType::IsEqual( Type* other ) const
 {
@@ -520,11 +722,6 @@ bool XferType::IsEqual( Type* other ) const
         && other->GetKind() == TypeKind::Xfer;
 }
 
-
-IntType::IntType() :
-    Type( TypeKind::Int )
-{
-}
 
 bool IntType::IsEqual( Type* other ) const
 {
@@ -540,13 +737,13 @@ bool IntType::IsAssignableFrom( Type* other ) const
             );
 }
 
-int32_t IntType::GetSize() const
+DataSize IntType::GetSize() const
 {
     return 1;
 }
 
 
-ArrayType::ArrayType( int32_t count, std::shared_ptr<Type> elemType ) :
+ArrayType::ArrayType( DataSize count, std::shared_ptr<Type> elemType ) :
     Type( TypeKind::Array ),
     Count( count ),
     ElemType( elemType )
@@ -579,10 +776,32 @@ bool ArrayType::IsAssignableFrom( Type* other ) const
     if ( ElemType->GetKind() == TypeKind::Pointer )
         return Count == otherArray->Count;
 
-    return Count >= otherArray->Count;
+    return Count == 0 || Count >= otherArray->Count;
 }
 
-int32_t ArrayType::GetSize() const
+bool ArrayType::IsPassableFrom( Type* other, ParamMode mode ) const
+{
+    if ( mode == ParamMode::Value )
+        return IsAssignableFrom( other );
+
+    // Otherwise, it's a reference.
+
+    if ( other == nullptr || other->GetKind() != TypeKind::Array )
+        return false;
+
+    if ( mode == ParamMode::Value )
+        return false;
+
+    auto otherArray = (ArrayType*) other;
+
+    // In contrast to assignability, passability requires the destination array
+    // be equal size or greater, because it's a reference.
+
+    return Count <= otherArray->Count
+        && ElemType->IsAssignableFrom( otherArray->ElemType.get() );
+}
+
+DataSize ArrayType::GetSize() const
 {
     return Count * ElemType->GetSize();
 }
@@ -602,12 +821,15 @@ bool FuncType::IsEqual( Type* other ) const
     auto otherFunc = (FuncType*) other;
 
     if ( !ReturnType->IsEqual( otherFunc->ReturnType.get() )
-        || ParamTypes.size() != otherFunc->ParamTypes.size() )
+        || Params.size() != otherFunc->Params.size() )
         return false;
 
-    for ( int i = 0; i < (int) ParamTypes.size(); i++ )
+    for ( int i = 0; i < (int) Params.size(); i++ )
     {
-        if ( !ParamTypes[i]->IsEqual( otherFunc->ParamTypes[i].get() ) )
+        if ( !Params[i].Type->IsEqual( otherFunc->Params[i].Type.get() ) )
+            return false;
+
+        if ( Params[i].Mode != otherFunc->Params[i].Mode )
             return false;
     }
 
@@ -631,7 +853,64 @@ bool PointerType::IsEqual( Type* other ) const
     return TargetType->IsEqual( otherPointer->TargetType.get() );
 }
 
-int32_t PointerType::GetSize() const
+DataSize PointerType::GetSize() const
 {
     return 1;
+}
+
+
+RecordType::RecordType() :
+    Type( TypeKind::Record )
+{
+}
+
+bool RecordType::IsEqual( Type* other ) const
+{
+    return other == this;
+}
+
+DataSize RecordType::GetSize() const
+{
+    if ( mSize == 0 )
+    {
+        for ( auto& [_, field] : Fields )
+        {
+            mSize += field->GetType()->GetSize();
+        }
+    }
+
+    return mSize;
+}
+
+SymTable& RecordType::GetFields()
+{
+    return Fields;
+}
+
+RecordType::FieldVec& RecordType::GetOrderedFields()
+{
+    return OrderedFields;
+}
+
+
+EnumType::EnumType() :
+    Type( TypeKind::Enum )
+{
+}
+
+bool EnumType::IsEqual( Type* other ) const
+{
+    return other == this;
+}
+
+DataSize EnumType::GetSize() const
+{
+    return 1;
+}
+
+SymTable& EnumType::GetMembersByName()
+{
+    return MembersByName;
+}
+
 }

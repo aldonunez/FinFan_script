@@ -90,10 +90,11 @@ public:
 
 const int ObjScripts = 16 + 1;
 const int MainScriptIndex = 16;
+const int ScriptStackSize = 16;
 
 ScriptEnv scriptEnv;
 CELL scriptGlobals[4];
-CELL objStacks[ObjScripts][Machine::MIN_STACK];
+CELL objStacks[ObjScripts][ScriptStackSize];
 Machine objScripts[ObjScripts];
 int objTimers[ObjScripts];
 

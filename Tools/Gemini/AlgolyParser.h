@@ -6,10 +6,15 @@
 
 #pragma once
 
-#include "Compiler.h"
-#include <memory>
+#include "LangCommon.h"
+#include "Syntax.h"
+#include <optional>
 #include <string>
+#include <vector>
 
+
+namespace Gemini
+{
 
 class AlgolyParser
 {
@@ -27,8 +32,11 @@ class AlgolyParser
         RArrow,
         Dot,
         Ampersand,
+        At,
         LBracket,
         RBracket,
+        LBrace,
+        RBrace,
         Assign,
         Colon,
         DotDot,
@@ -59,6 +67,7 @@ class AlgolyParser
         Else,
         Elsif,
         End,
+        Enum,
         For,
         If,
         Import,
@@ -70,6 +79,7 @@ class AlgolyParser
         Of,
         Or,
         Proc,
+        Record,
         Return,
         Then,
         To,
@@ -77,6 +87,7 @@ class AlgolyParser
         Var,
         When,
         While,
+        Yield,
     };
 
     typedef bool (AlgolyParser::*TestOpFunc)();
@@ -90,7 +101,7 @@ class AlgolyParser
     const char*     mCodeTextEnd;
     const char*     mLineStart;
     int             mLine;
-    int             mCurChar;
+    char            mCurChar;
 
     TokenCode       mCurToken;
     std::string     mCurString;
@@ -102,7 +113,7 @@ class AlgolyParser
     Reporter        mRep;
 
 public:
-    AlgolyParser( const char* codeText, int codeTextLen, const char* fileName, ICompilerLog* log );
+    AlgolyParser( const char* codeText, size_t codeTextLen, const char* fileName, ICompilerLog* log );
 
     Unique<Unit> Parse();
 
@@ -110,8 +121,8 @@ private:
     // Scanning
 
     int GetColumn();
-    int PeekChar() const;
-    int PeekChar( int index ) const;
+    char PeekChar() const;
+    char PeekChar( int index ) const;
     void NextChar();
     void CollectChar();
     void SkipWhitespace();
@@ -140,23 +151,29 @@ private:
     Unique<ProcDecl> ParseProc( bool hasName );
     std::vector<Unique<DataDecl>> ParseParamList();
     Unique<DataDecl> ParseParameter();
+    ParamSpecRef ParseAnonymousParameter();
     Unique<Syntax> ParseCall( Unique<Syntax>&& head, bool indirect, bool parens = true );
     Unique<Syntax> ParseLet();
 
     void ParseGlobalVars( Unit* unit );
     Unique<DataDecl> ParseVar( Unique<DataDecl>&& newVarDecl, std::optional<TokenCode> assignToken );
     Unique<DataDecl> ParseVarDecl();
+    Unique<DataDecl> ParseNameDecl();
     Unique<DataDecl> ParseConstDecl();
     Unique<DeclSyntax> ParseTypeDecl();
     void ParseTypeDecls( Unit* unit );
 
     Unique<TypeRef> ParseTypeDef();
     Unique<TypeRef> ParseTypeRef();
+    Unique<TypeRef> ParseRecordTypeDef();
+    Unique<TypeRef> ParseEnumTypeDef();
     Unique<TypeRef> ParseNameTypeRef();
     Unique<TypeRef> ParsePtrFuncTypeRef();
     Unique<TypeRef> ParseArrayTypeRef();
     Unique<Syntax> ParseArrayInitializer();
+    Unique<Syntax> ParseRecordInitializer();
     Unique<Syntax> ParseInitExpr();
+
     Unique<Syntax> ParseReturn();
     Unique<Syntax> ParseIf();
     Unique<CondClause> ParseIfClause();
@@ -166,6 +183,7 @@ private:
     Unique<Syntax> ParseWhile();
     Unique<Syntax> ParseBreak();
     Unique<Syntax> ParseNext();
+    Unique<Syntax> ParseYield();
     Unique<Syntax> ParseCase();
     Unique<CaseWhen> ParseCaseWhen();
     Unique<CaseElse> ParseCaseElse();
@@ -177,11 +195,13 @@ private:
     Unique<Syntax> ParseAssignment();
     Unique<Syntax> ParseBinaryPart( int level );
     Unique<Syntax> ParseBinary( int level );
+    Unique<Syntax> ParseAsExpr();
     Unique<Syntax> ParseUnary();
     Unique<Syntax> ParseSingle();
     Unique<Syntax> ParseIndexing( Unique<Syntax>&& head );
     Unique<Syntax> ParseDotExpr( Unique<Syntax>&& head );
     Unique<Syntax> ParseIndexingOrDot( Unique<Syntax>&& head );
+    Unique<Syntax> ParseQualifiedName();
     Unique<Syntax> ParseCountof();
 
     bool IsTokenOrOp();
@@ -208,3 +228,5 @@ private:
 
     [[noreturn]] void ThrowSyntaxError( const char* format, ... );
 };
+
+}

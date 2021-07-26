@@ -15,8 +15,8 @@ class MapSprite;
 class IMapSprite;
 
 #if defined( SCENE_SCRIPT )
-struct ByteCode;
-class Machine;
+#include "..\..\Tools\Gemini\Machine.h"
+using namespace Gemini;
 #endif
 
 

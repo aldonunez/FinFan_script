@@ -12,6 +12,8 @@
 #include "Sound.h"
 #include "Utility.h"
 
+using namespace Gemini;
+
 
 #if !defined( SCENE_SCRIPT )
 

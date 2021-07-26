@@ -39,8 +39,8 @@ namespace ObjEvents
     const int Scripts = ObjectTypes + 1;
 
     bool Init();
-    bool GetObjectScript( int type, ByteCode& byteCode );
-    const Module& GetScriptModule();
+    bool GetObjectScript( int type, Gemini::ByteCode& byteCode );
+    const Gemini::Module& GetScriptModule();
 }
 
 #endif  // SCENE_SCRIPT
